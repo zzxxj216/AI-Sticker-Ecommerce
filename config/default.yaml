@@ -1,0 +1,133 @@
+# ============================================================
+# AI 贴纸生成系统 - 默认配置
+# ============================================================
+
+# AI 服务配置
+ai:
+  # Claude 配置
+  claude:
+    model: "claude-opus-4-6"
+    max_tokens: 4096
+    temperature: 0.7
+    timeout: 60
+    max_retries: 3
+    retry_delay: 2
+  
+  # Gemini 配置
+  gemini:
+    model: "gemini-3.1-flash-image-preview"
+    timeout: 30
+    max_retries: 3
+    retry_delay: 2
+
+# 贴纸生成配置
+sticker:
+  # 贴纸包配置
+  pack:
+    default_count: 40
+    min_count: 1
+    max_count: 100
+    
+    # 类型分布比例
+    type_ratio:
+      text: 0.3
+      element: 0.4
+      combined: 0.3
+    
+    # 批次大小
+    batch_size: 10
+  
+  # 风格分析配置
+  style:
+    default_variant_count: 5
+    min_variant_count: 1
+    max_variant_count: 20
+    default_degree: "medium"
+    
+    # 变化程度配置
+    variation_degrees:
+      low:
+        similarity: 0.9
+        description: "微小变化，保持90%相似"
+      medium:
+        similarity: 0.7
+        description: "适度变化，保持70%相似"
+      high:
+        similarity: 0.5
+        description: "大胆创新，保持50%相似"
+
+# 并发配置
+concurrency:
+  max_workers: 5
+  enable_parallel: true
+
+# 存储配置
+storage:
+  output_dir: "./data/output"
+  cache_dir: "./data/cache"
+  temp_dir: "./data/temp"
+  
+  # 子目录
+  images_dir: "images"
+  sessions_dir: "sessions"
+  packs_dir: "sticker_packs"
+  
+  # 文件格式
+  image_format: "PNG"
+  session_format: "json"
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  
+  # 文件日志
+  file:
+    enabled: true
+    path: "./logs/app.log"
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+  
+  # 控制台日志
+  console:
+    enabled: true
+    level: "INFO"
+
+# Web UI 配置
+ui:
+  gradio:
+    # 贴纸包生成器
+    sticker_pack:
+      port: 7860
+      share: false
+      server_name: "0.0.0.0"
+    
+    # 风格分析器
+    style_analyzer:
+      port: 7861
+      share: false
+      server_name: "0.0.0.0"
+  
+  # 主题
+  theme: "default"
+
+# 性能配置
+performance:
+  # 缓存
+  cache:
+    enabled: true
+    ttl: 3600  # 1小时
+  
+  # 超时
+  timeout:
+    api_call: 60
+    image_generation: 30
+    total_workflow: 300  # 5分钟
+
+# 功能开关
+features:
+  enable_cache: true
+  enable_retry: true
+  enable_validation: true
+  enable_statistics: true

@@ -1,0 +1,31 @@
+# ============================================================
+# 开发环境配置
+# ============================================================
+
+# 继承默认配置，仅覆盖需要修改的部分
+
+# 日志配置（开发环境使用 DEBUG 级别）
+logging:
+  level: "DEBUG"
+  console:
+    level: "DEBUG"
+
+# Web UI 配置
+ui:
+  gradio:
+    sticker_pack:
+      share: false  # 开发环境不分享
+    style_analyzer:
+      share: false
+
+# 性能配置（开发环境禁用缓存）
+performance:
+  cache:
+    enabled: false
+
+# 功能开关（开发环境启用所有功能）
+features:
+  enable_cache: false
+  enable_retry: true
+  enable_validation: true
+  enable_statistics: true

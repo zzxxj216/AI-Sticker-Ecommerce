@@ -1,0 +1,26 @@
+# ============================================================
+# 生产环境配置
+# ============================================================
+
+# 日志配置（生产环境使用 WARNING 级别）
+logging:
+  level: "WARNING"
+  console:
+    level: "WARNING"
+
+# 并发配置（生产环境提高并发数）
+concurrency:
+  max_workers: 10
+
+# 性能配置（生产环境启用缓存）
+performance:
+  cache:
+    enabled: true
+    ttl: 7200  # 2小时
+
+# 功能开关（生产环境启用所有功能）
+features:
+  enable_cache: true
+  enable_retry: true
+  enable_validation: true
+  enable_statistics: true
