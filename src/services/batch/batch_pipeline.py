@@ -152,12 +152,17 @@ class BatchPipeline:
         self,
         on_progress: Optional[ProgressCallback] = None,
     ) -> BatchConfig:
-        """Step 2: 为每个卡包规划话题 + 生成概念（6 包并行）。"""
+        """Step 2: 为每个卡包规划话题 + 生成概念（包间并行 + 包内话题并行）。"""
         if not self._batch_config:
             raise ValueError("Must call plan() first")
 
         bc = self._batch_config
         self._emit(on_progress, "content_start", {"pack_count": len(bc.pack_configs)})
+
+        def _gen_concepts_for_topic(pc, topic):
+            concepts = self._planner.generate_concepts_for_topic(pc, topic)
+            topic.concepts = concepts
+            return topic
 
         def _process_pack(pc: BatchPackConfig) -> BatchPackConfig:
             pack_result = self._get_pack_result(pc.pack_index)
@@ -169,9 +174,17 @@ class BatchPipeline:
                     pc, stickers_per_topic=bc.stickers_per_topic,
                 )
 
-                for topic in topics:
-                    concepts = self._planner.generate_concepts_for_topic(pc, topic)
-                    topic.concepts = concepts
+                with ThreadPoolExecutor(max_workers=min(len(topics), 4)) as topic_executor:
+                    topic_futures = {
+                        topic_executor.submit(_gen_concepts_for_topic, pc, topic): topic
+                        for topic in topics
+                    }
+                    for future in as_completed(topic_futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            t = topic_futures[future]
+                            logger.error("Concept gen failed for topic '%s': %s", t.topic_name, e)
 
                 pc.topics = topics
                 pack_result.topics = topics
@@ -227,12 +240,22 @@ class BatchPipeline:
         self,
         on_progress: Optional[ProgressCallback] = None,
     ) -> BatchConfig:
-        """Step 3: 为每个卡包生成 style guide + 按话题生成 image prompts（6 包并行）。"""
+        """Step 3: 为每个卡包生成 style guide + 按话题并行生成 image prompts。"""
         if not self._batch_config:
             raise ValueError("Must call plan() and generate_content() first")
 
         bc = self._batch_config
         self._emit(on_progress, "ideas_start", {"pack_count": len(bc.pack_configs)})
+
+        def _gen_ideas_for_topic(topic, style_guide, pack_index):
+            ideas = self._planner.generate_ideas_for_topic(topic, style_guide)
+            topic.ideas = ideas
+            self._emit(on_progress, "topic_ideas_done", {
+                "pack_index": pack_index,
+                "topic": topic.topic_name,
+                "idea_count": len(ideas),
+            })
+            return topic
 
         def _process_pack(pc: BatchPackConfig) -> BatchPackConfig:
             pack_result = self._get_pack_result(pc.pack_index)
@@ -252,15 +275,19 @@ class BatchPipeline:
                     "art_style": style_guide.get("art_style", "N/A"),
                 })
 
-                for topic in pc.topics:
-                    ideas = self._planner.generate_ideas_for_topic(topic, style_guide)
-                    topic.ideas = ideas
-
-                    self._emit(on_progress, "topic_ideas_done", {
-                        "pack_index": pc.pack_index,
-                        "topic": topic.topic_name,
-                        "idea_count": len(ideas),
-                    })
+                with ThreadPoolExecutor(max_workers=min(len(pc.topics), 4)) as topic_executor:
+                    topic_futures = {
+                        topic_executor.submit(
+                            _gen_ideas_for_topic, topic, style_guide, pc.pack_index
+                        ): topic
+                        for topic in pc.topics
+                    }
+                    for future in as_completed(topic_futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            t = topic_futures[future]
+                            logger.error("Ideas gen failed for topic '%s': %s", t.topic_name, e)
 
                 pack_result.topics = pc.topics
 
@@ -304,7 +331,7 @@ class BatchPipeline:
         use_claude_prompt: bool = True,
         on_progress: Optional[ProgressCallback] = None,
     ) -> List[TopicPreviewResult]:
-        """Step 4: 为每个话题生成话题总图（6 包可并行）。"""
+        """Step 4: 为每个话题并行生成话题总图（包间 + 包内话题均并行）。"""
         if not self._batch_config:
             raise ValueError("Must call generate_ideas() first")
 
@@ -315,33 +342,44 @@ class BatchPipeline:
             "total_topics": sum(len(pc.topics) for pc in bc.pack_configs),
         })
 
+        def _preview_one_topic(pc, topic):
+            preview = self._generate_topic_preview(
+                pc, topic, use_claude_prompt=use_claude_prompt,
+            )
+            topic.preview_prompt = preview.preview_prompt
+            topic.preview_image_path = preview.preview_image_path
+            topic.preview_success = preview.success
+
+            self._emit(on_progress, "topic_preview_done", {
+                "pack_index": pc.pack_index,
+                "topic": topic.topic_name,
+                "success": preview.success,
+                "image_path": preview.preview_image_path,
+            })
+            return preview
+
         def _preview_pack(pc: BatchPackConfig) -> List[TopicPreviewResult]:
             pack_result = self._get_pack_result(pc.pack_index)
             if pack_result.status == BatchPackStatus.FAILED:
                 return []
 
             pack_result.status = BatchPackStatus.GENERATING_PREVIEWS
+
+            topics_with_ideas = [t for t in pc.topics if t.ideas]
             previews = []
 
-            for topic in pc.topics:
-                if not topic.ideas:
-                    continue
-
-                preview = self._generate_topic_preview(
-                    pc, topic, use_claude_prompt=use_claude_prompt,
-                )
-                previews.append(preview)
-
-                topic.preview_prompt = preview.preview_prompt
-                topic.preview_image_path = preview.preview_image_path
-                topic.preview_success = preview.success
-
-                self._emit(on_progress, "topic_preview_done", {
-                    "pack_index": pc.pack_index,
-                    "topic": topic.topic_name,
-                    "success": preview.success,
-                    "image_path": preview.preview_image_path,
-                })
+            with ThreadPoolExecutor(max_workers=min(len(topics_with_ideas), 3)) as topic_executor:
+                topic_futures = {
+                    topic_executor.submit(_preview_one_topic, pc, topic): topic
+                    for topic in topics_with_ideas
+                }
+                for future in as_completed(topic_futures):
+                    try:
+                        preview = future.result()
+                        previews.append(preview)
+                    except Exception as e:
+                        t = topic_futures[future]
+                        logger.error("Preview failed for topic '%s': %s", t.topic_name, e)
 
             pack_result.topic_previews = previews
             return previews
@@ -465,7 +503,9 @@ class BatchPipeline:
         skip_images: bool = False,
         on_progress: Optional[ProgressCallback] = None,
     ) -> BatchResult:
-        """执行完整管线: plan → content → ideas → previews → images。
+        """执行完整管线: plan → (content → ideas → previews) per pack → images。
+
+        使用流水线模式：每个包独立走完 steps 2-4，不必等所有包完成某一步。
 
         Args:
             skip_images: 若 True，跳过最终单张图片生成（仅到预览阶段）
@@ -481,9 +521,7 @@ class BatchPipeline:
             on_progress=on_progress,
         )
 
-        self.generate_content(on_progress=on_progress)
-        self.generate_ideas(on_progress=on_progress)
-        self.generate_previews(
+        self._run_pipelined_steps(
             use_claude_prompt=use_claude_prompt,
             on_progress=on_progress,
         )
@@ -492,6 +530,170 @@ class BatchPipeline:
             self.generate_images(on_progress=on_progress)
 
         return self._batch_result
+
+    def _run_pipelined_steps(
+        self,
+        use_claude_prompt: bool = True,
+        on_progress: Optional[ProgressCallback] = None,
+    ) -> None:
+        """每个包独立流水线执行 content → ideas → previews，包间并行。"""
+        bc = self._batch_config
+        if not bc:
+            return
+
+        self._emit(on_progress, "content_start", {"pack_count": len(bc.pack_configs)})
+
+        def _run_pack_pipeline(pc: BatchPackConfig) -> None:
+            pack_result = self._get_pack_result(pc.pack_index)
+            pack_result.mark_started()
+
+            # --- Step 2: content ---
+            pack_result.status = BatchPackStatus.GENERATING_CONTENT
+            try:
+                topics = self._planner.plan_topics_for_pack(
+                    pc, stickers_per_topic=bc.stickers_per_topic,
+                )
+
+                with ThreadPoolExecutor(max_workers=min(len(topics), 4)) as te:
+                    futs = {
+                        te.submit(self._planner.generate_concepts_for_topic, pc, t): t
+                        for t in topics
+                    }
+                    for f in as_completed(futs):
+                        t = futs[f]
+                        try:
+                            t.concepts = f.result()
+                        except Exception as e:
+                            logger.error("Concept gen failed for topic '%s': %s", t.topic_name, e)
+
+                pc.topics = topics
+                pack_result.topics = topics
+
+                self._emit(on_progress, "pack_content_done", {
+                    "pack_index": pc.pack_index,
+                    "pack_name": pc.pack_name,
+                    "topic_count": len(topics),
+                    "total_concepts": sum(len(t.concepts) for t in topics),
+                })
+
+            except Exception as e:
+                logger.error("Content gen failed for pack %d: %s", pc.pack_index, e)
+                pack_result.mark_failed(str(e))
+                return
+
+            # --- Step 3: ideas ---
+            pack_result.status = BatchPackStatus.STYLE_GUIDE
+            try:
+                style_guide = self._generate_style_guide(pc)
+                pc.style_guide = style_guide
+                pack_result.style_guide = style_guide
+
+                self._emit(on_progress, "pack_style_done", {
+                    "pack_index": pc.pack_index,
+                    "art_style": style_guide.get("art_style", "N/A"),
+                })
+
+                with ThreadPoolExecutor(max_workers=min(len(pc.topics), 4)) as te:
+                    futs = {
+                        te.submit(self._planner.generate_ideas_for_topic, t, style_guide): t
+                        for t in pc.topics
+                    }
+                    for f in as_completed(futs):
+                        t = futs[f]
+                        try:
+                            t.ideas = f.result()
+                            self._emit(on_progress, "topic_ideas_done", {
+                                "pack_index": pc.pack_index,
+                                "topic": t.topic_name,
+                                "idea_count": len(t.ideas),
+                            })
+                        except Exception as e:
+                            logger.error("Ideas gen failed for topic '%s': %s", t.topic_name, e)
+
+                pack_result.topics = pc.topics
+
+            except Exception as e:
+                logger.error("Ideas gen failed for pack %d: %s", pc.pack_index, e)
+                pack_result.mark_failed(str(e))
+                return
+
+            # --- Step 4: previews ---
+            pack_result.status = BatchPackStatus.GENERATING_PREVIEWS
+            topics_with_ideas = [t for t in pc.topics if t.ideas]
+            previews = []
+
+            with ThreadPoolExecutor(max_workers=min(len(topics_with_ideas), 3)) as te:
+                futs = {}
+                for t in topics_with_ideas:
+                    futs[te.submit(
+                        self._generate_topic_preview, pc, t,
+                        use_claude_prompt,
+                    )] = t
+
+                for f in as_completed(futs):
+                    t = futs[f]
+                    try:
+                        preview = f.result()
+                        previews.append(preview)
+                        t.preview_prompt = preview.preview_prompt
+                        t.preview_image_path = preview.preview_image_path
+                        t.preview_success = preview.success
+
+                        self._emit(on_progress, "topic_preview_done", {
+                            "pack_index": pc.pack_index,
+                            "topic": t.topic_name,
+                            "success": preview.success,
+                            "image_path": preview.preview_image_path,
+                        })
+                    except Exception as e:
+                        logger.error("Preview failed for topic '%s': %s", t.topic_name, e)
+
+            pack_result.topic_previews = previews
+
+        with ThreadPoolExecutor(max_workers=self.max_pack_workers) as executor:
+            futures = {
+                executor.submit(_run_pack_pipeline, pc): pc.pack_index
+                for pc in bc.pack_configs
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    idx = futures[future]
+                    logger.error("Pack %d pipeline failed: %s", idx, e)
+
+        self._emit(on_progress, "content_done", {
+            "packs": [
+                {
+                    "index": pc.pack_index,
+                    "topics": len(pc.topics),
+                    "concepts": pc.total_concept_count,
+                }
+                for pc in bc.pack_configs
+            ],
+        })
+        self._emit(on_progress, "ideas_done", {
+            "packs": [
+                {"index": pc.pack_index, "ideas": pc.total_idea_count}
+                for pc in bc.pack_configs
+            ],
+        })
+
+        all_previews = []
+        for pc in bc.pack_configs:
+            pr = self._get_pack_result(pc.pack_index)
+            all_previews.extend(pr.topic_previews or [])
+
+        self._emit(on_progress, "previews_done", {
+            "total_previews": len(all_previews),
+            "success": sum(1 for p in all_previews if p.success),
+        })
+
+        self._save_step("02_content", bc.model_dump(mode="json"))
+        self._save_step("03_ideas", bc.model_dump(mode="json"))
+        self._save_step("04_previews", {
+            "previews": [p.model_dump(mode="json") for p in all_previews],
+        })
 
     # ------------------------------------------------------------------
     # 单张重生成

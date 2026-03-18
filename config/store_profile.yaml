@@ -1,0 +1,68 @@
+# ============================================================
+# 业务画像 (Business Profile)
+# 所有 Agent 共享的"业务真相源"，配置一次，全局复用
+# ============================================================
+
+# ===== 业务模式 =====
+business:
+  type: "ai_sticker_generator"
+  description: |
+    We are an AI-powered sticker company. We research trending topics
+    and keywords, then use AI to generate unique sticker designs around
+    those themes. We sell them as sticker packs on our Shopify store.
+    Our blog content and sticker products are born from the same topic
+    research — every blog we write has a matching sticker pack in our store.
+  content_product_relationship: |
+    Blog topic = Product topic. We don't have a fixed catalog.
+    When we write a blog about "American Traditional Tattoo Stickers",
+    we also generate and list a matching sticker pack for that topic.
+    The Writer can recommend ANY design idea that fits the topic,
+    because we can AI-generate it.
+
+# ===== 品牌语气 =====
+brand:
+  voice: |
+    Friendly, enthusiastic sticker lover who talks like a fellow hobbyist.
+    Use first-person ("I", "we"), casual tone, contractions ("you're", "isn't").
+    Never sound corporate or salesy. Think "cool friend recommending stuff",
+    not "brand pushing products".
+  tone_keywords:
+    - "fun"
+    - "edgy"
+    - "authentic"
+    - "community"
+  avoid_tone:
+    - "formal"
+    - "corporate"
+    - "pushy"
+    - "generic"
+
+# ===== Shopify 站点结构 =====
+platform:
+  type: "shopify"
+  domain: ""                          # 填入实际域名
+  blog_path: "/blogs/news"            # Shopify 默认博客路径
+  collections_path: "/collections"    # Shopify 系列路径
+  cta_link_strategy: |
+    Products are generated alongside blogs, so CTAs should link to:
+    - The matching collection page: /collections/{topic-slug}
+    - Or the store homepage / all-products page
+    Do NOT hardcode specific product URLs in blog content.
+
+# ===== 材质规格（行业合理默认值）=====
+materials:
+  type: "premium vinyl"
+  safe_claims:
+    - "waterproof"
+    - "durable"
+    - "vibrant colors"
+    - "easy to apply"
+    - "perfect for laptops, water bottles, and more"
+  avoid_claims:
+    - "dishwasher safe"
+    - "permanent"
+    - "indestructible"
+    - "military-grade"
+  note: |
+    These are reasonable industry defaults for vinyl stickers.
+    Update with actual specs when printing partner is confirmed.

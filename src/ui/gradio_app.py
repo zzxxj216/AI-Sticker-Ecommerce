@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 import json
 from datetime import datetime
+import asyncio
 
 from src.services.sticker import PackGenerator, StyleAnalyzer
+from src.services.blog import BlogAgent
 from src.core.constants import VariationDegree
 from src.core.logger import get_logger
 from src.core.config import Config
@@ -30,6 +32,7 @@ class StickerGeneratorUI:
         self.pack_generator = PackGenerator()
         # 默认使用 gemini 进行图片分析
         self.style_analyzer = StyleAnalyzer(analysis_model="claude")
+        self.blog_agent = BlogAgent()
 
         # 输出目录
         self.output_dir = Path(self.config.output_dir)
@@ -211,12 +214,91 @@ class StickerGeneratorUI:
             
             logger.info(f"变种生成完成: {success_count}/{total_count}")
             return variant_paths, status
-            
+
         except Exception as e:
             error_msg = f"❌ 生成失败: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return [], error_msg
-    
+
+    def generate_blog_post(
+        self,
+        topic: str,
+        keywords_str: str,
+        word_count: int,
+        image_count: int,
+        progress=gr.Progress()
+    ) -> Tuple[str, str, Optional[str]]:
+        """
+        生成博客文章
+
+        Args:
+            topic: 博客主题
+            keywords_str: SEO关键词（逗号分隔）
+            word_count: 目标字数
+            image_count: 图片数量
+            progress: Gradio 进度对象
+
+        Returns:
+            (进度文本, 预览内容, 下载文件路径)
+        """
+        try:
+            logger.info(f"开始生成博客: topic={topic}, keywords={keywords_str}")
+
+            # 解析关键词
+            keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+            if not keywords:
+                return "❌ 请输入至少一个关键词", "", None
+
+            # 进度回调
+            progress_text = ""
+            def progress_callback(message: str):
+                nonlocal progress_text
+                progress_text = message
+                progress(0, desc=message)
+
+            # 运行异步生成
+            result = asyncio.run(
+                self.blog_agent.generate_blog_post(
+                    topic=topic,
+                    seo_keywords=keywords,
+                    word_count_target=word_count,
+                    image_count=image_count,
+                    progress_callback=progress_callback
+                )
+            )
+
+            if result.success and result.blog_post:
+                # 读取生成的markdown文件
+                with open(result.markdown_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                status = f"""✅ 博客生成完成
+
+📊 统计信息：
+- 主题: {topic}
+- 字数: ~{word_count} 词
+- 图片: {len(result.blog_post.image_paths)} 张
+- 关键词: {', '.join(keywords)}
+
+📁 保存位置：
+{result.markdown_path}
+
+💡 提示：
+- 文章已保存为 Markdown 格式
+- 图片已嵌入到文章中
+- 可以直接复制到博客平台使用
+"""
+                return status, content, result.markdown_path
+            else:
+                error_msg = f"❌ 生成失败: {result.error}"
+                logger.error(error_msg)
+                return error_msg, "", None
+
+        except Exception as e:
+            error_msg = f"❌ 生成失败: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return error_msg, "", None
+
     def _format_pack_status(self, pack) -> str:
         """格式化贴纸包状态信息"""
         return f"""✅ 贴纸包生成完成
@@ -462,7 +544,69 @@ class StickerGeneratorUI:
                     ],
                     outputs=[variant_gallery, variant_status]
                 )
-            
+
+            # 标签页 4: Blog生成器
+            with gr.Tab("📝 Blog生成器"):
+                gr.Markdown("### 生成SEO优化的博客文章")
+
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        blog_topic = gr.Textbox(
+                            label="Blog主题",
+                            placeholder="例如: AI Stickers for Social Media Marketing",
+                            lines=2
+                        )
+
+                        blog_keywords = gr.Textbox(
+                            label="SEO关键词 (逗号分隔)",
+                            placeholder="例如: ai stickers, custom stickers, sticker design",
+                            lines=2
+                        )
+
+                        blog_word_count = gr.Slider(
+                            minimum=800,
+                            maximum=3500,
+                            value=1800,
+                            step=100,
+                            label="目标字数"
+                        )
+
+                        blog_image_count = gr.Slider(
+                            minimum=1,
+                            maximum=10,
+                            value=4,
+                            step=1,
+                            label="图片数量"
+                        )
+
+                        blog_generate_btn = gr.Button("📝 生成Blog", variant="primary", size="lg")
+
+                    with gr.Column(scale=2):
+                        blog_progress = gr.Textbox(
+                            label="生成进度",
+                            lines=12,
+                            max_lines=15
+                        )
+                        blog_preview = gr.Markdown(
+                            label="预览",
+                            value="生成的博客内容将在这里显示..."
+                        )
+                        blog_download = gr.File(
+                            label="下载Markdown文件"
+                        )
+
+                # 绑定事件
+                blog_generate_btn.click(
+                    fn=self.generate_blog_post,
+                    inputs=[
+                        blog_topic,
+                        blog_keywords,
+                        blog_word_count,
+                        blog_image_count
+                    ],
+                    outputs=[blog_progress, blog_preview, blog_download]
+                )
+
             # 页脚
             gr.Markdown("""
             ---
@@ -470,7 +614,8 @@ class StickerGeneratorUI:
             - 贴纸包生成：输入主题后点击"开始生成"，等待 AI 创作
             - 风格分析：上传贴纸图片，AI 会分析其风格特征
             - 变种生成：上传贴纸，AI 会生成相似风格的变种
-            
+            - Blog生成器：输入主题和关键词，生成SEO优化的博客文章
+
             ⚙️ **技术栈**：Claude (创意+分析) + Gemini Imagen (图片生成)
             """)
         

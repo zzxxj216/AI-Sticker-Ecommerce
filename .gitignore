@@ -49,6 +49,10 @@ data/temp/
 tests/data/output/
 tests/stickers_analyzer/data/output/
 trend_fetcher/output/
+output/
+
+# Cursor IDE
+.cursor/
 
 # Test
 .pytest_cache/

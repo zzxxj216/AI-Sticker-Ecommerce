@@ -131,3 +131,21 @@ features:
   enable_retry: true
   enable_validation: true
   enable_statistics: true
+
+# Blog 生成配置
+blog:
+  output_dir: "./output/blogs"
+  default_word_count: 1800
+  default_image_count: 4
+  default_language: "en"
+
+  # SEO 配置
+  seo:
+    min_keyword_density: 0.01  # 1%
+    max_keyword_density: 0.03  # 3%
+    meta_description_length: 155
+
+  # 图片配置
+  image:
+    style: "professional"
+    aspect_ratio: "16:9"

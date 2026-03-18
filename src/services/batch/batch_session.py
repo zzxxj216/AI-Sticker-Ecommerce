@@ -70,16 +70,21 @@ class BatchSessionResponse:
 # 系统 Prompt
 # ------------------------------------------------------------------
 
-BATCH_CHAT_SYSTEM = """You are a friendly sticker design assistant. You help users create sticker packs through a conversational interface. You speak in Chinese.
+UNIFIED_EXTRACT_AND_REPLY_SYSTEM = """You are a friendly sticker design assistant that speaks Chinese. You help users create sticker packs.
 
-The user wants to use the BATCH mode to generate sticker packs in parallel.
+You must respond with a JSON object containing two fields:
+1. "extracted": an object with extracted info from the user's message
+2. "reply": your natural Chinese reply to the user
 
-Your task:
-1. Help the user clarify their theme/topic for the batch generation.
-2. Optionally collect style preferences (visual style, color mood).
-3. Optionally collect how many packs they want (1-10, default 6 if not specified).
-4. Ask if they have any extra notes or preferences.
-5. When you have enough info, confirm with the user and trigger the pipeline.
+"extracted" fields:
+- "theme": extracted theme/topic (string or null if not mentioned)
+- "style": visual art style preference (string or null)
+- "color_mood": color/mood preference (string or null)
+- "pack_count": number of packs 1-10 (integer or null). Look for phrases like "生成2包", "2个卡包", "做3套", "来4个"
+- "extra": extra notes (string or null)
+- "confirmed": true ONLY if user explicitly confirms with "confirm", "start", "go", "开始", "确认", "好的开始", "可以了" etc.
+
+For the "reply" field: respond naturally in Chinese as a helpful assistant. If all required info (at least theme) is collected and user hasn't confirmed yet, ask them to confirm. Mention the pack count (default 6).
 
 Current state:
 - Theme: {theme_value}
@@ -88,11 +93,10 @@ Current state:
 - Pack count: {pack_count_value}
 - Extra: {extra_value}
 
-If all required info is collected, ask the user to confirm so you can start generating.
-When mentioning pack count, tell the user the current value and that default is 6 if they don't specify.
+Conversation history:
+{history_text}
 
-Respond naturally in Chinese. Do NOT output JSON.
-"""
+Return ONLY valid JSON, no markdown fences."""
 
 
 # ------------------------------------------------------------------
@@ -322,8 +326,34 @@ class BatchSession:
     # ------------------------------------------------------------------
 
     def _process_input_phase(self, user_input: str) -> BatchSessionResponse:
-        """收集主题/风格信息阶段。"""
-        extracted = self._extract_batch_info(user_input)
+        """收集主题/风格信息阶段 — 单次 Claude 调用同时完成提取+回复。"""
+
+        # Fast-path: obvious confirmation keywords skip the API call entirely
+        lower = user_input.lower().strip()
+        if lower in ("确认", "开始", "go", "start", "confirm", "好的开始", "可以了", "好的", "ok"):
+            if self._theme:
+                self._confirmed = True
+                reply = (
+                    f"好的！即将启动并行生成 {self._pack_count} 套贴纸包~\n"
+                    f"主题：「{self._theme}」\n"
+                    f"风格：{self._style or '系统自动分配'}\n"
+                    f"色彩情绪：{self._color_mood or '系统自动分配'}"
+                )
+                self._history.append({"role": "assistant", "content": reply})
+                return BatchSessionResponse(
+                    message=reply,
+                    phase=BATCH_PHASE_PLANNING,
+                    data={
+                        "theme": self._theme,
+                        "style": self._style,
+                        "color_mood": self._color_mood,
+                        "pack_count": self._pack_count,
+                        "extra": self._extra,
+                        "ready": True,
+                    },
+                )
+
+        extracted, reply = self._extract_and_reply(user_input)
 
         if extracted.get("theme"):
             self._theme = extracted["theme"]
@@ -347,10 +377,9 @@ class BatchSession:
         if extracted.get("confirmed") and self._theme:
             self._confirmed = True
 
-        if self._confirmed and self._theme:
-            reply = self._generate_chat_reply()
-            self._history.append({"role": "assistant", "content": reply})
+        self._history.append({"role": "assistant", "content": reply})
 
+        if self._confirmed and self._theme:
             return BatchSessionResponse(
                 message=reply,
                 phase=BATCH_PHASE_PLANNING,
@@ -363,9 +392,6 @@ class BatchSession:
                     "ready": True,
                 },
             )
-
-        reply = self._generate_chat_reply()
-        self._history.append({"role": "assistant", "content": reply})
 
         return BatchSessionResponse(
             message=reply,
@@ -380,76 +406,58 @@ class BatchSession:
             },
         )
 
-    def _extract_batch_info(self, user_input: str) -> Dict[str, Any]:
-        """从用户消息中提取批量生成信息。"""
-        prompt = f"""Read the user message and extract information for batch sticker generation.
+    def _extract_and_reply(self, user_input: str) -> tuple:
+        """单次 Claude 调用同时完成信息提取和对话回复，减少一半延迟。
 
-User message: {user_input}
+        Returns:
+            (extracted_dict, reply_str)
+        """
+        history_lines = []
+        for msg in self._history[-8:]:
+            role = "用户" if msg["role"] == "user" else "助手"
+            history_lines.append(f"{role}: {msg['content']}")
+        history_text = "\n".join(history_lines) if history_lines else "(首次对话)"
 
-Current state:
-- Theme: {self._theme or '(not set)'}
-- Style: {self._style or '(not set)'}
-- Color mood: {self._color_mood or '(not set)'}
-- Pack count: {self._pack_count}
-- Extra: {self._extra or '(none)'}
-
-Extract and return JSON:
-{{"theme": "extracted theme or null", "style": "extracted style or null", "color_mood": "extracted color mood or null", "pack_count": null, "extra": "extra notes or null", "confirmed": false}}
-
-Rules:
-- theme: the main topic/subject for sticker packs
-- style: visual art style preference
-- color_mood: color/mood preference
-- pack_count: number of sticker packs to generate (integer 1-10). Extract from phrases like "生成2包", "2个卡包", "做3套", "来4个", "two packs", etc. Return null if not mentioned. Default is 6 if user never specifies.
-- confirmed: true ONLY if user explicitly says "confirm", "start", "go", "开始", "确认", "好的开始", "可以了"
-- Return null for fields not mentioned in this message
-- Return JSON only.
-"""
-        try:
-            raw = self.claude.generate_json(
-                prompt=prompt,
-                system="You are a JSON extraction bot. Return valid JSON only.",
-                max_tokens=300,
-                temperature=0.1,
-            )
-            return raw
-        except Exception as e:
-            logger.warning("Batch info extraction failed: %s", e)
-            if not self._theme:
-                return {"theme": user_input}
-            return {}
-
-    def _generate_chat_reply(self) -> str:
-        """生成对话回复。"""
-        system = BATCH_CHAT_SYSTEM.format(
+        system = UNIFIED_EXTRACT_AND_REPLY_SYSTEM.format(
             theme_value=self._theme or "(未设置)",
             style_value=self._style or "(未指定，系统将自动分配不同风格)",
             color_mood_value=self._color_mood or "(未指定)",
             pack_count_value=f"{self._pack_count} 包",
             extra_value=self._extra or "(无)",
+            history_text=history_text,
         )
 
-        messages = self._history[-10:]
-
         try:
-            result = self.claude.generate_multiturn(
-                messages=messages,
+            raw = self.claude.generate_json(
+                prompt=f"用户消息: {user_input}",
                 system=system,
-                max_tokens=1000,
-                temperature=0.7,
+                max_tokens=800,
+                temperature=0.5,
             )
-            return result["text"].strip()
+
+            extracted = raw.get("extracted", {})
+            reply = raw.get("reply", "")
+
+            if not reply:
+                reply = self._fallback_reply()
+
+            return extracted, reply
+
         except Exception as e:
-            logger.error("Chat reply generation failed: %s", e)
-            if self._theme and not self._confirmed:
-                return (
-                    f"好的，我已经记录了你的主题：「{self._theme}」。\n"
-                    f"卡包数量：{self._pack_count} 包\n"
-                    f"风格：{self._style or '(系统自动分配)'}\n"
-                    f"色彩情绪：{self._color_mood or '(系统自动分配)'}\n\n"
-                    "如果信息确认无误，请输入「确认」或「开始」来启动并行生成！"
-                )
-            return "请告诉我你想创建什么主题的贴纸包？默认生成 6 个不同风格的卡包，你也可以指定数量，比如「生成2包」。"
+            logger.warning("Unified extract+reply failed: %s", e)
+            extracted = {"theme": user_input} if not self._theme else {}
+            return extracted, self._fallback_reply()
+
+    def _fallback_reply(self) -> str:
+        if self._theme and not self._confirmed:
+            return (
+                f"好的，我已经记录了你的主题：「{self._theme}」。\n"
+                f"卡包数量：{self._pack_count} 包\n"
+                f"风格：{self._style or '(系统自动分配)'}\n"
+                f"色彩情绪：{self._color_mood or '(系统自动分配)'}\n\n"
+                "如果信息确认无误，请输入「确认」或「开始」来启动并行生成！"
+            )
+        return "请告诉我你想创建什么主题的贴纸包？默认生成 6 个不同风格的卡包，你也可以指定数量，比如「生成2包」。"
 
     # ------------------------------------------------------------------
     # Editing phase
