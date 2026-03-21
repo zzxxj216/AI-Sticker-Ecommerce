@@ -14,6 +14,7 @@ from src.models.blog import (
     BlogInput,
     BlogDraft,
     ReviewResult,
+    ContentPlan,
 )
 from src.services.blog import blog_prompts
 
@@ -37,25 +38,36 @@ class WriterAgent:
     async def generate(
         self,
         blog_input: BlogInput,
+        content_plan: Optional[ContentPlan] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> BlogDraft:
         """Generate a new blog draft from scratch.
 
         Args:
             blog_input: Topic + keywords from trend research.
+            content_plan: Optional approved content plan to follow.
             progress_callback: Optional callback for progress updates.
 
         Returns:
             BlogDraft with metadata and full markdown content.
         """
-        self._progress(progress_callback, "Generating blog draft...")
-
-        user_prompt = blog_prompts.format_writer_generate_prompt(
-            topic=blog_input.topic,
-            seo_keywords=blog_input.seo_keywords,
-            language=blog_input.language,
-            additional_instructions=blog_input.additional_instructions,
-        )
+        if content_plan:
+            self._progress(progress_callback, "Generating blog draft from approved plan...")
+            user_prompt = blog_prompts.format_writer_generate_with_plan_prompt(
+                topic=blog_input.topic,
+                seo_keywords=blog_input.seo_keywords,
+                plan=content_plan,
+                language=blog_input.language,
+                additional_instructions=blog_input.additional_instructions,
+            )
+        else:
+            self._progress(progress_callback, "Generating blog draft...")
+            user_prompt = blog_prompts.format_writer_generate_prompt(
+                topic=blog_input.topic,
+                seo_keywords=blog_input.seo_keywords,
+                language=blog_input.language,
+                additional_instructions=blog_input.additional_instructions,
+            )
 
         raw_text = await self._call_llm(user_prompt)
         draft = self._parse_draft(raw_text, iteration=1)

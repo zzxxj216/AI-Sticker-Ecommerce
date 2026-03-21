@@ -7,7 +7,10 @@ Contains system prompts and user prompt formatters for:
 
 from typing import List
 
-from src.models.blog import BusinessProfile, BlogDraft, ReviewResult
+from src.models.blog import (
+    BusinessProfile, BlogDraft, ReviewResult,
+    ContentPlan, PlanReviewResult,
+)
 
 
 # ============================================================
@@ -69,7 +72,9 @@ Do NOT include a year (2024, 2025, 2026, etc.) in the title — sticker content 
 ## Mandatory Content Modules
 Every blog MUST include ALL of these modules in order:
 
-1. **Table of Contents** — A clickable nested TOC at the very top (after intro paragraph). List every H2 as a top-level item, and nest H3 sub-sections underneath their parent H2. For the listicle/designs section, the TOC should list ONLY the 3-5 thematic category H3s (e.g. "Classic Americana Icons", "Desert & Nature Designs"), NOT each individual numbered design. This keeps the TOC clean and scannable.
+1. **Table of Contents** — A clickable nested TOC at the very top (after intro paragraph).
+ List every H2 as a top-level item, and nest H3 sub-sections underneath their parent H2. 
+ For the listicle/designs section, the TOC should list ONLY the 3-5 thematic category H3s (e.g. "Classic Americana Icons", "Desert & Nature Designs"), NOT each individual numbered design. This keeps the TOC clean and scannable.
 
 2. **Main Topic Section** — The core listicle section. Group the 15 designs into 3-5 thematic categories (H3), with individual designs as numbered items within each category (NOT as separate H3s). See the structure rules below.
 
@@ -101,11 +106,16 @@ Every blog MUST include ALL of these modules in order:
 1. Write in first-person blogger voice, NEVER sound like a product manual
 2. Naturally integrate SEO keywords per the rules above
 3. Each design recommendation must be VIVID and SPECIFIC (describe colors, shapes, placement)
-4. Mark image positions with [Image: description | alt text] format. The description MUST describe a sticker product scene:
-   - GOOD: "flat lay of cowboy western vinyl sticker pack on wooden desk next to laptop"
-   - GOOD: "close-up of turquoise thunderbird die-cut vinyl sticker on black water bottle"
+4. Mark image positions with [Image: description | alt text] format. The description MUST:
+   - Describe a sticker product scene that DIRECTLY matches the designs discussed in the surrounding text
+   - Include the specific sticker design name/theme from the nearest content (e.g. if you just described a "Lone Cowboy Silhouette" sticker, the image should show that exact design)
+   - Mention the blog topic keyword so the image stays on-theme
+   - Describe a concrete product photo or lifestyle flat-lay, NOT an abstract concept
+   - GOOD: "flat lay of cowboy western vinyl sticker pack featuring lone cowboy silhouette and vintage boot designs on wooden desk next to laptop"
+   - GOOD: "close-up of turquoise thunderbird die-cut vinyl sticker from southwestern sticker pack on black water bottle"
    - BAD: "turquoise thunderbird southwestern art" (too vague, not sticker-specific)
    - BAD: "cowboy in desert" (describes a scene, not a sticker product)
+   - BAD: "sticker pack on desk" (too generic, doesn't reference the specific designs discussed)
 5. CTA should feel like a friend sharing, not a salesperson pushing
 6. Target word count: 2000-2500 words (Google rewards long-form comprehensive content)
 7. Use **bold** for key terms and keywords
@@ -450,3 +460,373 @@ Return your review as a JSON object with this EXACT structure:
 - Total word count in 2000-2500 range?
 
 Return ONLY the JSON object, no additional text."""
+
+
+# ============================================================
+# Planner Agent Prompts
+# ============================================================
+
+
+def build_planner_system_prompt(profile: BusinessProfile) -> str:
+    """Build the Planner Agent system prompt from business profile."""
+    brand = profile.brand
+    materials = profile.materials
+    business = profile.business
+
+    return f"""You are an expert content planner for a sticker e-commerce brand. You design article outlines and plan images that work together cohesively.
+
+## Business Context
+{business.get('description', '')}
+{business.get('content_product_relationship', '')}
+
+## Brand Voice
+{brand.get('voice', '')}
+Tone keywords: {', '.join(brand.get('tone_keywords', []))}
+
+## Material Claims (for reference)
+Safe: {', '.join(materials.get('safe_claims', []))}
+
+## Your Responsibilities
+1. Create a comprehensive article outline for the given topic
+2. Design 5-7 image placements that are TIGHTLY coupled with specific content sections
+3. Write detailed image generation prompts that produce images matching the surrounding text
+4. Ensure every image references concrete sticker designs, colors, surfaces, and compositions
+
+## Image Planning Rules (CRITICAL)
+Each image MUST:
+- Reference specific sticker designs that are discussed in its target section
+- Describe a concrete product scene (flat lay, close-up on surface, lifestyle shot) — NOT an abstract concept
+- Include composition details: what objects are visible, colors, background, surface material
+- Match the visual style of vinyl sticker product photography
+- Include the topic keyword so images stay on-theme
+
+Good image description: "Flat lay of cowboy western vinyl sticker pack featuring lone cowboy silhouette, vintage boot, and crossed revolvers designs spread on weathered wooden desk next to silver MacBook and leather journal"
+Bad image description: "cowboy stickers on desk" (too vague, no design details)
+Bad image description: "cowboy riding horse in desert sunset" (scene, not a sticker product)
+
+## Article Structure Template
+Your outline MUST follow this proven SEO structure:
+1. Why [Topic] is Trending / Popular — with 2-3 angles
+2. [Number] Best [Keyword] Designs — grouped into 3-5 thematic categories
+3. Where to Use / Where to Stick — surfaces grouped by category
+4. How to Choose the Best [Keyword] Pack — buying guide
+5. How to Apply [Keyword] — step-by-step
+6. FAQ — 5+ questions for featured snippets
+7. Final CTA — soft close with collection link"""
+
+
+def format_planner_generate_prompt(
+    topic: str,
+    seo_keywords: List[str],
+    language: str = "en",
+    additional_instructions: str = "",
+) -> str:
+    """Format the user prompt for initial content planning."""
+    keywords_str = ", ".join(seo_keywords)
+
+    prompt = f"""Create a detailed content plan for the following blog topic.
+
+## Topic
+{topic}
+
+## SEO Keywords
+Primary and secondary keywords: {keywords_str}
+
+## Output Format
+Return a JSON object with this EXACT structure:
+```json
+{{
+  "outline": [
+    {{
+      "title": "H2 section title with keyword",
+      "key_points": ["point 1", "point 2", "point 3"],
+      "subsections": [
+        {{
+          "title": "H3 sub-section title",
+          "key_points": ["sub-point 1", "sub-point 2"]
+        }}
+      ]
+    }}
+  ],
+  "image_plans": [
+    {{
+      "section_title": "Which H2/H3 this image belongs to",
+      "placement": "After the paragraph about [specific topic]",
+      "description": "Highly detailed image generation prompt describing a sticker product scene — include specific design names, colors, surfaces, composition, lighting, and style",
+      "alt_text": "SEO alt text containing primary keyword",
+      "content_connection": "This image shows the exact designs discussed in [section]: [design 1] and [design 2], placed on [surface] to demonstrate [point being made]"
+    }}
+  ],
+  "target_word_count": 2200,
+  "seo_strategy": "Describe how the primary keyword and secondary keywords will be distributed across sections"
+}}
+```
+
+## Planning Guidelines
+1. The outline should cover ALL mandatory modules: Trending/Popular, Listicle (15 designs in 3-5 categories), Where to Use, How to Choose, Application Guide, FAQ, Final CTA
+2. Plan exactly 5-7 images distributed across sections — at least one in the listicle, one in "where to use", one in "how to apply"
+3. Each `image_plans[].description` must be 30-60 words with concrete visual details (sticker designs, colors, surface materials, composition)
+4. Each `image_plans[].content_connection` must explain WHY this image fits its section — reference specific design names and points from the outline
+5. The `seo_strategy` should describe keyword placement across sections
+
+## Language
+Plan for content in {"English" if language == "en" else language}.
+
+Return ONLY the JSON object, no additional text."""
+
+    if additional_instructions:
+        prompt += f"\n\n## Additional Instructions\n{additional_instructions}"
+
+    return prompt
+
+
+def format_planner_revise_prompt(
+    plan: ContentPlan,
+    review: PlanReviewResult,
+    topic: str,
+    seo_keywords: List[str],
+) -> str:
+    """Format the user prompt for plan revision based on reviewer feedback."""
+    import json
+
+    keywords_str = ", ".join(seo_keywords)
+
+    outline_json = json.dumps(
+        [{"title": s.get("title", ""), "key_points": s.get("key_points", []),
+          "subsections": s.get("subsections", [])} for s in plan.outline],
+        indent=2,
+    )
+
+    image_plans_json = json.dumps(
+        [ip.model_dump() for ip in plan.image_plans], indent=2
+    )
+
+    issues_text = "\n".join(f"- {issue}" for issue in review.issues) or "None"
+    suggestions_text = "\n".join(f"- {s}" for s in review.suggestions) or "None"
+
+    return f"""Revise your content plan based on the reviewer's feedback.
+
+## Topic
+{topic}
+
+## SEO Keywords
+{keywords_str}
+
+## Reviewer's Scores
+- Coherence (image-content match): {review.coherence_score}/10
+- Coverage (key sections illustrated): {review.coverage_score}/10
+- Specificity (image description detail): {review.specificity_score}/10
+- Overall: {review.overall_score}/100
+
+## Issues Found
+{issues_text}
+
+## Suggestions
+{suggestions_text}
+
+## Current Outline
+{outline_json}
+
+## Current Image Plans
+{image_plans_json}
+
+## Instructions
+1. Address ALL issues and suggestions from the reviewer
+2. Keep sections and images that are working well
+3. Focus on improving the weakest scoring dimension
+4. Return the revised plan in the same JSON format as before (outline, image_plans, target_word_count, seo_strategy)
+
+Return ONLY the JSON object, no additional text."""
+
+
+# ============================================================
+# Plan Reviewer Agent Prompts
+# ============================================================
+
+
+def build_plan_reviewer_system_prompt(profile: BusinessProfile) -> str:
+    """Build the Plan Reviewer Agent system prompt."""
+    business = profile.business
+
+    return f"""You are a content-image coherence reviewer for a sticker e-commerce brand.
+
+## Business Context
+{business.get('description', '')}
+
+## Your Role
+You evaluate content plans to ensure that planned images are tightly coupled with the article content.
+Your review determines whether the plan is ready for writing or needs revision.
+
+## Evaluation Criteria
+
+### 1. Coherence (40% weight)
+Does each image description specifically match its target section content?
+- Image descriptions must reference the EXACT sticker designs discussed in their section
+- Images must show PRODUCT scenes (sticker flat lays, close-ups on surfaces) not abstract concepts
+- The `content_connection` must clearly explain why the image fits
+- FAIL: Image says "cowboy stickers" but section discusses specific designs like "Lone Cowboy Silhouette" and "Vintage Boot" — image should name these designs
+
+### 2. Coverage (30% weight)
+Are the key content sections adequately illustrated?
+- The listicle/designs section MUST have at least 2 images
+- The "where to use" section should have at least 1 image showing stickers on surfaces
+- The "how to apply" section should have at least 1 image
+- Total images should be 5-7
+- FAIL: All images are in the listicle section with none in practical sections
+
+### 3. Specificity (30% weight)
+Are image descriptions detailed enough for good image generation?
+- Each description should be 30-60 words
+- Must include: specific sticker designs, colors, surface material, composition/layout, visual style
+- Must NOT be vague ("stickers on desk") or scene-based ("cowboy in desert")
+- FAIL: "cowboy western stickers on laptop" — needs specific designs, colors, laptop color, composition details
+
+## Scoring
+- 1-3: Major problems, fundamentally misaligned
+- 4-5: Significant issues that need addressing
+- 6-7: Acceptable but could be improved
+- 8-9: Good to excellent
+- 10: Perfect"""
+
+
+def format_plan_reviewer_prompt(
+    plan: ContentPlan,
+    topic: str,
+    seo_keywords: List[str],
+    threshold: int = 70,
+) -> str:
+    """Format the user prompt for plan review."""
+    import json
+
+    keywords_str = ", ".join(seo_keywords)
+
+    outline_json = json.dumps(plan.outline, indent=2)
+    image_plans_json = json.dumps(
+        [ip.model_dump() for ip in plan.image_plans], indent=2
+    )
+
+    return f"""Review the following content plan for content-image coherence.
+
+## Original Brief
+Topic: {topic}
+SEO Keywords: {keywords_str}
+
+## Article Outline
+{outline_json}
+
+## Image Plans
+{image_plans_json}
+
+## SEO Strategy
+{plan.seo_strategy}
+
+## Target Word Count
+{plan.target_word_count}
+
+## Passing Threshold
+The plan must score at least {threshold}/100 overall to pass.
+
+## Evaluation
+Score each dimension 1-10 and provide specific issues + suggestions.
+
+Return your review as a JSON object with this EXACT structure:
+```json
+{{
+  "coherence_score": <1-10>,
+  "coverage_score": <1-10>,
+  "specificity_score": <1-10>,
+  "overall_score": <weighted average: coherence*40 + coverage*30 + specificity*30, scaled to 0-100>,
+  "issues": ["specific issue 1", "specific issue 2"],
+  "suggestions": ["actionable suggestion 1", "actionable suggestion 2"],
+  "passed": <true if overall_score >= {threshold}>,
+  "summary": "one sentence overall assessment"
+}}
+```
+
+## Review Checklist
+- [ ] Does each image reference specific designs from its section's outline?
+- [ ] Are all key sections (listicle, where-to-use, how-to-apply) illustrated?
+- [ ] Are image descriptions 30-60 words with concrete visual details?
+- [ ] Do image descriptions show sticker PRODUCTS, not abstract scenes?
+- [ ] Is there a clear `content_connection` for each image?
+- [ ] Are there 5-7 images total?
+
+Return ONLY the JSON object, no additional text."""
+
+
+def format_writer_generate_with_plan_prompt(
+    topic: str,
+    seo_keywords: List[str],
+    plan: ContentPlan,
+    language: str = "en",
+    additional_instructions: str = "",
+) -> str:
+    """Format the writer prompt with a ContentPlan to follow."""
+    import json
+
+    keywords_str = ", ".join(seo_keywords)
+
+    outline_text = ""
+    for section in plan.outline:
+        outline_text += f"\n### {section.get('title', '')}\n"
+        for kp in section.get("key_points", []):
+            outline_text += f"  - {kp}\n"
+        for sub in section.get("subsections", []):
+            outline_text += f"  #### {sub.get('title', '')}\n"
+            for skp in sub.get("key_points", []):
+                outline_text += f"    - {skp}\n"
+
+    image_instructions = ""
+    for i, ip in enumerate(plan.image_plans, 1):
+        image_instructions += f"\n**Image {i}** — Section: {ip.section_title}\n"
+        image_instructions += f"  Placement: {ip.placement}\n"
+        image_instructions += f"  Description: {ip.description}\n"
+        image_instructions += f"  Alt text: {ip.alt_text}\n"
+        image_instructions += f"  Why here: {ip.content_connection}\n"
+
+    prompt = f"""Write a comprehensive, Google-ranking SEO blog post following the approved content plan below.
+
+## Topic
+{topic}
+
+## SEO Keywords (must be naturally integrated 8-12 times for primary, 2-4 for each secondary)
+Primary and secondary keywords: {keywords_str}
+
+## APPROVED CONTENT PLAN — Follow This Structure
+{outline_text}
+
+## SEO Strategy
+{plan.seo_strategy}
+
+## APPROVED IMAGE PLACEMENTS — Use These Exact Descriptions
+Insert image placeholders at the positions specified below. Use the EXACT descriptions from the plan as the image prompt, and the provided alt text.
+
+Format each image as: [Image: {{description from plan}} | {{alt text from plan}}]
+{image_instructions}
+
+## Output Format
+Return your response in the following structure:
+
+META_TITLE: [50-60 chars, keyword-first format: "Best {{keyword}} for {{use case}}" or "{{Number}} {{keyword}} Ideas for {{surface}}"]
+META_DESCRIPTION: [150-160 chars, must contain primary keyword + compelling reason to click + soft CTA]
+URL_SLUG: [/kebab-case-slug containing primary keyword]
+
+---
+
+[Full blog content in Markdown — follow the approved outline structure above]
+
+## Content Quality Requirements
+- Target: {plan.target_word_count} words
+- Follow the outline section-by-section — do NOT skip or reorder sections
+- Place each image EXACTLY where the plan specifies
+- Every H2 must contain a keyword or keyword variant
+- Bold the primary keyword on first use in each section
+- Short paragraphs (2-3 sentences) for mobile scanning
+
+## Language
+Write entirely in {"English" if language == "en" else language}."""
+
+    if additional_instructions:
+        prompt += f"\n\n## Additional Instructions\n{additional_instructions}"
+
+    return prompt

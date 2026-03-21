@@ -43,6 +43,7 @@ logs/
 *.log
 
 # Data & generated output
+data/
 data/output/
 data/cache/
 data/temp/

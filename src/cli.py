@@ -63,18 +63,40 @@ def cli():
     help="Additional instructions for Writer",
 )
 @click.option(
+    "--planner-llm",
+    type=click.Choice(["claude", "gemini"]),
+    default="gemini",
+    help="LLM provider for Planner Agent",
+)
+@click.option(
+    "--skip-planner", is_flag=True, default=False,
+    help="Skip the planning phase (go straight to writing)",
+)
+@click.option(
     "--no-images", is_flag=True, default=False,
     help="Skip image generation (keep [Image: ...] placeholders)",
 )
+@click.option(
+    "--publish", is_flag=True, default=False,
+    help="Push to Shopify as draft after generation",
+)
+@click.option(
+    "--publish-live", is_flag=True, default=False,
+    help="Push to Shopify and publish immediately (public)",
+)
 def blog(
-    topic, keywords, writer_llm, reviewer_llm,
+    topic, keywords, writer_llm, reviewer_llm, planner_llm, skip_planner,
     max_iterations, pass_threshold, auto, language, extra, no_images,
+    publish, publish_live,
 ):
     """Generate SEO blog with multi-agent Writer + Reviewer loop."""
     keywords_list = [k.strip() for k in keywords.split(",") if k.strip()]
     if not keywords_list:
         console.print("[bold red]Error: At least one keyword is required[/bold red]")
         return
+
+    should_publish = publish or publish_live
+    publish_live_flag = publish_live
 
     try:
         asyncio.run(
@@ -83,12 +105,16 @@ def blog(
                 keywords_list=keywords_list,
                 writer_llm=writer_llm,
                 reviewer_llm=reviewer_llm,
+                planner_llm=planner_llm,
+                skip_planner=skip_planner,
                 max_iterations=max_iterations,
                 pass_threshold=pass_threshold,
                 auto_mode=auto,
                 language=language,
                 extra=extra,
                 generate_images=not no_images,
+                publish=should_publish,
+                publish_live=publish_live_flag,
             )
         )
     except KeyboardInterrupt:
@@ -103,34 +129,45 @@ async def _run_blog_generate(
     keywords_list: list[str],
     writer_llm: str,
     reviewer_llm: str,
+    planner_llm: str,
+    skip_planner: bool,
     max_iterations: int,
     pass_threshold: float,
     auto_mode: bool,
     language: str,
     extra: str,
     generate_images: bool = True,
+    publish: bool = False,
+    publish_live: bool = False,
 ):
     """Async entry point for blog command."""
     from src.models.blog import BusinessProfile, BlogInput, BlogDraft, ReviewResult
     from src.services.blog import WriterAgent, ReviewerAgent, BlogOrchestrator
+    from src.services.blog.planner_agent import PlannerAgent
+    from src.services.blog.plan_reviewer_agent import PlanReviewerAgent
     from src.services.blog.blog_image_generator import BlogImageGenerator
+    from src.services.blog.shopify_publisher import ShopifyPublisher
     from src.services.ai.claude_service import ClaudeService
     from src.services.ai.gemini_service import GeminiService
 
     profile = BusinessProfile.from_yaml()
     images_label = "On" if generate_images else "Off"
+    planner_label = "Off" if skip_planner else planner_llm
+    publish_label = "Shopify LIVE" if publish_live else ("Shopify Draft" if publish else "Off")
     console.print(Panel(
         f"[bold]Topic:[/bold] {topic}\n"
         f"[bold]Keywords:[/bold] {', '.join(keywords_list)}\n"
-        f"[bold]Writer:[/bold] {writer_llm}  |  [bold]Reviewer:[/bold] {reviewer_llm}\n"
+        f"[bold]Planner:[/bold] {planner_label}  |  [bold]Writer:[/bold] {writer_llm}  |  [bold]Reviewer:[/bold] {reviewer_llm}\n"
         f"[bold]Threshold:[/bold] {pass_threshold}  |  [bold]Max iterations:[/bold] {max_iterations}\n"
-        f"[bold]Mode:[/bold] {'Auto' if auto_mode else 'Interactive'}  |  [bold]Images:[/bold] {images_label}",
+        f"[bold]Mode:[/bold] {'Auto' if auto_mode else 'Interactive'}  |  [bold]Images:[/bold] {images_label}\n"
+        f"[bold]Publish:[/bold] {publish_label}",
         title="Multi-Agent Blog Generator",
         border_style="blue",
     ))
 
     BLOG_WRITER_TIMEOUT = 600
     BLOG_REVIEWER_TIMEOUT = 300
+    BLOG_PLANNER_TIMEOUT = 300
     gemini_text_model = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
 
     def _make_llm(name: str, timeout: int):
@@ -148,6 +185,13 @@ async def _run_blog_generate(
 
     writer = WriterAgent(writer_service, profile)
     reviewer = ReviewerAgent(reviewer_service, profile)
+
+    planner = None
+    plan_reviewer = None
+    if not skip_planner:
+        planner_service = _make_llm(planner_llm, BLOG_PLANNER_TIMEOUT)
+        planner = PlannerAgent(planner_service, profile)
+        plan_reviewer = PlanReviewerAgent(planner_service, profile)
 
     blog_input = BlogInput(
         topic=topic,
@@ -189,16 +233,32 @@ async def _run_blog_generate(
     def progress(msg: str):
         console.print(f"  [dim]{msg}[/dim]")
 
-    store_domain = profile.platform.get("domain", "")
+    store_domain = profile.platform.get("domain", "") or os.getenv("SHOPIFY_STORE_DOMAIN", "")
     store_url = f"https://{store_domain}" if store_domain else "https://your-store.myshopify.com"
+
+    publisher = None
+    if publish:
+        try:
+            publisher = ShopifyPublisher(
+                shop_domain=store_domain or None,
+                blog_handle=os.getenv("SHOPIFY_BLOG_HANDLE", "blog"),
+            )
+            console.print("[green]Shopify publisher initialized[/green]")
+        except ValueError as e:
+            console.print(f"[bold red]Shopify publish disabled: {e}[/bold red]")
+            console.print("[dim]Set SHOPIFY_STORE_DOMAIN and SHOPIFY_ACCESS_TOKEN in .env[/dim]")
 
     orchestrator = BlogOrchestrator(
         writer=writer,
         reviewer=reviewer,
+        planner=planner,
+        plan_reviewer=plan_reviewer,
         max_iterations=max_iterations,
         pass_threshold=pass_threshold,
         image_generator=image_generator,
         store_url=store_url,
+        publisher=publisher,
+        publish_live=publish_live,
     )
 
     final_draft = await orchestrator.run(blog_input, on_review, progress)

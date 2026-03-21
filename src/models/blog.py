@@ -88,6 +88,45 @@ class BlogInput(BaseModel):
     language: str = Field("en", description="Output language")
 
 
+# ============================================================
+# Planner Agent Models
+# ============================================================
+
+
+class ImagePlan(BaseModel):
+    """Planned image tied to a specific content section."""
+    section_title: str = Field(..., description="H2/H3 section this image belongs to")
+    placement: str = Field(..., description="Where in the section to place the image")
+    description: str = Field(..., description="Detailed image generation prompt")
+    alt_text: str = Field(..., description="SEO alt text for the image")
+    content_connection: str = Field(..., description="Why this image fits this section")
+
+
+class ContentPlan(BaseModel):
+    """Planner Agent output: article outline with image plans."""
+    outline: List[Dict[str, Any]] = Field(
+        ..., description="Section structure [{title, key_points, subsections}]"
+    )
+    image_plans: List[ImagePlan] = Field(
+        ..., description="5-7 planned images with content context"
+    )
+    target_word_count: int = Field(2200, description="Target word count")
+    seo_strategy: str = Field(..., description="How keywords will be distributed")
+    iteration: int = Field(1, description="Which iteration of the plan")
+
+
+class PlanReviewResult(BaseModel):
+    """Plan Reviewer Agent output: content-image coherence review."""
+    coherence_score: int = Field(..., ge=1, le=10, description="Do images match content sections?")
+    coverage_score: int = Field(..., ge=1, le=10, description="Are key sections illustrated?")
+    specificity_score: int = Field(..., ge=1, le=10, description="Are image descriptions detailed enough?")
+    overall_score: float = Field(..., description="Weighted average 0-100")
+    issues: List[str] = Field(default_factory=list, description="Issues found")
+    suggestions: List[str] = Field(default_factory=list, description="Improvement suggestions")
+    passed: bool = Field(..., description="Whether the plan passes the threshold")
+    summary: str = Field("", description="One-line summary")
+
+
 class BlogDraft(BaseModel):
     """Writer Agent 输出的博客草稿"""
     meta_title: str = Field(..., description="SEO meta title (50-60 chars)")
@@ -95,6 +134,7 @@ class BlogDraft(BaseModel):
     url_slug: str = Field(..., description="URL slug for the blog post")
     content: str = Field(..., description="Full markdown content")
     iteration: int = Field(1, description="Which iteration of the draft")
+    shopify_article_id: Optional[int] = Field(None, description="Shopify article ID if published")
 
 
 class ReviewDimension(BaseModel):

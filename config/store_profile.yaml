@@ -40,7 +40,7 @@ brand:
 # ===== Shopify 站点结构 =====
 platform:
   type: "shopify"
-  domain: ""                          # 填入实际域名
+  domain: "inkelligent.myshopify.com"  # Shopify store domain
   blog_path: "/blogs/news"            # Shopify 默认博客路径
   collections_path: "/collections"    # Shopify 系列路径
   cta_link_strategy: |

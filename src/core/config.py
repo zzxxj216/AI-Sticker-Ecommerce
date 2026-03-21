@@ -101,6 +101,14 @@ class Config:
         self._config['ai']['gemini']['base_url'] = os.getenv('IMAGE_BASE_URL', 'https://generativelanguage.googleapis.com')
         self._config['ai']['gemini']['model'] = os.getenv('IMAGE_MODEL', AIModel.GEMINI_FLASH.value)
 
+        # OpenAI 配置
+        if 'openai' not in self._config['ai']:
+            self._config['ai']['openai'] = {}
+
+        self._config['ai']['openai']['api_key'] = os.getenv('OPENAI_API_KEY', '')
+        self._config['ai']['openai']['base_url'] = os.getenv('OPENAI_BASE_URL', '')
+        self._config['ai']['openai']['model'] = os.getenv('OPENAI_MODEL', 'gpt-4o')
+
         # Feishu Bot
         if 'feishu' not in self._config:
             self._config['feishu'] = {}
@@ -118,13 +126,8 @@ class Config:
                 base[key] = value
     
     def _validate_config(self):
-        """验证配置"""
-        # 验证必需的 API Key
-        if not self.get('ai.claude.api_key'):
-            raise ConfigError("缺少 ANTHROPIC_API_KEY 配置", "ai.claude.api_key")
-        
-        if not self.get('ai.gemini.api_key'):
-            raise ConfigError("缺少 IMAGE_API_KEY 配置", "ai.gemini.api_key")
+        """验证配置（仅做基础检查，API Key 由各 Service 自行校验）"""
+        pass
     
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置值（支持点号分隔的嵌套键）
@@ -191,6 +194,21 @@ class Config:
         """Claude 模型"""
         return self.get('ai.claude.model', AIModel.CLAUDE_OPUS.value)
     
+    @property
+    def openai_api_key(self) -> str:
+        """OpenAI API Key"""
+        return self.get('ai.openai.api_key', '')
+
+    @property
+    def openai_base_url(self) -> str:
+        """OpenAI Base URL"""
+        return self.get('ai.openai.base_url', '')
+
+    @property
+    def openai_model(self) -> str:
+        """OpenAI 模型"""
+        return self.get('ai.openai.model', 'gpt-4o')
+
     @property
     def gemini_api_key(self) -> str:
         """Gemini API Key"""

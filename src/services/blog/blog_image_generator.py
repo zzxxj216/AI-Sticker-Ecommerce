@@ -13,9 +13,10 @@ import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict
 
 from src.core.logger import get_logger
+from src.models.blog import ContentPlan
 from src.services.ai.gemini_service import GeminiService
 from src.utils.text_utils import sanitize_filename
 
@@ -52,11 +53,7 @@ class BlogImageGenerator:
         self.max_workers = max_workers
 
     def _build_image_prompt(self, description: str) -> str:
-        """Wrap a raw image description with sticker-product context.
-
-        This ensures Gemini generates images that look like actual sticker
-        products or lifestyle shots, not random illustrations.
-        """
+        """Wrap a raw image description with sticker-product context."""
         return f"{STICKER_IMAGE_STYLE_PREFIX}{description}{STICKER_IMAGE_STYLE_SUFFIX}"
 
     def extract_placeholders(self, content: str) -> List[ImagePlaceholder]:
@@ -74,29 +71,37 @@ class BlogImageGenerator:
         self,
         content: str,
         images_dir: Path,
+        refined_prompts: Optional[Dict[str, str]] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
-    ) -> str:
+        on_image_ready: Optional[Callable[[Path, str, str, int], None]] = None,
+    ) -> tuple[str, List[Dict]]:
         """Generate images for all placeholders and return updated content.
 
         Args:
             content: Markdown content with [Image: ...] placeholders.
             images_dir: Directory to save generated images.
+            refined_prompts: Optional dict mapping original placeholder text
+                             to refined image prompts from ImageDirector.
             progress_callback: Optional progress callback.
+            on_image_ready: Optional callback(path, alt_text, prompt, index)
+                            fired after each image is generated successfully.
 
         Returns:
-            Updated content with placeholders replaced by ![alt](path).
+            Tuple of (updated_content, image_records) where image_records is
+            a list of dicts with keys: index, prompt, alt_text, path.
         """
         placeholders = self.extract_placeholders(content)
         if not placeholders:
             logger.info("No image placeholders found in draft")
-            return content
+            return content, []
 
         images_dir.mkdir(parents=True, exist_ok=True)
         total = len(placeholders)
-        self._progress(progress_callback, f"Generating {total} blog images...")
+        self._progress(progress_callback, f"正在生成 {total} 张配图...")
 
         semaphore = asyncio.Semaphore(self.max_workers)
         results: dict[int, Optional[str]] = {}
+        prompts_used: dict[int, str] = {}
 
         async def _gen_one(idx: int, placeholder: ImagePlaceholder):
             async with semaphore:
@@ -106,10 +111,18 @@ class BlogImageGenerator:
 
                 self._progress(
                     progress_callback,
-                    f"  [{idx + 1}/{total}] Generating: {placeholder.alt_text[:50]}...",
+                    f"  生成配图 [{idx + 1}/{total}]: {placeholder.alt_text[:50]}...",
                 )
 
-                enhanced_prompt = self._build_image_prompt(placeholder.description)
+                if refined_prompts and placeholder.full_match in refined_prompts:
+                    raw_prompt = refined_prompts[placeholder.full_match]
+                    enhanced_prompt = self._build_image_prompt(raw_prompt)
+                    logger.info(f"Using Image Director refined prompt for image {idx + 1}")
+                else:
+                    raw_prompt = placeholder.description
+                    enhanced_prompt = self._build_image_prompt(raw_prompt)
+
+                prompts_used[idx] = raw_prompt
                 logger.debug(f"Enhanced image prompt: {enhanced_prompt[:120]}...")
 
                 result = await asyncio.to_thread(
@@ -124,6 +137,11 @@ class BlogImageGenerator:
                         f"({result.get('size_kb', 0)} KB, {result.get('elapsed', 0):.1f}s)"
                     )
                     results[idx] = str(output_path)
+                    if on_image_ready:
+                        try:
+                            on_image_ready(output_path, placeholder.alt_text, raw_prompt, idx)
+                        except Exception as e:
+                            logger.warning(f"on_image_ready callback error: {e}")
                 else:
                     logger.error(
                         f"Image {idx + 1}/{total} failed: {result.get('error')}"
@@ -134,6 +152,7 @@ class BlogImageGenerator:
         await asyncio.gather(*tasks)
 
         updated_content = content
+        image_records: List[Dict] = []
         success_count = 0
         for idx, placeholder in enumerate(placeholders):
             image_path = results.get(idx)
@@ -146,6 +165,12 @@ class BlogImageGenerator:
                     placeholder.full_match, md_image, 1
                 )
                 success_count += 1
+                image_records.append({
+                    "index": idx,
+                    "prompt": prompts_used.get(idx, placeholder.description),
+                    "alt_text": placeholder.alt_text,
+                    "path": str(image_path),
+                })
             else:
                 md_fallback = f"<!-- Image generation failed: {placeholder.alt_text} -->"
                 updated_content = updated_content.replace(
@@ -154,9 +179,64 @@ class BlogImageGenerator:
 
         self._progress(
             progress_callback,
-            f"Image generation complete: {success_count}/{total} succeeded",
+            f"配图生成完成: {success_count}/{total} 张成功",
         )
-        return updated_content
+        return updated_content, image_records
+
+    def build_refined_prompts_from_plan(
+        self,
+        content: str,
+        content_plan: ContentPlan,
+    ) -> Dict[str, str]:
+        """Match [Image:] placeholders to ImagePlan descriptions.
+
+        The writer places images using the plan's descriptions, so we
+        fuzzy-match each placeholder back to the best-matching ImagePlan
+        to use its high-quality, pre-reviewed description as the prompt.
+
+        Returns:
+            Dict mapping placeholder full_match text -> refined description.
+        """
+        placeholders = self.extract_placeholders(content)
+        if not placeholders or not content_plan.image_plans:
+            return {}
+
+        refined: Dict[str, str] = {}
+        used_plan_indices: set[int] = set()
+
+        for ph in placeholders:
+            best_idx = -1
+            best_score = 0.0
+            ph_words = set(ph.description.lower().split())
+
+            for i, ip in enumerate(content_plan.image_plans):
+                if i in used_plan_indices:
+                    continue
+                plan_words = set(ip.description.lower().split())
+                if not ph_words or not plan_words:
+                    continue
+                overlap = len(ph_words & plan_words)
+                score = overlap / max(len(ph_words), len(plan_words))
+                if score > best_score:
+                    best_score = score
+                    best_idx = i
+
+            if best_idx >= 0 and best_score > 0.15:
+                used_plan_indices.add(best_idx)
+                refined[ph.full_match] = content_plan.image_plans[best_idx].description
+                logger.debug(
+                    f"Matched placeholder to plan image {best_idx + 1} "
+                    f"(score={best_score:.2f})"
+                )
+            else:
+                logger.debug(
+                    f"No plan match for placeholder: {ph.alt_text[:50]}..."
+                )
+
+        logger.info(
+            f"Refined {len(refined)}/{len(placeholders)} image prompts from plan"
+        )
+        return refined
 
     @staticmethod
     def _progress(callback: Optional[Callable], message: str):

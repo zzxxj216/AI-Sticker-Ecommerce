@@ -113,24 +113,22 @@ class Logger:
 def get_logger(
     name: str = "sticker",
     level: str = "INFO",
-    log_file: Optional[str] = None
+    log_file: Optional[str] = None,
+    enable_file: bool = False,
 ) -> logging.Logger:
     """获取日志记录器（便捷函数）
-    
+
     Args:
         name: 日志记录器名称
         level: 日志级别
-        log_file: 日志文件路径
-        
-    Returns:
-        logging.Logger: 日志记录器
+        log_file: 日志文件路径（传入则自动启用文件日志）
+        enable_file: 是否启用文件日志（默认关闭，避免不必要的磁盘 I/O）
     """
-    if log_file is None:
-        # 默认日志文件
+    if log_file is None and enable_file:
         log_dir = Path(DEFAULT_LOG_DIR)
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = str(log_dir / f"{name}.log")
-    
+
     return Logger.get_logger(name, level, log_file)
 
 

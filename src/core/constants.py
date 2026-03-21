@@ -56,7 +56,7 @@ DEFAULT_VARIANT_COUNT: Final[int] = 5
 DEFAULT_VARIATION_DEGREE: Final[VariationDegree] = VariationDegree.MEDIUM
 
 # API 配置
-DEFAULT_TIMEOUT: Final[int] = 60
+DEFAULT_TIMEOUT: Final[int] = 300
 DEFAULT_MAX_RETRIES: Final[int] = 3
 DEFAULT_RETRY_DELAY: Final[int] = 2
 
