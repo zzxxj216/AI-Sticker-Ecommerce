@@ -375,7 +375,6 @@ class AgentToolExecutor:
                     logger.warning(f"Failed to send image {index + 1} to Feishu: {e}")
 
         try:
-            progress("正在初始化生成管道...")
             gemini_text_model = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
             profile = BusinessProfile.from_yaml()
 
@@ -971,7 +970,7 @@ class AgentToolExecutor:
         from src.services.ai.gemini_service import GeminiService
 
         try:
-            self.send_progress(chat_id, f"正在按要求修改文章...\n修改指令: {instructions}")
+            self.send_progress(chat_id, "正在修改文章...")
 
             gemini_text_model = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
             llm = GeminiService(timeout=600, model=gemini_text_model)
@@ -1096,11 +1095,7 @@ class AgentToolExecutor:
         )
 
         try:
-            if new_instructions:
-                prompt_msg = f"正在重新生成第 {image_index} 张图片...\n修改指令: {new_instructions}"
-            else:
-                prompt_msg = f"正在重新生成第 {image_index} 张图片（使用原始描述）..."
-            self.send_progress(chat_id, prompt_msg)
+            self.send_progress(chat_id, f"正在重新生成第 {image_index} 张图片...")
 
             if new_instructions:
                 raw_prompt = f"{original_prompt}. Additional requirements: {new_instructions}"

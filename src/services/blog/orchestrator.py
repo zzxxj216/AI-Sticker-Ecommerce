@@ -273,7 +273,7 @@ class BlogOrchestrator:
         progress_callback: Optional[Callable[[str], None]],
     ) -> Optional[dict]:
         """Upload images and create the article on Shopify."""
-        self._progress(progress_callback, "Publishing to Shopify...")
+        logger.info("Publishing to Shopify...")
 
         article = self.shopify_converter.convert_draft(
             content_md=draft.content,

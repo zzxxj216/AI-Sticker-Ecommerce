@@ -471,6 +471,7 @@ class FeishuBot:
                 self._verification_token, self._encrypt_key
             )
             .register_p2_im_message_receive_v1(self._on_p2_message)
+            .register_p2_im_message_message_read_v1(lambda _: None)
             .build()
         )
         return handler

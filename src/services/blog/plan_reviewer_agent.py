@@ -51,7 +51,7 @@ class PlanReviewerAgent:
         Returns:
             PlanReviewResult with scores and feedback.
         """
-        self._progress(progress_callback, "Reviewing content plan...")
+        logger.info("Reviewing content plan...")
 
         user_prompt = blog_prompts.format_plan_reviewer_prompt(
             plan=plan,
@@ -63,12 +63,11 @@ class PlanReviewerAgent:
         data = await self._call_llm_json(user_prompt)
         result = self._parse_review(data, pass_threshold)
 
-        self._progress(
-            progress_callback,
+        logger.info(
             f"Plan review: {result.overall_score:.0f}/100 "
             f"(C={result.coherence_score} Cv={result.coverage_score} "
             f"S={result.specificity_score}) "
-            f"{'PASSED' if result.passed else 'NEEDS REVISION'}",
+            f"{'PASSED' if result.passed else 'NEEDS REVISION'}"
         )
         return result
 

@@ -52,7 +52,7 @@ class WriterAgent:
             BlogDraft with metadata and full markdown content.
         """
         if content_plan:
-            self._progress(progress_callback, "Generating blog draft from approved plan...")
+            logger.info("Generating blog draft from approved plan...")
             user_prompt = blog_prompts.format_writer_generate_with_plan_prompt(
                 topic=blog_input.topic,
                 seo_keywords=blog_input.seo_keywords,
@@ -61,7 +61,7 @@ class WriterAgent:
                 additional_instructions=blog_input.additional_instructions,
             )
         else:
-            self._progress(progress_callback, "Generating blog draft...")
+            logger.info("Generating blog draft...")
             user_prompt = blog_prompts.format_writer_generate_prompt(
                 topic=blog_input.topic,
                 seo_keywords=blog_input.seo_keywords,
@@ -72,7 +72,7 @@ class WriterAgent:
         raw_text = await self._call_llm(user_prompt)
         draft = self._parse_draft(raw_text, iteration=1)
 
-        self._progress(progress_callback, f"Draft #1 ready ({self._word_count(draft.content)} words)")
+        logger.info(f"Draft #1 ready ({self._word_count(draft.content)} words)")
         return draft
 
     async def revise(
@@ -94,10 +94,7 @@ class WriterAgent:
             Revised BlogDraft with incremented iteration number.
         """
         suggestion_count = sum(len(d.suggestions) for d in review.dimensions)
-        self._progress(
-            progress_callback,
-            f"Revising based on {suggestion_count} suggestions...",
-        )
+        logger.info(f"Revising based on {suggestion_count} suggestions...")
 
         user_prompt = blog_prompts.format_writer_revise_prompt(
             topic=blog_input.topic,
@@ -110,10 +107,7 @@ class WriterAgent:
         new_iteration = previous_draft.iteration + 1
         draft = self._parse_draft(raw_text, iteration=new_iteration)
 
-        self._progress(
-            progress_callback,
-            f"Draft #{new_iteration} ready ({self._word_count(draft.content)} words)",
-        )
+        logger.info(f"Draft #{new_iteration} ready ({self._word_count(draft.content)} words)")
         return draft
 
     async def _call_llm(self, user_prompt: str) -> str:

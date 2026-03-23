@@ -60,7 +60,7 @@ class ReviewerAgent:
         Returns:
             ReviewResult with dimension scores and overall assessment.
         """
-        self._progress(progress_callback, "Reviewing draft...")
+        logger.info("Reviewing draft...")
 
         user_prompt = blog_prompts.format_reviewer_prompt(
             topic=blog_input.topic,
@@ -71,10 +71,9 @@ class ReviewerAgent:
         review_data = await self._call_llm_json(user_prompt)
         result = self._parse_review(review_data, pass_threshold)
 
-        self._progress(
-            progress_callback,
+        logger.info(
             f"Review complete: {result.overall_score:.0f}/100 "
-            f"({'PASSED' if result.passed else 'NEEDS REVISION'})",
+            f"({'PASSED' if result.passed else 'NEEDS REVISION'})"
         )
         return result
 

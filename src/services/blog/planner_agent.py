@@ -39,7 +39,7 @@ class PlannerAgent:
         Returns:
             ContentPlan with outline structure and image plans.
         """
-        self._progress(progress_callback, "Planning article structure and images...")
+        logger.info("Planning article structure and images...")
 
         user_prompt = blog_prompts.format_planner_generate_prompt(
             topic=blog_input.topic,
@@ -53,10 +53,7 @@ class PlannerAgent:
 
         n_sections = len(content_plan.outline)
         n_images = len(content_plan.image_plans)
-        self._progress(
-            progress_callback,
-            f"Plan #1 ready ({n_sections} sections, {n_images} images)",
-        )
+        logger.info(f"Plan #1 ready ({n_sections} sections, {n_images} images)")
         return content_plan
 
     async def revise(
@@ -71,10 +68,7 @@ class PlannerAgent:
         Returns:
             Revised ContentPlan with incremented iteration.
         """
-        self._progress(
-            progress_callback,
-            f"Revising plan (was {review.overall_score:.0f}/100)...",
-        )
+        logger.info(f"Revising plan (was {review.overall_score:.0f}/100)...")
 
         user_prompt = blog_prompts.format_planner_revise_prompt(
             plan=plan,
@@ -88,10 +82,7 @@ class PlannerAgent:
         content_plan = self._parse_plan(data, iteration=new_iteration)
 
         n_images = len(content_plan.image_plans)
-        self._progress(
-            progress_callback,
-            f"Plan #{new_iteration} ready ({n_images} images)",
-        )
+        logger.info(f"Plan #{new_iteration} ready ({n_images} images)")
         return content_plan
 
     async def _call_llm_json(self, user_prompt: str) -> dict:
@@ -119,7 +110,12 @@ class PlannerAgent:
             ))
 
         target_word_count = int(data.get("target_word_count", 2200))
-        seo_strategy = data.get("seo_strategy", "")
+        raw_seo = data.get("seo_strategy", "")
+        if isinstance(raw_seo, dict):
+            import json
+            seo_strategy = json.dumps(raw_seo, ensure_ascii=False)
+        else:
+            seo_strategy = str(raw_seo)
 
         return ContentPlan(
             outline=outline,

@@ -138,11 +138,7 @@ class FeishuBlogBot:
         builder = lark.EventDispatcherHandler.builder("", "")
         builder.register_p2_im_message_receive_v1(self._on_p2_message)
 
-        # Silently consume message-read events to avoid SDK "processor not found" errors
-        try:
-            builder.register_p2_im_message_read_v1(lambda _: None)
-        except (AttributeError, TypeError):
-            pass
+        builder.register_p2_im_message_message_read_v1(lambda _: None)
 
         handler = builder.build()
         return handler
