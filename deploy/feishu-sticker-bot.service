@@ -2,6 +2,8 @@
 Description=Feishu Sticker Pack Bot (WebSocket)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -9,8 +11,6 @@ WorkingDirectory=/root/AI-Sticker-Ecommerce
 ExecStart=/root/miniconda3/envs/sticker/bin/python feishu_chat_app.py
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 EnvironmentFile=/root/AI-Sticker-Ecommerce/.env
 
