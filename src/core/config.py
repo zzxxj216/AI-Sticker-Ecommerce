@@ -116,6 +116,17 @@ class Config:
         self._config['feishu']['app_secret'] = os.getenv('FEISHU_APP_SECRET', '')
         self._config['feishu']['verification_token'] = os.getenv('FEISHU_VERIFICATION_TOKEN', '')
         self._config['feishu']['encrypt_key'] = os.getenv('FEISHU_ENCRYPT_KEY', '')
+        self._config['feishu']['trend_chat_id'] = os.getenv('FEISHU_TREND_CHAT_ID', '')
+        self._config['feishu']['bitable_app_token'] = os.getenv('FEISHU_BITABLE_APP_TOKEN', '')
+        self._config['feishu']['bitable_url'] = os.getenv('FEISHU_BITABLE_URL', '')
+        self._config['feishu']['webhook_url'] = os.getenv('FEISHU_WEBHOOK_URL', '')
+        self._config['feishu']['table_news'] = os.getenv('FEISHU_TABLE_NEWS', '')
+        self._config['feishu']['table_tk'] = os.getenv('FEISHU_TABLE_TK', '')
+        self._config['feishu']['table_history'] = os.getenv('FEISHU_TABLE_HISTORY', '')
+        self._config['feishu']['h5_app_id'] = os.getenv('FEISHU_H5_APP_ID', '')
+        self._config['feishu']['h5_app_secret'] = os.getenv('FEISHU_H5_APP_SECRET', '')
+        self._config['feishu']['h5_base_url'] = os.getenv('FEISHU_H5_BASE_URL', '')
+        self._config['feishu']['h5_redirect_uri'] = os.getenv('FEISHU_H5_REDIRECT_URI', '')
     
     def _merge_config(self, base: dict, override: dict):
         """合并配置字典"""
@@ -284,7 +295,35 @@ class Config:
     @property
     def feishu_encrypt_key(self) -> str:
         return self.get('feishu.encrypt_key', '')
-    
+
+    @property
+    def feishu_trend_chat_id(self) -> str:
+        return self.get('feishu.trend_chat_id', '')
+
+    @property
+    def feishu_bitable_app_token(self) -> str:
+        return self.get('feishu.bitable_app_token', '')
+
+    @property
+    def feishu_bitable_url(self) -> str:
+        return self.get('feishu.bitable_url', '')
+
+    @property
+    def feishu_h5_app_id(self) -> str:
+        return self.get('feishu.h5_app_id', '')
+
+    @property
+    def feishu_h5_app_secret(self) -> str:
+        return self.get('feishu.h5_app_secret', '')
+
+    @property
+    def feishu_h5_base_url(self) -> str:
+        return self.get('feishu.h5_base_url', '')
+
+    @property
+    def feishu_h5_redirect_uri(self) -> str:
+        return self.get('feishu.h5_redirect_uri', '')
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return self._config.copy()

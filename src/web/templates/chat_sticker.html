@@ -1,0 +1,374 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Sticker Pack Agent</p>
+    <h1>对话生成卡贴</h1>
+    <p class="page-subtitle">AI 智能体帮你设计和生成自定义卡贴包，对话即可完成全流程。</p>
+  </div>
+  <div class="header-actions" style="display:flex;gap:8px;">
+    <button id="btn-reset" class="btn-secondary" style="padding:8px 14px;font-size:12px;cursor:pointer;" title="重置对话">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+      重置
+    </button>
+  </div>
+</section>
+
+<!-- Progress Panel -->
+<section class="panel" id="progress-panel" style="display:none;margin-bottom:16px;">
+  <div class="panel-header"><h2>生成进度</h2></div>
+  <div style="padding:16px 24px;">
+    <div id="progress-bar-wrap" style="background:var(--surface-hover);border-radius:8px;height:8px;overflow:hidden;margin-bottom:12px;">
+      <div id="progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#7c5cfc,#06b6d4);border-radius:8px;transition:width 0.5s ease;"></div>
+    </div>
+    <div id="progress-steps" style="font-size:13px;color:var(--text-muted);"></div>
+  </div>
+</section>
+
+<!-- Result Images -->
+<section class="panel" id="result-panel" style="display:none;margin-bottom:16px;">
+  <div class="panel-header"><h2>生成结果</h2></div>
+  <div id="result-images" style="padding:16px 24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;"></div>
+  <div id="result-summary" style="padding:0 24px 16px;font-size:13px;color:var(--text-muted);"></div>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><h2>对话窗口</h2></div>
+  <div id="chat-area" style="display:flex;flex-direction:column;height:480px;">
+    <div id="messages" style="flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px;">
+      <div class="bot-msg">
+        <div class="bot-avatar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        </div>
+        <div class="bot-bubble">
+          你好！我是 <strong>卡贴设计 Agent</strong>，可以帮你完成贴纸包的全流程：<br><br>
+          <strong>我能做的：</strong><br>
+          · 设计讨论 — 帮你完善主题、风格、色彩方案<br>
+          · 自动生成 — 确认方案后直接生成卡贴包<br>
+          · 查看任务 — 查看生成进度和历史任务<br>
+          · 浏览画廊 — 查看已有卡贴作品<br><br>
+          <strong>试试这样说：</strong><br>
+          · "帮我设计一套可爱猫咪表情包卡贴"<br>
+          · "生成一组赛博朋克风格的太空贴纸"<br>
+          · "查看我之前的生成任务"
+        </div>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--line-soft);padding:16px 24px;display:flex;gap:10px;align-items:flex-end;">
+      <textarea id="chat-input" rows="1" placeholder="描述你想要的卡贴包，或输入指令..."
+        style="flex:1;resize:none;border:1px solid var(--line-soft);border-radius:var(--radius-md);padding:12px 16px;font-size:14px;font-family:inherit;line-height:1.5;background:var(--surface);color:var(--text);outline:none;transition:border-color .2s;max-height:120px;"
+        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"
+        onfocus="this.style.borderColor='var(--primary,#7c5cfc)'"
+        onblur="this.style.borderColor='var(--line-soft)'"
+      ></textarea>
+      <button id="btn-send" class="btn-primary" style="padding:12px 20px;font-size:14px;font-weight:600;border-radius:var(--radius-md);cursor:pointer;white-space:nowrap;height:fit-content;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        发送
+      </button>
+    </div>
+  </div>
+</section>
+
+<div id="lightbox" onclick="closeLightbox()" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;cursor:zoom-out;justify-content:center;align-items:center;">
+  <img id="lightbox-img" src="" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">
+</div>
+
+<style>
+.bot-msg { display:flex;gap:12px;max-width:85%; }
+.bot-avatar { width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#7c5cfc,#06b6d4);display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+.bot-bubble { background:var(--surface-hover);border-radius:12px 12px 12px 4px;padding:14px 18px;font-size:14px;line-height:1.6;color:var(--text); }
+.user-msg { display:flex;gap:12px;max-width:85%;align-self:flex-end;flex-direction:row-reverse; }
+.user-avatar { width:32px;height:32px;border-radius:50%;background:var(--primary,#7c5cfc);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:13px;font-weight:700; }
+.user-bubble { background:var(--primary,#7c5cfc);color:#fff;border-radius:12px 12px 4px 12px;padding:14px 18px;font-size:14px;line-height:1.6; }
+.tool-msg { display:flex;gap:12px;max-width:85%; }
+.tool-bubble { background:linear-gradient(135deg,#e0e7ff,#dbeafe);border-radius:12px;padding:14px 18px;font-size:13px;line-height:1.5;color:#1e3a5f;border:1px solid #bfdbfe; }
+.tool-bubble .tool-name { font-weight:700;color:#3b82f6;margin-bottom:6px;display:flex;align-items:center;gap:6px; }
+.tool-bubble pre { margin:6px 0 0;padding:10px;background:rgba(0,0,0,.04);border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap; }
+.typing-indicator { display:flex;gap:4px;padding:8px 12px; }
+.typing-indicator span { width:6px;height:6px;border-radius:50%;background:var(--text-muted);animation:typing 1.2s infinite; }
+.typing-indicator span:nth-child(2) { animation-delay:0.2s; }
+.typing-indicator span:nth-child(3) { animation-delay:0.4s; }
+@keyframes typing { 0%,100%{opacity:0.3;transform:translateY(0)} 50%{opacity:1;transform:translateY(-4px)} }
+.result-thumb { position:relative;border-radius:var(--radius-md);overflow:hidden;background:var(--surface-hover);aspect-ratio:1;cursor:pointer; }
+.result-thumb img { width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.2s; }
+.result-thumb:hover img { transform:scale(1.05); }
+</style>
+
+<script>
+(function(){
+  const urlParams = new URLSearchParams(window.location.search);
+  const RESTORE_SESSION = urlParams.get('session');
+  const SESSION_ID = RESTORE_SESSION || ('stk_' + Math.random().toString(36).slice(2, 10));
+  const API = '/api/tools/chat-sticker';
+  const messages = document.getElementById('messages');
+  const input = document.getElementById('chat-input');
+  const btnSend = document.getElementById('btn-send');
+  const btnReset = document.getElementById('btn-reset');
+  let isSending = false;
+
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  function addUserMsg(text) {
+    const div = document.createElement('div');
+    div.className = 'user-msg';
+    div.innerHTML = `<div class="user-avatar">我</div><div class="user-bubble">${esc(text)}</div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function addBotMsg(html) {
+    const div = document.createElement('div');
+    div.className = 'bot-msg';
+    div.innerHTML = `
+      <div class="bot-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+      <div class="bot-bubble">${html}</div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+    return div;
+  }
+
+  function addToolMsg(toolName, result) {
+    const div = document.createElement('div');
+    div.className = 'tool-msg';
+    const icon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+    const resultHtml = typeof result === 'string' ? esc(result) : esc(JSON.stringify(result, null, 2));
+    div.innerHTML = `
+      <div class="bot-avatar" style="background:linear-gradient(135deg,#3b82f6,#2563eb);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+      </div>
+      <div class="tool-bubble">
+        <div class="tool-name">${icon} Tool: ${esc(toolName)}</div>
+        <pre>${resultHtml}</pre>
+      </div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function addTyping() {
+    const div = addBotMsg('<div class="typing-indicator"><span></span><span></span><span></span></div>');
+    div.id = 'typing-msg';
+    return div;
+  }
+
+  function removeTyping() {
+    const el = document.getElementById('typing-msg');
+    if (el) el.remove();
+  }
+
+  function formatMarkdown(text) {
+    if (!text) return '';
+    return text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+  }
+
+  async function sendMessage() {
+    const text = input.value.trim();
+    if (!text || isSending) return;
+    isSending = true;
+    btnSend.disabled = true;
+
+    addUserMsg(text);
+    input.value = '';
+    input.style.height = 'auto';
+    addTyping();
+
+    try {
+      const resp = await fetch(API + '/send', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: SESSION_ID, message: text }),
+      });
+      removeTyping();
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        addBotMsg('<span style="color:#ef4444;">请求失败：' + esc(err.detail || '未知错误') + '</span>');
+        return;
+      }
+      const data = await resp.json();
+
+      if (data.tool_results && data.tool_results.length > 0) {
+        for (const tr of data.tool_results) {
+          addToolMsg(tr.tool, tr.result);
+        }
+      }
+
+      if (data.reply) {
+        addBotMsg(formatMarkdown(data.reply));
+      }
+
+      if (data.task_id) {
+        addBotMsg('⏳ 卡贴包生成已启动，正在跟踪进度...');
+        document.getElementById('progress-panel').style.display = '';
+        document.getElementById('result-panel').style.display = 'none';
+        document.getElementById('progress-steps').innerHTML = '';
+        document.getElementById('progress-bar').style.width = '0%';
+        document.getElementById('progress-bar').style.background = '';
+        listenSSE(data.task_id);
+      }
+    } catch(e) {
+      removeTyping();
+      addBotMsg('<span style="color:#ef4444;">网络错误：' + esc(e.message) + '</span>');
+    } finally {
+      isSending = false;
+      btnSend.disabled = false;
+      input.focus();
+    }
+  }
+
+  function listenSSE(taskId) {
+    const steps = document.getElementById('progress-steps');
+    const bar = document.getElementById('progress-bar');
+    const progressMap = {
+      pipeline_start: 5, planner_start: 10, planner_done: 25,
+      designer_start: 30, designer_done: 50,
+      prompter_start: 55, prompter_done: 70,
+      images_start: 75, images_done: 95,
+      pipeline_done: 100, complete: 100,
+    };
+    const labelMap = {
+      pipeline_start: '🚀 管线启动...',
+      planner_start: '📋 规划师正在分析主题...',
+      planner_done: '✅ 规划完成',
+      designer_start: '🎨 设计师正在制定规格...',
+      designer_done: '✅ 设计规格完成',
+      prompter_start: '✏️ 生成图像提示词...',
+      prompter_done: '✅ 提示词生成完成',
+      images_start: '🖼️ 正在生成卡贴图片...',
+      images_done: '✅ 图片生成完成',
+      pipeline_done: '🎉 全部完成！',
+    };
+
+    const evtSource = new EventSource(API + '/stream/' + taskId);
+    evtSource.onmessage = function(e) {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+
+      if (msg.type === 'heartbeat') return;
+
+      if (msg.type === 'done') {
+        evtSource.close();
+        return;
+      }
+
+      if (msg.type === 'error') {
+        evtSource.close();
+        steps.innerHTML += `<div style="color:#ef4444;">❌ 生成失败：${esc(msg.data.error)}</div>`;
+        bar.style.width = '100%';
+        bar.style.background = '#ef4444';
+        addBotMsg('<span style="color:#ef4444;">卡贴生成失败：' + esc(msg.data.error) + '</span>');
+        return;
+      }
+
+      if (msg.type === 'complete') {
+        bar.style.width = '100%';
+        steps.innerHTML += `<div style="color:#16a34a;font-weight:600;">🎉 生成完成！共 ${msg.data.image_count} 张卡贴，耗时 ${Math.round(msg.data.duration || 0)}s</div>`;
+        showResults(msg.data);
+        addBotMsg(
+          `卡贴包生成完成！共 <strong>${msg.data.image_count}</strong> 张卡贴。` +
+          `<br><br><a href="/stickers" style="color:var(--accent);font-weight:600;">前往卡贴画廊</a> · ` +
+          `<a href="/packs" style="color:var(--accent);font-weight:600;">前往卡包管理</a>`
+        );
+        return;
+      }
+
+      const pct = progressMap[msg.type];
+      if (pct) bar.style.width = pct + '%';
+      const label = labelMap[msg.type];
+      if (label) steps.innerHTML += `<div>${label}</div>`;
+    };
+
+    evtSource.onerror = function() {
+      evtSource.close();
+    };
+  }
+
+  function showResults(data) {
+    const panel = document.getElementById('result-panel');
+    const grid = document.getElementById('result-images');
+    const summary = document.getElementById('result-summary');
+    panel.style.display = '';
+    grid.innerHTML = '';
+
+    (data.image_urls || []).forEach(url => {
+      grid.innerHTML += `
+        <div class="result-thumb" onclick="openLightbox('${url}')">
+          <img src="${url}" loading="lazy" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;\\'>加载失败</div>'">
+        </div>`;
+    });
+    summary.innerHTML = `共 ${data.image_count} 张卡贴${data.duration ? '，耗时 ' + Math.round(data.duration) + ' 秒' : ''} &nbsp;·&nbsp; <a href="/stickers" style="color:var(--accent);font-weight:600;">前往卡贴画廊</a> &nbsp;·&nbsp; <a href="/packs" style="color:var(--accent);font-weight:600;">前往卡包管理</a>`;
+  }
+
+  async function resetChat() {
+    if (!confirm('确认清空对话历史？')) return;
+    await fetch(API + '/reset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ session_id: SESSION_ID }),
+    });
+    messages.innerHTML = '';
+    document.getElementById('progress-panel').style.display = 'none';
+    document.getElementById('result-panel').style.display = 'none';
+    document.getElementById('progress-steps').innerHTML = '';
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('progress-bar').style.background = '';
+    addBotMsg('对话已重置。告诉我你想要什么样的卡贴包吧！');
+  }
+
+  async function restoreHistory() {
+    if (!RESTORE_SESSION) return;
+    messages.innerHTML = '';
+    addBotMsg('<em>正在还原对话历史...</em>');
+    try {
+      const resp = await fetch(API + '/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: RESTORE_SESSION }),
+      });
+      if (!resp.ok) throw new Error('还原失败');
+      const data = await resp.json();
+      messages.innerHTML = '';
+
+      if (!data.messages || data.messages.length === 0) {
+        addBotMsg('未找到该会话的历史消息，开始新对话吧！');
+        return;
+      }
+      for (const msg of data.messages) {
+        if (msg.role === 'user') {
+          addUserMsg(msg.content);
+        } else if (msg.role === 'tool') {
+          addToolMsg(msg.tool_name || 'tool', msg.content);
+        } else if (msg.role === 'assistant') {
+          addBotMsg(formatMarkdown(msg.content));
+        }
+      }
+      addBotMsg('<em style="color:var(--text-muted);">— 对话已还原，可以继续对话 —</em>');
+      messages.scrollTop = messages.scrollHeight;
+    } catch (e) {
+      messages.innerHTML = '';
+      addBotMsg('<span style="color:#ef4444;">还原失败：' + esc(e.message) + '</span>');
+    }
+  }
+
+  btnSend.addEventListener('click', sendMessage);
+  btnReset.addEventListener('click', resetChat);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  if (RESTORE_SESSION) restoreHistory();
+
+  window.openLightbox = function(src) {
+    document.getElementById('lightbox-img').src = src;
+    document.getElementById('lightbox').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  };
+  window.closeLightbox = function() {
+    document.getElementById('lightbox').style.display = 'none';
+    document.body.style.overflow = '';
+  };
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
+})();
+</script>
+{% endblock %}

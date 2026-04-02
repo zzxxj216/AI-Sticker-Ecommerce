@@ -7,37 +7,45 @@ AI Sticker Trend Fetcher - 主程序入口
     python main.py --schedule             # 启动定时调度（每日7点执行）
     python main.py --no-ai                # 跳过 Claude 分析和图片生成
     python main.py --no-image             # 只分析选题，不生成图片
+    python main.py --sticker-pipeline     # 热点抓取 + 贴纸机会管线（推荐）
+    python main.py --sticker-only         # 仅跑贴纸机会管线（使用 latest.json）
 """
 import argparse
 import json
 import sys
-import time
+import os
 import io
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+
+_tf_dir = os.path.dirname(os.path.abspath(__file__))
+if _tf_dir not in sys.path:
+    sys.path.insert(0, _tf_dir)
 
 # 修复 Windows 终端 UTF-8 输出
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-from config import config
-from fetchers import GoogleTrendsFetcher, RedditFetcher, RssFetcher, NewsApiFetcher
-from aggregator import TrendAggregator
-from analyzer import StickerIdeaAnalyzer
-from image_generator import StickerImageGenerator
+try:
+    from config import config
+    from fetchers import GoogleTrendsFetcher, RedditFetcher, RssFetcher, NewsApiFetcher
+    from aggregator import TrendAggregator
+    from analyzer import StickerIdeaAnalyzer
+    from image_generator import StickerImageGenerator
+except ImportError:
+    # 尝试作为模块运行时的绝对路径导入
+    from trend_fetcher.config import config
+    from trend_fetcher.fetchers import GoogleTrendsFetcher, RedditFetcher, RssFetcher, NewsApiFetcher
+    from trend_fetcher.aggregator import TrendAggregator
+    from trend_fetcher.analyzer import StickerIdeaAnalyzer
+    from trend_fetcher.image_generator import StickerImageGenerator
 
 
-def run_fetch(use_ai: bool = True, use_image: bool = True) -> dict:
-    """执行完整的热点获取 + 聚合 + 分析流程"""
-    start_time = time.time()
-
-    print("=" * 60)
-    print(f"  AI Sticker 热点雷达  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
-
-    # ---- Step 1: 并发抓取所有数据源 ----
+def fetch_raw_data() -> dict[str, list]:
+    """Step 1: 并发抓取所有数据源，返回 {source_name: [items]}"""
     print("\n[Step 1] 并发抓取热点数据...")
 
     fetchers = {
@@ -48,7 +56,6 @@ def run_fetch(use_ai: bool = True, use_image: bool = True) -> dict:
     }
 
     raw_data = {}
-    # 并发执行所有 fetcher（最多3个线程，避免被封）
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_map = {
             executor.submit(fetcher.fetch): name
@@ -66,6 +73,19 @@ def run_fetch(use_ai: bool = True, use_image: bool = True) -> dict:
     print(f"\n[Step 1 完成] 共获取 {total_raw} 条原始数据")
     for name, items in raw_data.items():
         print(f"  - {name}: {len(items)} 条")
+    return raw_data
+
+
+def run_fetch(use_ai: bool = True, use_image: bool = True) -> dict:
+    """执行完整的热点获取 + 聚合 + 分析流程（原有模式）"""
+    start_time = time.time()
+
+    print("=" * 60)
+    print(f"  AI Sticker 热点雷达  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+
+    # ---- Step 1: 并发抓取 ----
+    raw_data = fetch_raw_data()
 
     # ---- Step 2: 聚合 ----
     print("\n[Step 2] 聚合去重分析...")
@@ -111,6 +131,47 @@ def run_fetch(use_ai: bool = True, use_image: bool = True) -> dict:
     print_summary(result, output_path)
 
     return result
+
+
+def run_sticker_pipeline(fetch_first: bool = True) -> dict:
+    """
+    贴纸机会管线模式：
+      fetch_first=True  → 先抓取+聚合, 再跑 sticker pipeline
+      fetch_first=False → 直接读 latest.json 跑 sticker pipeline
+    """
+    from sticker_pipeline import StickerOpportunityPipeline
+
+    if fetch_first:
+        print("=" * 60)
+        print(f"  AI Sticker 热点雷达 + 贴纸管线  |  "
+              f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+
+        raw_data = fetch_raw_data()
+
+        print("\n[Step 2] 聚合去重分析...")
+        aggregator = TrendAggregator()
+        result = aggregator.aggregate(raw_data)
+
+        elapsed = time.time()
+        result["elapsed_seconds"] = 0
+        save_results(result)
+        print_summary(result, config.OUTPUT_DIR / "latest.json")
+
+        all_raw_items = []
+        for items in raw_data.values():
+            all_raw_items.extend(items)
+
+        pipeline = StickerOpportunityPipeline()
+        return pipeline.run(all_raw_items)
+    else:
+        print("=" * 60)
+        print(f"  Sticker Opportunity Pipeline (from latest.json)  |  "
+              f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+
+        pipeline = StickerOpportunityPipeline()
+        return pipeline.run_from_latest()
 
 
 def save_results(result: dict) -> Path:
@@ -236,10 +297,22 @@ def main():
         "--no-image", action="store_true",
         help="只做 Claude 选题分析，不调用 Nano Banana 生成图片"
     )
+    parser.add_argument(
+        "--sticker-pipeline", action="store_true",
+        help="热点抓取 + 贴纸机会管线（抓取→聚合→主题抽象→评分→brief）"
+    )
+    parser.add_argument(
+        "--sticker-only", action="store_true",
+        help="仅跑贴纸机会管线（读取已有的 latest.json）"
+    )
     args = parser.parse_args()
 
     if args.schedule:
         run_scheduler()
+    elif args.sticker_pipeline:
+        run_sticker_pipeline(fetch_first=True)
+    elif args.sticker_only:
+        run_sticker_pipeline(fetch_first=False)
     else:
         run_fetch(
             use_ai=not args.no_ai,

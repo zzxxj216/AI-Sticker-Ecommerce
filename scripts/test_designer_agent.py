@@ -1,58 +1,60 @@
-"""Phase 2 测试: DesignerAgent
+"""Phase 2 Test: DesignerAgent
 
-测试流程：
-  1. 读取 Planner 输出（txt 文件）
-  2. 调用 DesignerAgent
-  3. 直接打印模型返回内容
-
-用法:
+Usage:
   python -m scripts.test_designer_agent
   python -m scripts.test_designer_agent --planner-output path/to/planner_output.txt
+  python -m scripts.test_designer_agent --brief-json path/to/brief.json --theme "Theme Name"
 """
 
-import sys
 import argparse
+import json
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.script_utils import (
+    print_header, print_result, save_output, load_input_file,
+)
 
 from src.services.ai.openai_service import OpenAIService
 from src.services.batch.sticker_prompts import DESIGNER_SYSTEM, build_designer_prompt
-
-DEFAULT_PLANNER_OUTPUT = "output/test/planner_test_output.txt"
 
 
 def main():
     parser = argparse.ArgumentParser(description="Test DesignerAgent")
     parser.add_argument(
         "--planner-output",
-        default=DEFAULT_PLANNER_OUTPUT,
+        default="output/test/planner_test_output.txt",
         help="Path to planner output txt file",
     )
+    parser.add_argument("--brief-json", default=None, help="Optional JSON trend brief")
+    parser.add_argument("--theme", default=None, help="Theme name (fallback when no brief)")
     args = parser.parse_args()
 
-    planner_path = Path(args.planner_output)
-    if not planner_path.exists():
-        print(f"Error: Planner output file not found: {planner_path}")
-        print("Please run test_planner_agent.py first.")
-        sys.exit(1)
+    planner_text = load_input_file(args.planner_output, "Planner output")
 
-    planner_text = planner_path.read_text(encoding="utf-8").strip()
-    if not planner_text:
-        print(f"Error: Planner output file is empty: {planner_path}")
-        sys.exit(1)
+    trend_brief = None
+    if args.brief_json:
+        brief_path = Path(args.brief_json)
+        if not brief_path.exists():
+            print(f"Error: Brief file not found: {brief_path}")
+            return
+        raw = json.loads(brief_path.read_text(encoding="utf-8"))
+        trend_brief = raw.get("brief", raw) if isinstance(raw, dict) else raw
 
-    print("=" * 60)
-    print("DesignerAgent Test")
-    print("=" * 60)
-    print(f"Planner output: {planner_path} ({len(planner_text)} chars)")
-    print()
+    print_header(
+        "DesignerAgent Test",
+        **{"Planner output": f"{args.planner_output} ({len(planner_text)} chars)"},
+        **{"Trend brief": args.brief_json} if trend_brief else {},
+        Theme=args.theme,
+    )
 
     openai_svc = OpenAIService()
-    print(f"Model: {openai_svc.model}")
-    print()
+    print(f"Model: {openai_svc.model}\n")
 
-    user_prompt = build_designer_prompt(planner_text)
+    user_prompt = build_designer_prompt(
+        planner_text,
+        trend_brief=trend_brief,
+        theme=args.theme,
+    )
 
     print("Calling OpenAI API...")
     result = openai_svc.generate(
@@ -62,20 +64,8 @@ def main():
     )
 
     text = result["text"]
-    print()
-    print("=" * 60)
-    print(f"MODEL OUTPUT  (tokens: {result['usage']['output_tokens']})")
-    print("=" * 60)
-    print(text if text else "(empty)")
-    print()
-
-    output_dir = Path("output/test")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / "designer_test_output.txt"
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(text)
-    print(f"Output saved to: {out_path}")
-    print()
+    print_result(text, result["usage"])
+    save_output(text, "designer_test_output.txt")
     print("=== DesignerAgent Test COMPLETE ===")
 
 

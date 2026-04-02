@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from src.core.constants import StickerType
 
@@ -16,15 +16,12 @@ class StickerMetadata(BaseModel):
     category: Optional[str] = None
     source: Optional[str] = None  # "pack_generator" or "style_analyzer"
     parent_id: Optional[str] = None  # 如果是变种，记录父贴纸 ID
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 
 class Sticker(BaseModel):
     """贴纸数据模型"""
+    
+    model_config = ConfigDict(use_enum_values=True)
     
     id: str = Field(..., description="贴纸唯一标识")
     type: StickerType = Field(..., description="贴纸类型")
@@ -43,7 +40,8 @@ class Sticker(BaseModel):
     # 质量评分（可选）
     quality_score: Optional[float] = Field(None, ge=0, le=1, description="质量评分 0-1")
     
-    @validator('type', pre=True)
+    @field_validator('type', mode='before')
+    @classmethod
     def validate_type(cls, v):
         """验证贴纸类型"""
         if isinstance(v, str):
@@ -65,10 +63,7 @@ class Sticker(BaseModel):
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return self.dict()
-    
-    class Config:
-        use_enum_values = True
+        return self.model_dump()
 
 
 class StickerPack(BaseModel):
@@ -146,7 +141,7 @@ class StickerPack(BaseModel):
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return self.dict()
+        return self.model_dump()
     
     def to_summary(self) -> Dict[str, Any]:
         """转换为摘要"""
@@ -162,9 +157,4 @@ class StickerPack(BaseModel):
             "duration_seconds": self.duration_seconds,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-        }
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
         }

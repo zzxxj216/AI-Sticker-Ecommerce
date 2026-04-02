@@ -1,12 +1,7 @@
 """Quick debug: print what Config actually loads."""
 import sys, os
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env", override=True)
+from scripts.script_utils import PROJECT_ROOT
 
 print("=== Raw os.getenv ===")
 print(f"  ANTHROPIC_API_KEY = {os.getenv('ANTHROPIC_API_KEY', '(not set)')[:15]}...")

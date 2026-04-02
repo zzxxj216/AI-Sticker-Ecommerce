@@ -1,8 +1,6 @@
-"""AI 服务模块
+"""AI service module — unified interface to LLM providers."""
 
-提供 AI 相关服务的统一接口
-"""
-
+from src.services.ai.base import BaseLLMService, try_parse_json
 from src.services.ai.claude_service import ClaudeService
 from src.services.ai.gemini_service import GeminiService
 from src.services.ai.chat_service import ChatService

@@ -1,4 +1,4 @@
-"""简单的 Gemini 图片生成测试脚本
+"""Simple Gemini image generation test script.
 
 Usage:
     python scripts/test_gemini_image.py
@@ -10,25 +10,21 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from dotenv import load_dotenv
-load_dotenv(".env", override=True)
-
+from scripts.script_utils import ensure_output_dir
 from src.services.ai.gemini_service import GeminiService
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gemini 图片生成测试")
+    parser = argparse.ArgumentParser(description="Gemini image generation test")
     parser.add_argument(
         "--prompt", "-p",
         default="A cute cartoon cat sticker with big eyes, flat vector style, white background, no text",
-        help="图片生成提示词",
+        help="Image generation prompt",
     )
     parser.add_argument(
         "--output", "-o",
         default=None,
-        help="输出文件路径（默认保存到 data/output/images/test/）",
+        help="Output file path (defaults to output/test/)",
     )
     args = parser.parse_args()
 
@@ -37,13 +33,10 @@ def main():
 
     gemini = GeminiService()
 
-    output_path = None
     if args.output:
         output_path = Path(args.output)
     else:
-        output_dir = Path("data/output/images/test")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / "test_image.png"
+        output_path = ensure_output_dir("test") / "test_image.png"
 
     result = gemini.generate_image(
         prompt=args.prompt,

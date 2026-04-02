@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Aggregated Topics</p>
+    <h1>聚合话题模型</h1>
+    <p class="page-subtitle">AI 将数以千计的散乱杂声提取、融合后形成的标准化「聚合卡片」，是贴纸点子的初步形态。</p>
+  </div>
+  <div class="header-actions">
+    <form action="/aggregated-topics" method="get" style="display: flex; gap: 8px;">
+      <input type="text" name="q" placeholder="在主题模型中检索..." value="{{ search_query }}" style="padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--text); outline: none; width: 300px; transition: border-color var(--duration);">
+      <button type="submit" class="btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="icon" stroke="currentColor" stroke-width="2" style="margin-right:6px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        检索
+      </button>
+      {% if search_query %}
+      <a href="/aggregated-topics" class="btn-secondary">清空</a>
+      {% endif %}
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>提纯主题池</h2>
+    <span class="muted">
+      共 <strong style="color:var(--text)">{{ total }}</strong> 组 &nbsp;&middot;&nbsp;
+      当前显示第 {{ (page - 1) * per_page + 1 }} - {{ page * per_page if page * per_page < total else total }} 条
+    </span>
+  </div>
+  <div class="table-wrap" style="overflow-x: auto;">
+    {% if items %}
+    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 900px;">
+      <thead>
+        <tr>
+          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">聚合日期</th>
+          <th style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">提炼主词表</th>
+          <th style="width: 38%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">合成摘要 / 主线论点</th>
+          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">打分</th>
+          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">AI 推荐结论</th>
+          <th style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">流转状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr style="transition: background var(--duration); cursor: default;">
+          <td class="muted" style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-size:12px;">{{ item.created_at_display }}</td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            <a href="/trends/{{ item.id }}" class="primary-link"><strong style="font-size: 14px;">{{ item.trend_name or item.title }}</strong></a>
+            <div style="margin-top:4px;">
+              <span class="badge" style="background:var(--surface-hover); color:var(--text); font-family: monospace;">{{ 'News分析' if item.source_type != 'tiktok' else 'TikTok特征' }}</span>
+            </div>
+          </td>
+          <td style="font-size: 13px; color: var(--text-muted); padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            <div style="max-height: 2.8em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4;">
+              {{ item.summary or '-' }}
+            </div>
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+              <strong style="color:var(--text); font-size: 14px;">{{ '%.1f'|format(item.score or 0) }}</strong>
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+             {% if item.score >= 80 %}
+               <span class="badge" style="background:#f0fdf4; color:#22c55e; border:1px solid #bbf7d0;">推荐使用</span>
+             {% elif item.score >= 60 %}
+               <span class="badge" style="background:#fffbeb; color:#d97706; border:1px solid #fde68a;">需人工判断</span>
+             {% else %}
+               <span class="badge" style="background:#fef2f2; color:#991b1b; border:1px solid #fecaca;">不推荐</span>
+             {% endif %}
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            {% if item.review_status == 'pending' %}
+              <a href="/trends/{{ item.id }}" class="badge badge-ai-watch" style="text-decoration:none;">待人审</a>
+            {% elif item.review_status == 'approved' %}
+               <span class="badge badge-approved" style="background:#059669;color:#fff;">已采用库</span>
+            {% else %}
+               <span class="badge badge-skipped">过滤丢弃</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div style="font-size:32px; margin-bottom:12px;">📭</div>
+      <p style="font-weight:600; color:var(--text);">无匹配聚合话题</p>
+      <p style="color:var(--text-muted); font-size:13px;">AI 尚未对近日新闻生成有价值的聚类主题，您可以尝试清空搜索词。</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Pagination Controls -->
+  {% if total_pages > 1 %}
+  <div class="pagination" style="padding: 16px 24px; border-top: 1px solid var(--line-soft); display: flex; justify-content: space-between; align-items: center;">
+    <span class="muted" style="font-size: 13px;">第 {{ page }} / {{ total_pages }} 页</span>
+    <div style="display: flex; gap: 8px;">
+      {% if page > 1 %}
+      <a href="/aggregated-topics?page={{ page - 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
+      {% else %}
+      <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>上一页</button>
+      {% endif %}
+      
+      {% if page < total_pages %}
+      <a href="/aggregated-topics?page={{ page + 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
+      {% else %}
+      <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>下一页</button>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

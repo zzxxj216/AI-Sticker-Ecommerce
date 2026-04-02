@@ -11,11 +11,9 @@ import time
 import requests
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from scripts.script_utils import PROJECT_ROOT
 
-from services.blog.shopify_converter import ShopifyConverter
+from src.services.blog.shopify_converter import ShopifyConverter
 
 SHOP_DOMAIN = os.getenv("SHOPIFY_STORE_DOMAIN", "inkelligent.myshopify.com")
 ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN", "")
@@ -198,9 +196,8 @@ def main():
         print("ERROR: Set SHOPIFY_ACCESS_TOKEN environment variable")
         sys.exit(1)
 
-    project_root = Path(__file__).resolve().parent.parent
-    md_file = project_root / "output" / "blogs" / "route-66-roadtrip-stickers_20260318_131629.md"
-    images_dir = project_root / "output" / "blogs" / "images" / "route-66-roadtrip-stickers_20260318_131629"
+    md_file = PROJECT_ROOT / "output" / "blogs" / "route-66-roadtrip-stickers_20260318_131629.md"
+    images_dir = PROJECT_ROOT / "output" / "blogs" / "images" / "route-66-roadtrip-stickers_20260318_131629"
 
     if not md_file.exists():
         print(f"ERROR: Markdown file not found: {md_file}")

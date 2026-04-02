@@ -1,0 +1,400 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Blog AI Agent</p>
+    <h1>对话生成 Blog</h1>
+    <p class="page-subtitle">AI Agent 自动规划、生成、修改和发布 SEO 博客文章。直接告诉它你想做什么。</p>
+  </div>
+  <div class="header-actions" style="display:flex;gap:8px;">
+    <button id="btn-reset" class="btn-secondary" style="padding:8px 14px;font-size:12px;cursor:pointer;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+      重置对话
+    </button>
+  </div>
+</section>
+
+<!-- Progress Panel (shown during generation) -->
+<section class="panel" id="progress-panel" style="display:none;margin-bottom:16px;">
+  <div class="panel-header"><h2>生成进度</h2></div>
+  <div style="padding:16px 24px;">
+    <div style="background:var(--surface-hover);border-radius:8px;height:8px;overflow:hidden;margin-bottom:12px;">
+      <div id="progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#f59e0b,#ef4444);border-radius:8px;transition:width 0.5s ease;"></div>
+    </div>
+    <div id="progress-steps" style="font-size:13px;color:var(--text-muted);max-height:200px;overflow-y:auto;"></div>
+  </div>
+</section>
+
+<!-- Result Panel -->
+<section class="panel" id="result-panel" style="display:none;margin-bottom:16px;">
+  <div class="panel-header">
+    <h2>生成结果</h2>
+    <button id="btn-copy" class="btn-secondary" style="padding:6px 14px;font-size:12px;cursor:pointer;">复制 Markdown</button>
+  </div>
+  <div style="padding:0 24px 8px;">
+    <div id="result-meta" style="font-size:13px;color:var(--text-muted);margin-bottom:12px;"></div>
+  </div>
+  <div id="result-content" style="padding:0 24px 24px;font-size:14px;line-height:1.8;max-height:600px;overflow-y:auto;"></div>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><h2>对话窗口</h2></div>
+  <div id="chat-area" style="display:flex;flex-direction:column;height:480px;">
+    <div id="messages" style="flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px;">
+      <div class="bot-msg">
+        <div class="bot-avatar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </div>
+        <div class="bot-bubble">
+          你好！我是 Blog AI Agent，可以帮你：<br><br>
+          <strong>生成博客</strong> — "帮这个猫咪贴纸写一篇 SEO 博客"<br>
+          <strong>修改文章</strong> — "把标题改为XX" / "第三段加更多细节"<br>
+          <strong>重新生成图片</strong> — "第2张图换个背景"<br>
+          <strong>发布到 Shopify</strong> — "上传到 Shopify 草稿箱"<br>
+          <strong>查看历史</strong> — "列出最近的博客" / "列出本地博客"<br><br>
+          直接告诉我你想做什么吧！
+        </div>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--line-soft);padding:16px 24px;display:flex;gap:10px;align-items:flex-end;">
+      <textarea id="chat-input" rows="1" placeholder="输入指令或描述需求..."
+        style="flex:1;resize:none;border:1px solid var(--line-soft);border-radius:var(--radius-md);padding:12px 16px;font-size:14px;font-family:inherit;line-height:1.5;background:var(--surface);color:var(--text);outline:none;transition:border-color .2s;max-height:120px;"
+        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"
+        onfocus="this.style.borderColor='var(--primary,#7c5cfc)'"
+        onblur="this.style.borderColor='var(--line-soft)'"
+      ></textarea>
+      <button id="btn-send" class="btn-primary" style="padding:12px 20px;font-size:14px;font-weight:600;border-radius:var(--radius-md);cursor:pointer;white-space:nowrap;height:fit-content;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        发送
+      </button>
+    </div>
+  </div>
+</section>
+
+<style>
+.bot-msg { display:flex;gap:12px;max-width:85%; }
+.bot-avatar { width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+.bot-bubble { background:var(--surface-hover);border-radius:12px 12px 12px 4px;padding:14px 18px;font-size:14px;line-height:1.6;color:var(--text); }
+.user-msg { display:flex;gap:12px;max-width:85%;align-self:flex-end;flex-direction:row-reverse; }
+.user-avatar { width:32px;height:32px;border-radius:50%;background:var(--primary,#7c5cfc);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:13px;font-weight:700; }
+.user-bubble { background:var(--primary,#7c5cfc);color:#fff;border-radius:12px 12px 4px 12px;padding:14px 18px;font-size:14px;line-height:1.6; }
+.typing-indicator { display:flex;gap:4px;padding:8px 12px; }
+.typing-indicator span { width:6px;height:6px;border-radius:50%;background:var(--text-muted);animation:typing 1.2s infinite; }
+.typing-indicator span:nth-child(2) { animation-delay:0.2s; }
+.typing-indicator span:nth-child(3) { animation-delay:0.4s; }
+@keyframes typing { 0%,100%{opacity:0.3;transform:translateY(0)} 50%{opacity:1;transform:translateY(-4px)} }
+.tool-badge { display:inline-block;background:var(--surface-hover);border:1px solid var(--line-soft);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--text-muted);margin-bottom:6px; }
+#result-content h1 { font-size:22px;margin:20px 0 12px;font-weight:700; }
+#result-content h2 { font-size:18px;margin:18px 0 10px;font-weight:600;color:var(--primary,#7c5cfc); }
+#result-content h3 { font-size:15px;margin:14px 0 8px;font-weight:600; }
+#result-content p { margin:8px 0; }
+#result-content ul, #result-content ol { margin:8px 0;padding-left:24px; }
+#result-content li { margin:4px 0; }
+#result-content blockquote { border-left:3px solid var(--primary,#7c5cfc);padding:8px 16px;margin:12px 0;background:var(--surface-hover);border-radius:0 var(--radius-md) var(--radius-md) 0; }
+#result-content strong { font-weight:600; }
+#result-content code { background:var(--surface-hover);padding:2px 6px;border-radius:4px;font-size:13px; }
+</style>
+
+<script>
+(function(){
+  const urlParams = new URLSearchParams(window.location.search);
+  const RESTORE_SESSION = urlParams.get('session');
+  const SESSION_ID = RESTORE_SESSION || ('blog_' + Math.random().toString(36).slice(2, 10));
+  const API = '/api/tools/chat-blog';
+  const messages = document.getElementById('messages');
+  const input = document.getElementById('chat-input');
+  const btnSend = document.getElementById('btn-send');
+  const btnReset = document.getElementById('btn-reset');
+  const btnCopy = document.getElementById('btn-copy');
+  let isSending = false;
+  let resultMarkdown = '';
+
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  function addUserMsg(text) {
+    const div = document.createElement('div');
+    div.className = 'user-msg';
+    div.innerHTML = `<div class="user-avatar">我</div><div class="user-bubble">${esc(text)}</div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function addBotMsg(html) {
+    const div = document.createElement('div');
+    div.className = 'bot-msg';
+    div.innerHTML = `
+      <div class="bot-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div>
+      <div class="bot-bubble">${html}</div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+    return div;
+  }
+
+  function addToolMsg(toolName, result) {
+    const toolLabels = {
+      'generate_blog': '生成博客',
+      'revise_article': '修改文章',
+      'regenerate_image': '重新生成图片',
+      'get_task_status': '查询状态',
+      'cancel_task': '取消任务',
+      'list_recent_blogs': '列出最近博客',
+      'list_local_blogs': '列出本地博客',
+      'load_local_blog': '加载本地博客',
+      'publish_to_shopify': '发布到 Shopify',
+      'list_shopify_articles': '列出 Shopify 文章',
+      'view_shopify_article': '查看 Shopify 文章',
+    };
+    const label = toolLabels[toolName] || toolName;
+    const div = document.createElement('div');
+    div.className = 'bot-msg';
+    div.innerHTML = `
+      <div class="bot-avatar" style="background:linear-gradient(135deg,#3b82f6,#6366f1);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+      </div>
+      <div class="bot-bubble">
+        <span class="tool-badge">Tool: ${esc(label)}</span><br>
+        <pre style="white-space:pre-wrap;font-size:12px;margin:4px 0 0;color:var(--text-muted);max-height:200px;overflow-y:auto;">${esc(result)}</pre>
+      </div>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function addTyping() {
+    const div = addBotMsg('<div class="typing-indicator"><span></span><span></span><span></span></div>');
+    div.id = 'typing-msg';
+    return div;
+  }
+  function removeTyping() { const el = document.getElementById('typing-msg'); if (el) el.remove(); }
+
+  function formatText(text) {
+    return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+  }
+
+  function mdToHtml(md) {
+    return md
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+  }
+
+  async function sendMessage() {
+    const text = input.value.trim();
+    if (!text || isSending) return;
+    isSending = true;
+    btnSend.disabled = true;
+
+    addUserMsg(text);
+    input.value = '';
+    input.style.height = 'auto';
+    addTyping();
+
+    try {
+      const resp = await fetch(API + '/send', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: SESSION_ID, message: text }),
+      });
+      removeTyping();
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        addBotMsg('<span style="color:#ef4444;">请求失败：' + esc(err.detail || '未知错误') + '</span>');
+        return;
+      }
+      const data = await resp.json();
+
+      if (data.tool_results && data.tool_results.length > 0) {
+        for (const tr of data.tool_results) {
+          addToolMsg(tr.tool, tr.result);
+        }
+      }
+
+      if (data.reply) {
+        addBotMsg(formatText(data.reply));
+      }
+
+      if (data.task_id) {
+        document.getElementById('progress-panel').style.display = '';
+        document.getElementById('result-panel').style.display = 'none';
+        listenSSE(data.task_id);
+      }
+    } catch(e) {
+      removeTyping();
+      addBotMsg('<span style="color:#ef4444;">网络错误：' + esc(e.message) + '</span>');
+    } finally {
+      isSending = false;
+      btnSend.disabled = false;
+      input.focus();
+    }
+  }
+
+  let progressPct = 0;
+  function listenSSE(taskId) {
+    const steps = document.getElementById('progress-steps');
+    const bar = document.getElementById('progress-bar');
+    progressPct = 5;
+    bar.style.width = '5%';
+    bar.style.background = '';
+    steps.innerHTML = '';
+
+    const evtSource = new EventSource(API + '/stream/' + taskId);
+    evtSource.onmessage = function(e) {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+
+      if (msg.type === 'heartbeat') return;
+
+      if (msg.type === 'done') {
+        evtSource.close();
+        return;
+      }
+
+      if (msg.type === 'error') {
+        evtSource.close();
+        steps.innerHTML += `<div style="color:#ef4444;">生成失败：${esc(msg.data.error)}</div>`;
+        bar.style.width = '100%';
+        bar.style.background = '#ef4444';
+        addBotMsg('<span style="color:#ef4444;">博客生成失败：' + esc(msg.data.error) + '</span>');
+        return;
+      }
+
+      if (msg.type === 'complete') {
+        bar.style.width = '100%';
+        steps.innerHTML += `<div style="color:#16a34a;font-weight:600;">博客生成完成！共 ${msg.data.iteration} 轮迭代</div>`;
+        showResult(msg.data);
+        addBotMsg(
+          `博客「<strong>${esc(msg.data.title)}</strong>」生成完成！<br><br>` +
+          `你可以继续对我说：<br>` +
+          `· "把标题改为XX"<br>` +
+          `· "第2张图重新生成"<br>` +
+          `· "上传到 Shopify 草稿箱"<br>` +
+          `· <a href="/blogs" style="color:#7c5cfc;font-weight:600;">前往 Blog 管理</a>`
+        );
+        return;
+      }
+
+      if (msg.type === 'progress') {
+        progressPct = Math.min(progressPct + 5, 90);
+        bar.style.width = progressPct + '%';
+        const m = msg.data.message || msg.data.step || '';
+        if (m) steps.innerHTML += `<div>${esc(m)}</div>`;
+        steps.scrollTop = steps.scrollHeight;
+      }
+      if (msg.type === 'review') {
+        progressPct = Math.min(progressPct + 10, 90);
+        bar.style.width = progressPct + '%';
+        const icon = msg.data.passed ? '✅' : '🔄';
+        steps.innerHTML += `<div>${icon} 评审 #${msg.data.iteration}：${msg.data.score.toFixed(0)} 分 — ${esc(msg.data.summary)}</div>`;
+        steps.scrollTop = steps.scrollHeight;
+      }
+      if (msg.type === 'plan_ready') {
+        progressPct = 35;
+        bar.style.width = '35%';
+        steps.innerHTML += `<div>文章规划完成</div>`;
+      }
+      if (msg.type === 'draft_ready') {
+        progressPct = 70;
+        bar.style.width = '70%';
+        steps.innerHTML += `<div>初稿完成</div>`;
+      }
+    };
+
+    evtSource.onerror = function() {
+      evtSource.close();
+    };
+  }
+
+  function showResult(data) {
+    const panel = document.getElementById('result-panel');
+    const meta = document.getElementById('result-meta');
+    const content = document.getElementById('result-content');
+    panel.style.display = '';
+    resultMarkdown = data.content || '';
+
+    meta.innerHTML = `
+      <strong>标题：</strong>${esc(data.title || '')}<br>
+      <strong>描述：</strong>${esc(data.description || '')}<br>
+      <strong>URL Slug：</strong><code>${esc(data.slug || '')}</code><br>
+      <a href="/blogs" style="color:var(--accent);font-weight:600;font-size:12px;">前往 Blog 管理 →</a>
+    `;
+    content.innerHTML = '<p>' + mdToHtml(resultMarkdown) + '</p>';
+  }
+
+  async function resetChat() {
+    if (!confirm('确认清空对话历史？')) return;
+    await fetch(API + '/reset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ session_id: SESSION_ID }),
+    });
+    messages.innerHTML = '';
+    document.getElementById('progress-panel').style.display = 'none';
+    document.getElementById('result-panel').style.display = 'none';
+    document.getElementById('progress-steps').innerHTML = '';
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('progress-bar').style.background = '';
+    resultMarkdown = '';
+    addBotMsg('对话已重置。告诉我你想做什么吧！');
+  }
+
+  async function restoreHistory() {
+    if (!RESTORE_SESSION) return;
+    messages.innerHTML = '';
+    addBotMsg('<em>正在还原对话历史...</em>');
+    try {
+      const resp = await fetch(API + '/restore', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: RESTORE_SESSION }),
+      });
+      if (!resp.ok) throw new Error('还原失败');
+      const data = await resp.json();
+      messages.innerHTML = '';
+
+      if (!data.messages || data.messages.length === 0) {
+        addBotMsg('未找到该会话的历史消息，开始新对话吧！');
+        return;
+      }
+      for (const msg of data.messages) {
+        if (msg.role === 'user') {
+          addUserMsg(msg.content);
+        } else if (msg.role === 'tool') {
+          addToolMsg(msg.tool_name || 'tool', msg.content);
+        } else if (msg.role === 'assistant') {
+          addBotMsg(formatText(msg.content));
+        }
+      }
+      addBotMsg('<em style="color:var(--text-muted);">— 对话已还原，可以继续对话 —</em>');
+      messages.scrollTop = messages.scrollHeight;
+    } catch (e) {
+      messages.innerHTML = '';
+      addBotMsg('<span style="color:#ef4444;">还原失败：' + esc(e.message) + '</span>');
+    }
+  }
+
+  btnSend.addEventListener('click', sendMessage);
+  btnReset.addEventListener('click', resetChat);
+  btnCopy.addEventListener('click', function() {
+    if (!resultMarkdown) return;
+    navigator.clipboard.writeText(resultMarkdown).then(() => {
+      btnCopy.textContent = '已复制!';
+      setTimeout(() => btnCopy.textContent = '复制 Markdown', 2000);
+    });
+  });
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  if (RESTORE_SESSION) restoreHistory();
+})();
+</script>
+{% endblock %}

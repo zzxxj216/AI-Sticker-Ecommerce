@@ -12,11 +12,6 @@ class StylePreference(BaseModel):
     preference_score: float = Field(..., ge=0, le=1, description="偏好分数 0-1")
     usage_count: int = Field(default=0, description="使用次数")
     last_used: Optional[datetime] = Field(None, description="最后使用时间")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 
 class ThemePreference(BaseModel):
@@ -26,11 +21,6 @@ class ThemePreference(BaseModel):
     usage_count: int = Field(default=0, description="使用次数")
     success_rate: float = Field(default=0.0, ge=0, le=1, description="成功率")
     last_used: Optional[datetime] = Field(None, description="最后使用时间")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 
 class UserPreference(BaseModel):
@@ -138,7 +128,7 @@ class UserPreference(BaseModel):
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return self.dict()
+        return self.model_dump()
     
     def to_summary(self) -> Dict[str, Any]:
         """转换为摘要"""
@@ -155,11 +145,6 @@ class UserPreference(BaseModel):
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 
 class PreferenceHistory(BaseModel):
@@ -170,8 +155,3 @@ class PreferenceHistory(BaseModel):
     action: str = Field(..., description="操作类型")
     details: Dict[str, Any] = Field(default_factory=dict, description="详细信息")
     timestamp: datetime = Field(default_factory=datetime.now)
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }

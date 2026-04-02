@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class SessionState(str, Enum):
@@ -21,11 +21,6 @@ class SessionMessage(BaseModel):
     content: str = Field(..., description="消息内容")
     timestamp: datetime = Field(default_factory=datetime.now)
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 
 class SessionContext(BaseModel):
@@ -45,6 +40,8 @@ class SessionContext(BaseModel):
 
 class Session(BaseModel):
     """会话数据模型"""
+    
+    model_config = ConfigDict(use_enum_values=True)
     
     id: str = Field(..., description="会话唯一标识")
     user_id: Optional[str] = Field(None, description="用户 ID")
@@ -116,7 +113,7 @@ class Session(BaseModel):
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return self.dict()
+        return self.model_dump()
     
     def to_summary(self) -> Dict[str, Any]:
         """转换为摘要"""
@@ -131,10 +128,4 @@ class Session(BaseModel):
             "updated_at": self.updated_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "duration_seconds": self.get_duration_seconds(),
-        }
-    
-    class Config:
-        use_enum_values = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
         }

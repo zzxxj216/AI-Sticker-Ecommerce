@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 
 @click.group()
-@click.version_option(version="1.0.0")
+@click.version_option(version="2.0.0")
 def cli():
     """AI Sticker E-commerce CLI - Generate stickers, blogs, and more."""
     pass
@@ -331,7 +331,7 @@ def _display_review(
 def version():
     """Show version information."""
     console.print("[bold]AI Sticker E-commerce System[/bold]")
-    console.print("Version: 1.0.0")
+    console.print("Version: 2.0.0")
     console.print("Components:")
     console.print("  - Sticker Pack Generator")
     console.print("  - Style Analyzer")

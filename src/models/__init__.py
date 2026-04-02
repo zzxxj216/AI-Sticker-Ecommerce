@@ -1,5 +1,3 @@
-"""数据模型模块"""
-
 from src.models.sticker import (
     Sticker,
     StickerPack,
@@ -42,6 +40,12 @@ from src.models.batch import (
     BATCH_PHASE_EDITING,
     BATCH_PHASE_DONE,
 )
+from src.models.ops import (
+    GenerationJob,
+    GenerationOutput,
+    TrendBriefRecord,
+    TrendItem,
+)
 
 __all__ = [
     "Sticker",
@@ -62,7 +66,6 @@ __all__ = [
     "PHASE_REVIEWING_CONCEPTS",
     "PHASE_PREVIEW",
     "PHASE_EDITING",
-    # Batch models
     "TopicGroup",
     "BatchPackConfig",
     "BatchConfig",
@@ -75,4 +78,8 @@ __all__ = [
     "BATCH_PHASE_PREVIEW",
     "BATCH_PHASE_EDITING",
     "BATCH_PHASE_DONE",
+    "TrendItem",
+    "TrendBriefRecord",
+    "GenerationJob",
+    "GenerationOutput",
 ]

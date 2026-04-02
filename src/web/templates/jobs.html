@@ -1,0 +1,158 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Jobs</p>
+    <h1>任务监控</h1>
+    <p class="page-subtitle">查看运行状态、输出目录和任务详情。</p>
+  </div>
+</section>
+
+<section class="stat-grid">
+  <article class="stat-card" id="stat-total-jobs">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+      总任务数
+    </span>
+    <strong class="stat-value">{{ jobs|length }}</strong>
+  </article>
+  <article class="stat-card" id="stat-running">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      运行中
+    </span>
+    <strong class="stat-value">{{ jobs|selectattr('status', 'equalto', 'running')|list|length }}</strong>
+  </article>
+  <article class="stat-card" id="stat-failed">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      失败
+    </span>
+    <strong class="stat-value">{{ jobs|selectattr('status', 'equalto', 'failed')|list|length }}</strong>
+  </article>
+</section>
+
+<!-- System Tasks Panel (Data Pipelines) -->
+<section class="panel" id="sys-jobs-panel">
+  <div class="panel-header">
+    <h2>数据引擎与流水线任务</h2>
+    <span class="muted">{{ sys_jobs|length }} 项</span>
+  </div>
+  <div class="table-wrap">
+    {% if sys_jobs %}
+    <table id="sys-jobs-table">
+      <thead>
+        <tr>
+          <th>任务ID</th>
+          <th>任务类型</th>
+          <th>状态</th>
+          <th>开始时间</th>
+          <th>完成时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in sys_jobs %}
+        <tr>
+          <td class="mono-cell">{{ job.id }}</td>
+          <td><strong>{{ job.job_type }}</strong></td>
+          <td>
+            <span class="badge" data-status="{{ job.status }}">
+              {{ job.status }}
+            </span>
+          </td>
+          <td class="muted">{{ job.started_at }}</td>
+          <td class="muted">{{ job.completed_at or '-' }}</td>
+          <td>
+            <button class="btn-secondary btn-sm" onclick="viewSysLogs('{{ job.id }}')">查看日志</button>
+          </td>
+        </tr>
+        <tr id="log-row-{{ job.id }}" style="display:none;">
+          <td colspan="6" style="padding: 0;">
+            <div style="background:#000;color:#0f0;font-family:monospace;padding:12px;max-height:300px;overflow-y:auto;font-size:12px;white-space:pre-wrap;" id="log-content-{{ job.id }}">
+              Loading logs...
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    
+    <script>
+      async function viewSysLogs(jobId) {
+        const row = document.getElementById('log-row-' + jobId);
+        const content = document.getElementById('log-content-' + jobId);
+        
+        if (row.style.display === 'table-row') {
+          row.style.display = 'none';
+          return;
+        }
+        
+        row.style.display = 'table-row';
+        content.textContent = 'Fetching logs from database...';
+        
+        try {
+          const resp = await fetch('/api/sys_jobs/' + jobId + '/logs');
+          if (!resp.ok) throw new Error('API Error ' + resp.status);
+          const data = await resp.json();
+          if (data.logs && data.logs.length > 0) {
+            content.textContent = data.logs.map(log => `[${log.created_at}] [${log.log_level}] ${log.step_name ? '(' + log.step_name + ') ' : ''}${log.message}`).join('\n');
+          } else {
+            content.textContent = 'No logs available for this job.';
+          }
+        } catch (e) {
+          content.textContent = 'Error loading logs: ' + e.message;
+        }
+      }
+    </script>
+    
+    {% else %}
+    <div class="empty-state">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+      <p>暂无流水线任务</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- Generation Jobs Panel -->
+<section class="panel" id="jobs-panel">
+  <div class="panel-header">
+    <h2>卡片生成器任务</h2>
+    <span class="muted">{{ jobs|length }} 项</span>
+  </div>
+  <div class="table-wrap">
+    {% if jobs %}
+    <table id="jobs-table">
+      <thead>
+        <tr>
+          <th>任务ID</th>
+          <th>趋势</th>
+          <th>状态</th>
+          <th>图片数</th>
+          <th>输出目录</th>
+          <th>创建时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr>
+          <td><a class="primary-link" href="/jobs/{{ job.id }}">{{ job.id[:12] }}…</a></td>
+          <td><strong>{{ job.trend_name }}</strong></td>
+          <td><span class="badge" data-status="{{ job.status }}">{{ job.status }}</span></td>
+          <td>{{ job.image_count }}</td>
+          <td class="mono-cell">{{ job.output_dir or '-' }}</td>
+          <td class="muted">{{ job.created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+      <p>暂无任务</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

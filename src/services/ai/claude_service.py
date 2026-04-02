@@ -1,11 +1,8 @@
-"""Claude AI 服务封装
+"""Claude AI service wrapper.
 
-提供 Claude API 的统一调用接口，支持：
-- 文本生成
-- 多模态输入（文本 + 图片）
-- 流式响应
-- 自动重试
-- 错误处理
+Provides a unified Claude API interface supporting text generation,
+multimodal input (text + images), multi-turn conversation, JSON
+output, auto-retry, and error handling.
 """
 
 from typing import Optional, List, Dict, Any, Union
@@ -16,55 +13,48 @@ from src.core.config import config
 from src.core.logger import get_logger
 from src.core.exceptions import APIError, TimeoutError, RateLimitError
 from src.core.constants import DEFAULT_TIMEOUT, DEFAULT_MAX_RETRIES
+from src.services.ai.base import BaseLLMService
 
 logger = get_logger("service.claude")
 
 
-class ClaudeService:
-    """Claude AI 服务类"""
-    
+class ClaudeService(BaseLLMService):
+    """Claude AI service — wraps the Anthropic SDK."""
+
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         timeout: int = DEFAULT_TIMEOUT,
-        max_retries: int = DEFAULT_MAX_RETRIES
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ):
-        """初始化 Claude 服务
-        
-        Args:
-            api_key: API Key（默认从配置读取）
-            base_url: API Base URL（默认从配置读取）
-            model: 模型名称（默认从配置读取）
-            timeout: 超时时间（秒）
-            max_retries: 最大重试次数
-        """
-        self.api_key = api_key or config.claude_api_key
-        self.base_url = base_url or config.claude_base_url
-        self.model = model or config.claude_model
-        self.timeout = timeout
-        self.max_retries = max_retries
-        
-        if not self.api_key:
-            raise APIError(
-                "Claude API Key 未配置",
-                service="claude",
-                status_code=401
-            )
-        
-        # 初始化客户端
-        client_kwargs = {
+        resolved_key = api_key or config.claude_api_key
+        resolved_url = base_url or config.claude_base_url
+        resolved_model = model or config.claude_model
+
+        if not resolved_key:
+            raise APIError("Claude API Key 未配置", service="claude", status_code=401)
+
+        super().__init__(
+            api_key=resolved_key,
+            base_url=resolved_url,
+            model=resolved_model,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+
+        client_kwargs: Dict[str, Any] = {
             "api_key": self.api_key,
             "max_retries": self.max_retries,
             "timeout": self.timeout,
         }
         if self.base_url:
             client_kwargs["base_url"] = self.base_url
-        
+
         self.client = anthropic.Anthropic(**client_kwargs)
-        
-        logger.info(f"Claude 服务初始化完成 - 模型: {self.model}")
+
+        logger.info("Claude 服务初始化完成 - 模型: %s", self.model)
     
     def generate(
         self,
@@ -225,129 +215,8 @@ class ClaudeService:
             logger.error("Claude 服务未知错误: %s", e)
             raise APIError(f"Claude 服务错误: {e}", service="claude")
 
-    def generate_json(
-        self,
-        prompt: str,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        system: Optional[str] = None,
-        _retries: int = 1,
-    ) -> Dict[str, Any]:
-        """生成 JSON 格式的响应（带自动修复和重试）
-        
-        Args:
-            prompt: 提示词
-            max_tokens: 最大 token 数
-            temperature: 温度参数
-            system: 系统提示词
-            _retries: 解析失败时重试次数
-        
-        Returns:
-            Dict: 解析后的 JSON 对象
-        
-        Raises:
-            APIError: API 调用失败或 JSON 解析失败
-        """
-        import json
-        import re
-        
-        result = self.generate(
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system
-        )
-        
-        text = result["text"]
-        parsed = self._try_parse_json(text)
-        if parsed is not None:
-            return parsed
+    # generate_json() and JSON parsing are inherited from BaseLLMService
 
-        # First parse failed — retry with an explicit "fix this JSON" prompt
-        for attempt in range(_retries):
-            logger.warning(
-                "JSON 解析失败，尝试修复重试 (attempt %d/%d)", attempt + 1, _retries
-            )
-            fix_result = self.generate(
-                prompt=(
-                    "The following text was supposed to be valid JSON but has "
-                    "syntax errors. Fix it and return ONLY the corrected JSON, "
-                    "no explanation:\n\n" + text[:2000]
-                ),
-                max_tokens=max_tokens,
-                temperature=0.0,
-                system="You are a JSON repair tool. Output valid JSON only.",
-            )
-            parsed = self._try_parse_json(fix_result["text"])
-            if parsed is not None:
-                logger.info("JSON 修复重试成功")
-                return parsed
-
-        logger.error("JSON 解析最终失败, 原始文本: %s", text[:500])
-        raise APIError(
-            f"Claude 返回的内容无法解析为 JSON",
-            service="claude",
-            response=text[:500],
-        )
-
-    @staticmethod
-    def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
-        """Try to extract and parse JSON from text, return None on failure."""
-        import json
-        import re
-
-        # Try ```json ... ``` fenced block
-        json_match = re.search(r'```json\s*(\{.*?\}|\[.*?\])\s*```', text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            json_match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                json_str = text
-
-        # Attempt 1: direct parse
-        try:
-            data = json.loads(json_str)
-            logger.debug("JSON 解析成功")
-            return data
-        except json.JSONDecodeError:
-            pass
-
-        # Attempt 2: fix common issues — trailing commas, single quotes
-        cleaned = re.sub(r',\s*([}\]])', r'\1', json_str)
-        cleaned = cleaned.replace("\u2018", '"').replace("\u2019", '"')
-        try:
-            data = json.loads(cleaned)
-            logger.debug("JSON 清洗后解析成功")
-            return data
-        except json.JSONDecodeError:
-            pass
-
-        # Attempt 3: iteratively escape unescaped double quotes inside
-        # string values. Common when AI puts Chinese "引号" in JSON text.
-        repaired = json_str
-        for _ in range(30):
-            try:
-                data = json.loads(repaired)
-                logger.debug("JSON 引号修复后解析成功")
-                return data
-            except json.JSONDecodeError as e:
-                if e.pos >= len(repaired):
-                    break
-                char_at = repaired[e.pos]
-                # Error at a non-structural character → a previous quote
-                # prematurely ended the string. Find and escape it.
-                if char_at not in ':,{}[]" \n\r\t':
-                    qpos = repaired.rfind('"', 0, e.pos)
-                    if qpos >= 0:
-                        repaired = repaired[:qpos] + '\\"' + repaired[qpos + 1:]
-                        continue
-                break
-
-        return None
-    
     def analyze_image(
         self,
         image_data: str,
@@ -446,16 +315,4 @@ class ClaudeService:
             "model": message.model
         }
     
-    def get_model_info(self) -> Dict[str, Any]:
-        """获取当前模型信息
-        
-        Returns:
-            Dict: 模型信息
-        """
-        return {
-            "model": self.model,
-            "api_key": f"{self.api_key[:10]}...",
-            "base_url": self.base_url,
-            "timeout": self.timeout,
-            "max_retries": self.max_retries
-        }
+    # get_model_info() is inherited from BaseLLMService

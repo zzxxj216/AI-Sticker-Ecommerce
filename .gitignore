@@ -71,3 +71,16 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime logs & data
+error_log.txt
+full_logs.txt
+briefs/
+briefs_v2/
+check_*.py
+_migrate*.py

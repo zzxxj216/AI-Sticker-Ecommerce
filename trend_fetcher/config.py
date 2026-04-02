@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 依次尝试加载 .env：先找 trend_fetcher/.env，再找项目根目录 .env
+# override=False（默认）：系统环境变量优先，.env 补充缺失的变量
 _base = Path(__file__).parent
 for _env_path in [_base / ".env", _base.parent / ".env"]:
     if _env_path.exists():
@@ -58,7 +59,12 @@ class Config:
     PYTRENDS_BACKOFF: float = 1.0
 
     # Claude 模型
-    CLAUDE_MODEL: str = "claude-sonnet-4-5"
+    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
+
+    # OpenAI API（用于 sticker pipeline 主题抽象等）
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4")
 
     # Nano Banana 图片生成配置
     # IMAGE_API_KEY / IMAGE_BASE_URL 独立于 Claude，用于 Nano Banana 图片生成

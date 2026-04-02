@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Data Collection</p>
+    <h1>热点新闻源</h1>
+    <p class="page-subtitle">全球多源热点新闻原貌一览。这些是 AI 处理前吃进肚子里的最原始信息素材。</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>底层爬取记录</h2>
+    <span class="muted">
+      共 <strong style="color:var(--text)">{{ total }}</strong> 条 &nbsp;&middot;&nbsp;
+      当前显示第 {{ (page - 1) * per_page + 1 }} - {{ page * per_page if page * per_page < total else total }} 条
+    </span>
+  </div>
+  <div class="table-wrap" style="overflow-x: auto;">
+    {% if items %}
+    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 800px;">
+      <thead>
+        <tr>
+          <th style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">产生批次 / 时间</th>
+          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">站点来源</th>
+          <th style="width: 65%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">原始新闻头条与链接</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr style="transition: background var(--duration); cursor: default;">
+          <td class="muted" style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-size:12px;">{{ item.created_at_display }}</td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            <span class="badge" style="background:var(--surface-hover); color:var(--text); font-family: monospace;">{{ item.source or 'RSS' }}</span>
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            {% if item.url %}
+            <a href="{{ item.url }}" target="_blank" class="primary-link" style="font-weight: 500;">
+              {% if item.title %}
+                {{ item.title }}
+              {% else %}
+                <span style="color: var(--text-muted); font-style: italic;">无标题 &mdash; 点击新闻原链接</span>
+              {% endif %}
+            </a>
+            {% else %}
+              {% if item.title %}
+                <span style="color: var(--text);">{{ item.title }}</span>
+              {% else %}
+                <span style="color: var(--text-muted); font-style: italic;">数据缺失</span>
+              {% endif %}
+            {% endif %}
+            {% if item.published_at_display %}
+            <div style="font-size: 12px; color: var(--text-muted); margin-top:4px;">
+              发布时间: {{ item.published_at_display }}
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div style="font-size:32px; margin-bottom:12px;">📭</div>
+      <p style="font-weight:600; color:var(--text);">暂无原始采集记录</p>
+      <p style="color:var(--text-muted); font-size:13px;">请等待下一次系统定时获取或手动触发一次爬取任务。</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Pagination Controls -->
+  {% if total_pages > 1 %}
+  <div class="pagination" style="padding: 16px 24px; border-top: 1px solid var(--line-soft); display: flex; justify-content: space-between; align-items: center;">
+    <span class="muted" style="font-size: 13px;">第 {{ page }} / {{ total_pages }} 页</span>
+    <div style="display: flex; gap: 8px;">
+      {% if page > 1 %}
+      <a href="/hot-news?page={{ page - 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
+      {% else %}
+      <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>上一页</button>
+      {% endif %}
+      
+      {% if page < total_pages %}
+      <a href="/hot-news?page={{ page + 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
+      {% else %}
+      <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>下一页</button>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

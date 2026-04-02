@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Sticker Gallery</p>
+    <h1>卡贴画廊</h1>
+    <p class="page-subtitle">浏览所有已生成的卡贴包，按生成时间倒序排列。</p>
+  </div>
+  <div class="header-actions">
+    <span class="muted">共 {{ jobs|length }} 个卡贴包</span>
+  </div>
+</section>
+
+{% if jobs %}
+{% for job in jobs %}
+<section class="panel" style="margin-bottom:24px;">
+  <div class="panel-header" style="flex-wrap:wrap;gap:12px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <h2 style="margin:0;">
+        <a href="/jobs/{{ job.id }}" class="primary-link">{{ job.trend_name or job.id }}</a>
+      </h2>
+      <span class="badge" style="background:#dcfce7;color:#166534;">{{ job.image_count or job.images|length }} 张</span>
+      {% if job.source_type %}
+      <span class="badge {% if job.source_type == 'tiktok' %}badge-ai-watch{% elif job.source_type == 'chat' %}badge-skipped{% else %}badge-approved{% endif %}" style="font-size:11px;">
+        {% if job.source_type == 'tiktok' %}TikTok{% elif job.source_type == 'chat' %}AI 对话{% else %}News聚合{% endif %}
+      </span>
+      {% endif %}
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;color:var(--text-muted);font-size:13px;">
+      {% if job.finished_at %}
+      <span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        {{ job.finished_at[:16] | replace('T', ' ') }}
+      </span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if job.images %}
+  <div style="padding:16px 24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;">
+    {% for img in job.images %}
+    <div class="sticker-thumb" style="position:relative;border-radius:var(--radius-md);overflow:hidden;background:var(--surface-hover);aspect-ratio:1;cursor:pointer;" onclick="openLightbox('{{ to_output_url(img.file_path) }}')">
+      <img src="{{ to_output_url(img.file_path) }}"
+           alt="{{ img.metadata_json.name if img.metadata_json is mapping else '' }}"
+           loading="lazy"
+           style="width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.2s;"
+           onerror="this.parentElement.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;\'>加载失败</div>'">
+      <div style="position:absolute;bottom:0;left:0;right:0;padding:5px 8px;background:linear-gradient(transparent,rgba(0,0,0,0.6));color:#fff;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        {{ img.metadata_json.name if img.metadata_json is mapping else img.file_path.split('/')[-1] }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:30px;">
+    <p>此任务无图片产物。</p>
+  </div>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% else %}
+<section class="panel">
+  <div class="empty-state" style="padding:60px 24px;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;margin-bottom:12px"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    <p style="font-weight:600;color:var(--text);">暂无已完成的卡贴包</p>
+    <p style="color:var(--text-muted);font-size:13px;">在「已采纳资产库」中选择话题并点击「生成卡贴」即可开始。</p>
+  </div>
+</section>
+{% endif %}
+
+<div id="lightbox" onclick="closeLightbox()" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;cursor:zoom-out;justify-content:center;align-items:center;">
+  <img id="lightbox-img" src="" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">
+  <button onclick="closeLightbox()" style="position:fixed;top:20px;right:24px;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:24px;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;">&times;</button>
+</div>
+
+<script>
+function openLightbox(src) {
+  const lb = document.getElementById('lightbox');
+  document.getElementById('lightbox-img').src = src;
+  lb.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+function closeLightbox() {
+  document.getElementById('lightbox').style.display = 'none';
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeLightbox();
+});
+</script>
+
+<style>
+.sticker-thumb:hover img { transform: scale(1.05); }
+</style>
+{% endblock %}

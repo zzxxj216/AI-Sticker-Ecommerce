@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Data Archive</p>
+    <h1>数据全档案</h1>
+    <p class="page-subtitle">回溯所有收集到的原始新闻与 TikTok 热点信息，自带全量检索。已跳过的条目可在此恢复。</p>
+  </div>
+  <div class="header-actions">
+    <form action="/archive" method="get" style="display: flex; gap: 8px;">
+      <input type="text" name="q" placeholder="搜索主题、标题或建议..." value="{{ search_query }}" style="padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--text); outline: none; width: 300px; transition: border-color var(--duration);">
+      <button type="submit" class="btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        检索
+      </button>
+      {% if search_query %}
+      <a href="/archive" class="btn-secondary">清空</a>
+      {% endif %}
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>所有抓取数据</h2>
+    <span class="muted">共 {{ total }} 条记录（第 {{ page }} / {{ total_pages }} 页）</span>
+  </div>
+  <div class="table-wrap" style="overflow-x: auto;">
+    {% if items %}
+    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 1000px;">
+      <thead>
+        <tr>
+          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">产生日期</th>
+          <th style="width: 6%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">源</th>
+          <th style="width: 22%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">标题</th>
+          <th style="width: 30%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">AI 处理反馈 / 内容</th>
+          <th style="width: 8%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">评分</th>
+          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">状态</th>
+          <th style="width: 14%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td class="muted" style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-size:12px;">{{ item.created_at_display }}</td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            <strong style="color:var(--text-muted)">{{ 'TK' if item.source_type == 'tiktok' else 'News' }}</strong>
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);"><a href="/trends/{{ item.id }}" class="primary-link"><strong>{{ item.trend_name or item.title }}</strong></a></td>
+          <td style="font-size: 13px; color: var(--text-muted); padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            <div style="max-height: 2.8em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+              {{ item.summary or '-' }}
+            </div>
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);"><strong style="color:var(--text)">{{ '%.0f'|format(item.score or 0) }}</strong></td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            {% if item.review_status == 'approved' %}
+              <span class="badge badge-approved" style="background:#059669;color:#fff;">已采纳</span>
+            {% elif item.review_status == 'skipped' %}
+              <span class="badge badge-skipped">已跳过</span>
+            {% else %}
+               {% if item.score >= 70 %}
+                 <span class="badge badge-ai-rec">自动推荐</span>
+               {% else %}
+                 <span class="badge badge-ai-watch">待人审</span>
+               {% endif %}
+            {% endif %}
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            {% if item.review_status == 'skipped' %}
+            <form method="post" action="/trends/{{ item.id }}/restore" style="display:inline;">
+              <button type="submit" class="btn-secondary" style="padding:4px 12px;font-size:12px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+                恢复
+              </button>
+            </form>
+            {% elif item.review_status == 'pending' %}
+            <a href="/trends/{{ item.id }}" class="btn-secondary" style="padding:4px 12px;font-size:12px;text-decoration:none;">去审核</a>
+            {% else %}
+            <span class="muted" style="font-size:12px;">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if total_pages > 1 %}
+    <div style="display:flex;justify-content:center;align-items:center;gap:12px;padding:20px 0;">
+      {% if page > 1 %}
+      <a href="/archive?page={{ page - 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary" style="padding:6px 16px;font-size:13px;text-decoration:none;">&larr; 上一页</a>
+      {% else %}
+      <button disabled class="btn-secondary" style="padding:6px 16px;font-size:13px;opacity:0.4;cursor:not-allowed;">&larr; 上一页</button>
+      {% endif %}
+      <span class="muted" style="font-size:13px;">{{ page }} / {{ total_pages }}</span>
+      {% if page < total_pages %}
+      <a href="/archive?page={{ page + 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary" style="padding:6px 16px;font-size:13px;text-decoration:none;">下一页 &rarr;</a>
+      {% else %}
+      <button disabled class="btn-secondary" style="padding:6px 16px;font-size:13px;opacity:0.4;cursor:not-allowed;">下一页 &rarr;</button>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+      <p>未找到匹配的归档记录。</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

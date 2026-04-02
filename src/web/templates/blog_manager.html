@@ -1,0 +1,286 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Content Management</p>
+    <h1>Blog 管理</h1>
+    <p class="page-subtitle">查看、编辑和发布 AI 生成的博客文章。</p>
+  </div>
+  <div class="header-actions">
+    <a href="/tools/chat-blog" class="btn-crawl" style="text-decoration:none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      对话生成 Blog
+    </a>
+  </div>
+</section>
+
+<section class="stat-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+  <article class="stat-card">
+    <span class="stat-label">全部文章</span>
+    <strong class="stat-value">{{ drafts|length }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">未发布</span>
+    <strong class="stat-value">{{ drafts|selectattr('publish_status','equalto','unpublished')|list|length }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">Shopify 草稿</span>
+    <strong class="stat-value">{{ drafts|selectattr('publish_status','equalto','shopify_draft')|list|length }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">已发布</span>
+    <strong class="stat-value">{{ drafts|selectattr('publish_status','equalto','published')|list|length }}</strong>
+  </article>
+</section>
+
+<!-- Filter tabs -->
+<div style="display:flex;gap:8px;margin-bottom:16px;">
+  <button class="btn-filter active" data-filter="all" onclick="filterBlogs('all',this)">全部</button>
+  <button class="btn-filter" data-filter="unpublished" onclick="filterBlogs('unpublished',this)">未发布</button>
+  <button class="btn-filter" data-filter="shopify_draft" onclick="filterBlogs('shopify_draft',this)">Shopify 草稿</button>
+  <button class="btn-filter" data-filter="published" onclick="filterBlogs('published',this)">已发布</button>
+</div>
+
+<!-- Batch actions -->
+<div id="batch-bar" style="display:none;margin-bottom:12px;padding:10px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);align-items:center;gap:12px;">
+  <span id="batch-count" style="font-size:13px;font-weight:600;">0 篇选中</span>
+  <button class="btn-crawl" onclick="batchDelete()" style="background:#ef4444;font-size:12px;padding:6px 12px;">批量删除</button>
+  <button class="btn-secondary" onclick="clearSelection()" style="font-size:12px;padding:6px 12px;">取消选择</button>
+</div>
+
+{% if drafts %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width:36px;"><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
+        <th>标题</th>
+        <th>话题</th>
+        <th>关键词</th>
+        <th>语言</th>
+        <th>状态</th>
+        <th>创建时间</th>
+        <th>操作人</th>
+        <th style="min-width:200px;">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in drafts %}
+      <tr data-blog-id="{{ d.id }}" data-publish-status="{{ d.publish_status }}">
+        <td><input type="checkbox" class="row-cb" value="{{ d.id }}" onchange="updateBatchBar()"></td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.meta_title }}">
+          {{ d.meta_title or '(无标题)' }}
+        </td>
+        <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.topic }}">{{ d.topic }}</td>
+        <td style="font-size:12px;">
+          {% if d.seo_keywords is iterable and d.seo_keywords is not string %}
+            {{ d.seo_keywords[:3]|join(', ') }}{% if d.seo_keywords|length > 3 %}…{% endif %}
+          {% else %}{{ d.seo_keywords }}{% endif %}
+        </td>
+        <td>{{ d.language|upper }}</td>
+        <td>
+          {% if d.publish_status == 'published' %}
+            <span class="badge badge-approved">已发布</span>
+          {% elif d.publish_status == 'shopify_draft' %}
+            <span class="badge badge-ai-watch">Shopify 草稿</span>
+          {% else %}
+            <span class="badge">未发布</span>
+          {% endif %}
+        </td>
+        <td style="font-size:12px;white-space:nowrap;">{{ (d.created_at or '')[:16]|replace('T',' ') }}</td>
+        <td>{{ d.created_by or 'system' }}</td>
+        <td>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            <button class="btn-sm" onclick="viewBlog('{{ d.id }}')" title="查看文章">查看</button>
+            <button class="btn-sm" onclick="copyMarkdown('{{ d.id }}')" title="复制 Markdown">复制</button>
+            <button class="btn-sm" onclick="downloadMd('{{ d.id }}')" title="下载 .md">下载</button>
+            {% if d.publish_status == 'unpublished' %}
+            <button class="btn-sm btn-primary" onclick="publishBlog('{{ d.id }}', false)" title="存为 Shopify 草稿">发布草稿</button>
+            <button class="btn-sm btn-primary" onclick="publishBlog('{{ d.id }}', true)" title="直接发布到 Shopify">发布</button>
+            {% elif d.publish_status == 'shopify_draft' %}
+            <button class="btn-sm btn-primary" onclick="publishBlog('{{ d.id }}', true)" title="正式发布到 Shopify">正式发布</button>
+            {% if d.shopify_url %}
+            <a class="btn-sm" href="{{ d.shopify_url }}" target="_blank" title="在 Shopify 查看">查看线上</a>
+            {% endif %}
+            {% elif d.publish_status == 'published' and d.shopify_url %}
+            <a class="btn-sm" href="{{ d.shopify_url }}" target="_blank" title="在 Shopify 查看">查看线上</a>
+            {% endif %}
+            <button class="btn-sm btn-danger" onclick="deleteBlog('{{ d.id }}')" title="删除">删除</button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="leaderboard-empty" style="padding:60px 24px;text-align:center;">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.3;margin-bottom:12px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+  <p>暂无博客文章</p>
+  <p style="font-size:13px;color:var(--text-muted);margin-top:4px;">去 <a href="/tools/chat-blog">对话生成 Blog</a> 创建第一篇</p>
+</div>
+{% endif %}
+
+<!-- View modal -->
+<div id="blog-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.5);overflow-y:auto;" onclick="if(event.target===this)closeBlogModal()">
+  <div style="max-width:800px;margin:40px auto;background:var(--bg);border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.15);overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid var(--line);">
+      <h2 id="modal-title" style="font-size:18px;margin:0;">文章预览</h2>
+      <button onclick="closeBlogModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);padding:4px 8px;">&times;</button>
+    </div>
+    <div id="modal-meta" style="padding:16px 24px;background:var(--surface);font-size:13px;display:flex;gap:16px;flex-wrap:wrap;"></div>
+    <div id="modal-content" style="padding:24px;font-size:14px;line-height:1.8;max-height:60vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<style>
+.btn-filter{padding:6px 14px;font-size:13px;font-weight:500;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--bg);color:var(--text-muted);cursor:pointer;transition:all .15s}
+.btn-filter.active{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn-sm{padding:4px 10px;font-size:12px;font-weight:500;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);cursor:pointer;text-decoration:none;white-space:nowrap;transition:all .15s}
+.btn-sm:hover{background:var(--surface-hover)}
+.btn-sm.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-sm.btn-primary:hover{opacity:.9}
+.btn-sm.btn-danger{color:#ef4444;border-color:#fca5a5}
+.btn-sm.btn-danger:hover{background:#fef2f2}
+#modal-content h1,#modal-content h2,#modal-content h3{margin:16px 0 8px;font-weight:700}
+#modal-content h1{font-size:20px}#modal-content h2{font-size:17px}#modal-content h3{font-size:15px}
+#modal-content p{margin:8px 0}
+#modal-content ul,#modal-content ol{margin:8px 0;padding-left:24px}
+#modal-content img{max-width:100%;border-radius:8px;margin:12px 0}
+#modal-content blockquote{border-left:3px solid var(--line);padding-left:16px;color:var(--text-muted);margin:12px 0}
+#modal-content code{background:var(--surface);padding:2px 6px;border-radius:4px;font-size:13px}
+#modal-content pre{background:var(--surface);padding:16px;border-radius:8px;overflow-x:auto}
+</style>
+
+<script>
+function filterBlogs(status, btn) {
+  document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('tbody tr').forEach(tr => {
+    const ps = tr.dataset.publishStatus;
+    tr.style.display = (status === 'all' || ps === status) ? '' : 'none';
+  });
+}
+
+function toggleAll(master) {
+  document.querySelectorAll('.row-cb').forEach(cb => { cb.checked = master.checked; });
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const checked = document.querySelectorAll('.row-cb:checked');
+  const bar = document.getElementById('batch-bar');
+  bar.style.display = checked.length > 0 ? 'flex' : 'none';
+  document.getElementById('batch-count').textContent = checked.length + ' 篇选中';
+}
+
+function clearSelection() {
+  document.querySelectorAll('.row-cb').forEach(cb => cb.checked = false);
+  document.getElementById('select-all').checked = false;
+  updateBatchBar();
+}
+
+function getSelectedIds() {
+  return Array.from(document.querySelectorAll('.row-cb:checked')).map(cb => cb.value);
+}
+
+async function viewBlog(blogId) {
+  try {
+    const resp = await fetch(`/api/blogs/${blogId}`);
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    document.getElementById('modal-title').textContent = data.meta_title || '文章预览';
+    document.getElementById('modal-meta').innerHTML = `
+      <span><strong>话题:</strong> ${data.topic || '-'}</span>
+      <span><strong>Slug:</strong> ${data.url_slug || '-'}</span>
+      <span><strong>语言:</strong> ${(data.language||'en').toUpperCase()}</span>
+      <span><strong>迭代:</strong> ${data.iteration || 0} 轮</span>
+    `;
+    document.getElementById('modal-content').innerHTML = mdToHtml(data.content || '');
+    document.getElementById('blog-modal').style.display = 'block';
+    document.body.style.overflow = 'hidden';
+  } catch (e) {
+    alert('加载失败: ' + e.message);
+  }
+}
+
+function closeBlogModal() {
+  document.getElementById('blog-modal').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+async function copyMarkdown(blogId) {
+  try {
+    const resp = await fetch(`/api/blogs/${blogId}`);
+    const data = await resp.json();
+    await navigator.clipboard.writeText(data.content || '');
+    alert('Markdown 已复制到剪贴板');
+  } catch (e) {
+    alert('复制失败: ' + e.message);
+  }
+}
+
+function downloadMd(blogId) {
+  window.open(`/api/blogs/${blogId}/download`, '_blank');
+}
+
+async function publishBlog(blogId, publishLive) {
+  const action = publishLive ? '直接发布到 Shopify' : '保存为 Shopify 草稿';
+  if (!confirm(`确认${action}？`)) return;
+  try {
+    const resp = await fetch(`/api/blogs/${blogId}/publish`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({published: publishLive}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || '发布失败');
+    alert(`${action}成功！`);
+    location.reload();
+  } catch (e) {
+    alert('操作失败: ' + e.message);
+  }
+}
+
+async function deleteBlog(blogId) {
+  if (!confirm('确认删除此文章？此操作不可恢复。')) return;
+  try {
+    const resp = await fetch(`/api/blogs/${blogId}`, {method:'DELETE'});
+    if (!resp.ok) throw new Error(await resp.text());
+    location.reload();
+  } catch (e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
+async function batchDelete() {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  if (!confirm(`确认删除 ${ids.length} 篇文章？`)) return;
+  for (const id of ids) {
+    await fetch(`/api/blogs/${id}`, {method:'DELETE'});
+  }
+  location.reload();
+}
+
+function mdToHtml(md) {
+  if (!md) return '<p style="color:var(--text-muted);">无内容</p>';
+  let html = md
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  return '<p>' + html + '</p>';
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBlogModal(); });
+</script>
+{% endblock %}

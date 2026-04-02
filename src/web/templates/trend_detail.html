@@ -1,0 +1,434 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">
+      <a href="/trends" class="text-link" style="margin-right:6px">&larr; 返回列表</a>
+      Trend Detail
+    </p>
+    <h1>{{ trend.trend_name or trend.title }}</h1>
+    <p class="page-subtitle">查看趋势详情、编辑 brief、直接入队。</p>
+  </div>
+  <div class="header-actions">
+    <span class="badge" data-status="{{ trend.review_status }}">{{ trend.review_status }}</span>
+    <span class="badge secondary" data-status="{{ trend.queue_status }}">{{ trend.queue_status }}</span>
+  </div>
+</section>
+
+<div class="layout-two">
+  <!-- ====== 左栏：趋势信息 ====== -->
+  <section class="panel" id="trend-info-panel">
+    <div class="panel-header">
+      <h2>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        趋势信息
+      </h2>
+      <span class="badge secondary">{{ trend.source_type }}</span>
+    </div>
+    <dl class="meta-list compact-meta">
+      <dt>标题</dt><dd>{{ trend.title }}</dd>
+      <dt>评分</dt><dd><strong>{{ trend.score }}</strong></dd>
+      <dt>热度</dt><dd><strong>{{ format_views(trend.heat_score) }}</strong></dd>
+      {% if trend.fit_level %}
+      <dt>适配等级</dt>
+      <dd>
+        {% if trend.fit_level == 'High' %}
+        <span class="badge" style="background:#dcfce7;color:#166534;">{{ trend.fit_level }}</span>
+        {% elif trend.fit_level == 'Medium' %}
+        <span class="badge" style="background:#fef9c3;color:#854d0e;">{{ trend.fit_level }}</span>
+        {% else %}
+        <span class="badge" style="background:#fef2f2;color:#991b1b;">{{ trend.fit_level }}</span>
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if trend.summary %}
+      <dt>一句话解读</dt><dd style="font-size:13px;color:var(--text-muted);">{{ trend.summary }}</dd>
+      {% endif %}
+      <dt>审核状态</dt><dd><span class="badge" data-status="{{ trend.review_status }}">{{ trend.review_status }}</span></dd>
+      <dt>队列状态</dt><dd><span class="badge secondary" data-status="{{ trend.queue_status }}">{{ trend.queue_status }}</span></dd>
+      {% if trend.trend_type %}
+      <dt>趋势类型</dt><dd>{{ trend.trend_type }}</dd>
+      {% endif %}
+      {% if trend.pack_archetype %}
+      <dt>包型</dt><dd>{{ trend.pack_archetype }}</dd>
+      {% endif %}
+      {% if trend.platform %}
+      <dt>平台</dt><dd>{{ ', '.join(trend.platform) }}</dd>
+      {% endif %}
+      {% if trend.risk_flags %}
+      <dt>风险</dt>
+      <dd>
+        {% for flag in trend.risk_flags %}
+        <span class="badge" data-status="failed" style="margin-right:4px;margin-bottom:4px;">{{ flag }}</span>
+        {% endfor %}
+      </dd>
+      {% endif %}
+      {% if trend.visual_symbols %}
+      <dt>视觉元素</dt>
+      <dd>
+        {% for sym in trend.visual_symbols %}
+        <span class="badge" style="background:var(--surface-hover);color:var(--text);margin-right:4px;margin-bottom:4px;">{{ sym }}</span>
+        {% endfor %}
+      </dd>
+      {% endif %}
+      {% if trend.emotional_core %}
+      <dt>情感核心</dt>
+      <dd>
+        {% for e in trend.emotional_core %}
+        <span class="badge" style="background:#ede9fe;color:#6d28d9;margin-right:4px;margin-bottom:4px;">{{ e }}</span>
+        {% endfor %}
+      </dd>
+      {% endif %}
+    </dl>
+
+    {% if trend.source_type == 'tiktok' and tk_extra %}
+    <div style="border-top:1px solid var(--line-soft);margin-top:16px;padding-top:16px;">
+      <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text-muted);">TikTok 数据</h3>
+      <dl class="meta-list compact-meta">
+        <dt>播放量</dt><dd><strong>{{ format_views(tk_extra.video_views) }}</strong></dd>
+        <dt>发布数</dt><dd>{{ format_views(tk_extra.publish_cnt) }}</dd>
+        {% if tk_extra.popular_days %}
+        <dt>热门天数</dt><dd>{{ tk_extra.popular_days }} 天</dd>
+        {% endif %}
+        {% if tk_extra.description %}
+        <dt>话题描述</dt><dd style="font-size:13px;color:var(--text-muted);">{{ tk_extra.description[:200] }}</dd>
+        {% endif %}
+      </dl>
+
+      {% if tk_extra.related_hashtags %}
+      <div style="margin-top:12px;">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600;">关联话题</span>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for tag in tk_extra.related_hashtags[:12] %}
+          <span class="badge" style="background:#e0f2fe;color:#0369a1;font-size:12px;">#{{ tag }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk_extra.trend_data %}
+      <div style="margin-top:16px;">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600;">趋势走势（近期）</span>
+        <div style="margin-top:8px;">
+          {% set max_val = tk_extra.trend_data|map(attribute='value')|max %}
+          {% set min_val = tk_extra.trend_data|map(attribute='value')|min %}
+          {% set range_val = max_val - min_val if max_val != min_val else 1 %}
+          {% set chart_w = 100 %}
+          {% set chart_h = 80 %}
+          {% set n = tk_extra.trend_data|length %}
+          <svg viewBox="0 0 {{ chart_w }} {{ chart_h + 18 }}" style="width:100%;height:auto;max-height:140px;overflow:visible;">
+            <defs>
+              <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#7c5cfc" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#7c5cfc" stop-opacity="0.02"/>
+              </linearGradient>
+            </defs>
+            {# 填充区域 #}
+            <path d="
+              M 0 {{ chart_h - ((tk_extra.trend_data[0].value - min_val) / range_val * (chart_h - 8)) | int }}
+              {% for p in tk_extra.trend_data %}
+              L {{ (loop.index0 * chart_w / (n - 1)) | round(1) }} {{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }}
+              {% endfor %}
+              L {{ chart_w }} {{ chart_h }} L 0 {{ chart_h }} Z
+            " fill="url(#tg)"/>
+            {# 折线 #}
+            <polyline fill="none" stroke="#7c5cfc" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"
+              points="{% for p in tk_extra.trend_data %}{{ (loop.index0 * chart_w / (n - 1)) | round(1) }},{{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }} {% endfor %}"/>
+            {# 数据点 #}
+            {% for p in tk_extra.trend_data %}
+            <circle cx="{{ (loop.index0 * chart_w / (n - 1)) | round(1) }}" cy="{{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }}" r="1.8" fill="#fff" stroke="#7c5cfc" stroke-width="1">
+              <title>{{ p.date }}: {{ p.value }}</title>
+            </circle>
+            {% endfor %}
+            {# X 轴日期标注（首/中/末） #}
+            <text x="0" y="{{ chart_h + 12 }}" font-size="4" fill="#9ca3af" text-anchor="start">{{ tk_extra.trend_data[0].date[5:] }}</text>
+            {% if n > 2 %}
+            <text x="{{ chart_w / 2 }}" y="{{ chart_h + 12 }}" font-size="4" fill="#9ca3af" text-anchor="middle">{{ tk_extra.trend_data[(n // 2)].date[5:] }}</text>
+            {% endif %}
+            <text x="{{ chart_w }}" y="{{ chart_h + 12 }}" font-size="4" fill="#9ca3af" text-anchor="end">{{ tk_extra.trend_data[-1].date[5:] }}</text>
+          </svg>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk_extra.audience_interests %}
+      <div style="margin-top:12px;">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600;">受众兴趣</span>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for interest in tk_extra.audience_interests[:8] %}
+          <span class="badge" style="background:#f3e8ff;color:#7c3aed;font-size:12px;">{{ interest }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk_extra.audience_ages %}
+      <div style="margin-top:12px;">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600;">受众年龄</span>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for age in tk_extra.audience_ages %}
+          <span class="badge" style="background:#ecfdf5;color:#065f46;font-size:12px;">{{ age }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk_extra.top_regions %}
+      <div style="margin-top:12px;">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600;">热门地区</span>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for region in tk_extra.top_regions %}
+          <span class="badge" style="background:#fff7ed;color:#9a3412;font-size:12px;">{{ region }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if tk_extra.top_creators %}
+      <div style="margin-top:12px;">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600;">头部创作者</span>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for creator in tk_extra.top_creators %}
+          <span class="badge" style="background:var(--surface-hover);color:var(--text);font-size:12px;">@{{ creator }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="actions">
+      {% if trend.review_status == 'pending' %}
+      <form method="post" action="/trends/{{ trend.id }}/approve">
+        <button type="submit" id="btn-approve">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="20 6 9 17 4 12"/></svg>
+          采纳
+        </button>
+      </form>
+      <form method="post" action="/trends/{{ trend.id }}/skip">
+        <button type="submit" class="button-secondary" id="btn-skip">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="5 4 15 12 5 20"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+          跳过
+        </button>
+      </form>
+
+      {% elif trend.review_status == 'approved' %}
+        {% if trend.queue_status in ('queued', 'running') %}
+        <span class="badge" data-status="{{ trend.queue_status }}" style="padding:8px 16px;font-size:13px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+          {{ '排队中...' if trend.queue_status == 'queued' else '生成中...' }}
+        </span>
+        {% elif trend.queue_status == 'completed' %}
+        <span class="badge badge-approved" style="padding:8px 16px;font-size:13px;">已生成卡贴</span>
+        <form method="post" action="/trends/{{ trend.id }}/queue">
+          <button type="submit" class="button-secondary" id="btn-queue">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            重新生成
+          </button>
+        </form>
+        {% elif trend.queue_status == 'failed' %}
+        <span class="badge" data-status="failed" style="padding:8px 16px;font-size:13px;">生成失败</span>
+        <form method="post" action="/trends/{{ trend.id }}/queue">
+          <button type="submit" id="btn-queue">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            重试生成
+          </button>
+        </form>
+        {% else %}
+        <form method="post" action="/trends/{{ trend.id }}/queue">
+          <button type="submit" id="btn-queue">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            生成卡贴
+          </button>
+        </form>
+        {% endif %}
+
+      {% elif trend.review_status == 'skipped' %}
+      <form method="post" action="/trends/{{ trend.id }}/restore">
+        <button type="submit" class="button-secondary" id="btn-restore">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+          恢复为待审核
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- ====== 右栏：Brief ====== -->
+  <section class="panel" id="brief-editor-panel">
+    <div class="panel-header">
+      <h2>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        Brief
+      </h2>
+      {% if brief.brief_json %}
+      <span class="badge" style="background:#dcfce7;color:#166534;">已生成</span>
+      {% else %}
+      <span class="badge" style="background:#fef2f2;color:#991b1b;">未生成</span>
+      {% endif %}
+    </div>
+
+    {% set bj = brief.brief_json or {} %}
+    {% if bj %}
+    <dl class="meta-list compact-meta">
+      {% if bj.trend_name %}
+      <dt>趋势名称</dt><dd><strong>{{ bj.trend_name }}</strong></dd>
+      {% endif %}
+      {% if bj.trend_type %}
+      <dt>趋势类型</dt><dd>{{ bj.trend_type }}</dd>
+      {% endif %}
+      {% if bj.one_line_explanation %}
+      <dt>一句话解释</dt><dd>{{ bj.one_line_explanation }}</dd>
+      {% endif %}
+      {% if bj.why_now %}
+      <dt>为什么是现在</dt><dd style="font-size:13px;">{{ bj.why_now }}</dd>
+      {% endif %}
+      {% if bj.lifecycle %}
+      <dt>生命周期</dt><dd>{{ bj.lifecycle }}</dd>
+      {% endif %}
+      {% if bj.platform %}
+      <dt>平台</dt>
+      <dd>{% if bj.platform is string %}{{ bj.platform }}{% else %}{{ ', '.join(bj.platform) }}{% endif %}</dd>
+      {% endif %}
+      {% if bj.product_goal %}
+      <dt>产品方向</dt>
+      <dd>
+        {% if bj.product_goal is string %}{{ bj.product_goal }}{% else %}
+        {% for g in bj.product_goal %}
+        <span class="badge" style="background:var(--surface-hover);color:var(--text);margin-right:4px;margin-bottom:4px;font-size:12px;">{{ g }}</span>
+        {% endfor %}
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if bj.target_audience %}
+      <dt>目标受众</dt>
+      <dd style="font-size:13px;">
+        {% if bj.target_audience is mapping %}
+          {% if bj.target_audience.profile %}{{ bj.target_audience.profile }}{% endif %}
+          {% if bj.target_audience.age_range %}<br><span style="color:var(--text-muted);">年龄: {{ bj.target_audience.age_range }}</span>{% endif %}
+          {% if bj.target_audience.gender_tilt %}<span style="color:var(--text-muted);margin-left:8px;">偏向: {{ bj.target_audience.gender_tilt }}</span>{% endif %}
+        {% else %}{{ bj.target_audience }}{% endif %}
+      </dd>
+      {% endif %}
+      {% if bj.emotional_core %}
+      <dt>情感核心</dt>
+      <dd>
+        {% if bj.emotional_core is string %}{{ bj.emotional_core }}{% else %}
+        {% for e in bj.emotional_core %}
+        <span class="badge" style="background:#ede9fe;color:#6d28d9;margin-right:4px;margin-bottom:4px;font-size:12px;">{{ e }}</span>
+        {% endfor %}
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if bj.visual_symbols %}
+      <dt>视觉元素</dt>
+      <dd>
+        {% if bj.visual_symbols is string %}{{ bj.visual_symbols }}{% else %}
+        {% for s in bj.visual_symbols %}
+        <span class="badge" style="background:#e0f2fe;color:#0369a1;margin-right:4px;margin-bottom:4px;font-size:12px;">{{ s }}</span>
+        {% endfor %}
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if bj.must_avoid %}
+      <dt>必须避免</dt>
+      <dd>
+        {% if bj.must_avoid is string %}{{ bj.must_avoid }}{% else %}
+        {% for a in bj.must_avoid %}
+        <span class="badge" style="background:#fef2f2;color:#991b1b;margin-right:4px;margin-bottom:4px;font-size:12px;">{{ a }}</span>
+        {% endfor %}
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if bj.risk_notes %}
+      <dt>风险提示</dt>
+      <dd>
+        {% if bj.risk_notes is string %}{{ bj.risk_notes }}{% else %}
+        {% for r in bj.risk_notes %}
+        <span class="badge" data-status="failed" style="margin-right:4px;margin-bottom:4px;font-size:12px;">{{ r }}</span>
+        {% endfor %}
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if bj.pack_size_goal %}
+      <dt>包规模</dt>
+      <dd>
+        {% if bj.pack_size_goal is mapping %}
+          {{ bj.pack_size_goal.tier or '' }} &middot; {{ bj.pack_size_goal.sticker_count_range or '' }} 张
+        {% else %}{{ bj.pack_size_goal }}{% endif %}
+      </dd>
+      {% endif %}
+    </dl>
+
+    <form method="post" action="/trends/{{ trend.id }}/brief" style="margin-top:16px;border-top:1px solid var(--line-soft);padding-top:12px;">
+      <textarea name="brief_json" rows="8" id="brief-textarea" style="width:100%;font-family:monospace;font-size:12px;padding:12px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--text);resize:vertical;">{{ bj | tojson(indent=2) }}</textarea>
+      <div class="actions" style="margin-top:8px;">
+        <button type="submit" id="btn-save-brief">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          保存 Brief
+        </button>
+      </div>
+    </form>
+    {% else %}
+    <div class="empty-state" style="padding:30px 24px;">
+      <div style="font-size:24px;margin-bottom:8px;">📋</div>
+      <p style="font-weight:600;color:var(--text);">暂无 Brief</p>
+      <p style="color:var(--text-muted);font-size:13px;">点击「采纳」后系统将自动生成 Brief，或手动编辑。</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+{% if trend.source_type == 'news' %}
+{% set card = (trend.raw_payload or {}).get('card', {}) %}
+{% if card %}
+<section class="panel" id="raw-data-panel">
+  <div class="panel-header">
+    <h2>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      机会卡片
+    </h2>
+  </div>
+  <div style="padding:16px 24px;">
+    <dl class="meta-list compact-meta">
+      <dt>主题</dt><dd><strong>{{ card.get('normalized_theme', '-') }}</strong></dd>
+      <dt>主题类型</dt><dd>{{ card.get('theme_type', '-') }}</dd>
+      <dt>一句话解读</dt><dd>{{ card.get('one_line_interpretation', '-') }}</dd>
+      <dt>机会分</dt><dd><strong>{{ card.get('sticker_opportunity_score', '-') }}</strong></dd>
+      <dt>热度分</dt><dd>{{ card.get('trend_heat_score', '-') }}</dd>
+      <dt>适配等级</dt><dd>{{ card.get('sticker_fit_level', '-') }}</dd>
+      <dt>包原型</dt><dd>{{ card.get('recommended_pack_archetype', '-') }}</dd>
+      <dt>决策</dt>
+      <dd>
+        {% if card.get('decision') == 'recommend' %}
+        <span class="badge" style="background:#dcfce7;color:#166534;">{{ card.decision }}</span>
+        {% else %}
+        <span class="badge" style="background:#fef9c3;color:#854d0e;">{{ card.get('decision', '-') }}</span>
+        {% endif %}
+      </dd>
+    </dl>
+    {% if card.get('suggested_visual_symbol_pool') %}
+    <div style="margin-top:10px;">
+      <span style="font-size:12px;color:var(--text-muted);font-weight:600;">视觉符号池</span>
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+        {% for sym in card.suggested_visual_symbol_pool %}
+        <span class="badge" style="background:#e0f2fe;color:#0369a1;font-size:12px;">{{ sym }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if card.get('core_emotional_hook') %}
+    <div style="margin-top:10px;">
+      <span style="font-size:12px;color:var(--text-muted);font-weight:600;">情感钩子</span>
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+        {% for hook in card.core_emotional_hook %}
+        <span class="badge" style="background:#ede9fe;color:#6d28d9;font-size:12px;">{{ hook }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,9 +1,8 @@
-"""贴纸包生成 Pipeline
+"""Sticker Pack Generation Pipeline
 
-串联 Planner → Designer → Prompter → 按主题预览图 → 逐张生图 的完整流程。
+Planner -> Designer(Spec) -> Prompt Builder -> Image Generation
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -13,12 +12,12 @@ from src.models.sticker_pack import PipelineResult
 from src.services.batch.sticker_prompts import (
     PLANNER_SYSTEM,
     DESIGNER_SYSTEM,
-    PROMPTER_SYSTEM,
+    PROMPT_BUILDER_SYSTEM,
     build_planner_prompt,
     build_designer_prompt,
-    build_prompter_prompt,
-    build_preview_prompt,
+    build_prompt_builder_prompt,
     extract_part2,
+    parse_prompt_builder_output,
     parse_prompter_output,
     flatten_prompts,
 )
@@ -29,18 +28,22 @@ ProgressCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 
 
 class StickerPackPipeline:
-    """三 Agent + 按主题预览图 + 生图 的完整 Pipeline"""
+    """Planner -> Designer(Spec) -> Prompt Builder -> Image Generation Pipeline"""
+
+    DEFAULT_IMAGE_WORKERS = 5
 
     def __init__(
         self,
         openai_service,
         gemini_service,
         output_dir: str = "output",
+        image_workers: int | None = None,
     ):
         self.openai = openai_service
         self.gemini = gemini_service
         self.base_output_dir = Path(output_dir)
-        self.output_dir = self.base_output_dir  # will be set per-run
+        self.output_dir = self.base_output_dir
+        self.image_workers = image_workers or self.DEFAULT_IMAGE_WORKERS
 
     def run(
         self,
@@ -48,26 +51,34 @@ class StickerPackPipeline:
         user_style: Optional[str] = None,
         user_color_mood: Optional[str] = None,
         user_extra: str = "",
+        trend_brief: Optional[Dict[str, Any]] = None,
         skip_images: bool = False,
         on_progress: ProgressCallback = None,
     ) -> PipelineResult:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_theme = _sanitize_filename(theme)
+        display_theme = theme
+        if trend_brief and isinstance(trend_brief.get("trend_name"), str):
+            tn = trend_brief["trend_name"].strip()
+            if tn:
+                display_theme = tn
+        safe_theme = _sanitize_filename(display_theme)
         self.output_dir = self.base_output_dir / f"{timestamp}_{safe_theme}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        result = PipelineResult(theme=theme)
+        result = PipelineResult(theme=display_theme)
         result.mark_started()
 
         try:
             self._emit(on_progress, "pipeline_start", {
-                "theme": theme,
+                "theme": display_theme,
                 "output_dir": str(self.output_dir),
             })
 
             # Step 1: Planner
             self._emit(on_progress, "planner_start", {})
-            planner_text = self._run_planner(theme, user_style, user_color_mood, user_extra)
+            planner_text = self._run_planner(
+                theme, user_style, user_color_mood, user_extra, trend_brief
+            )
             result.planner_output = planner_text
             result.planner_part2 = extract_part2(planner_text)
             self._save("planner_output.txt", planner_text)
@@ -75,41 +86,44 @@ class StickerPackPipeline:
 
             # Step 2: Designer
             self._emit(on_progress, "designer_start", {})
-            designer_text = self._run_designer(result.planner_part2)
+            designer_text = self._run_designer(
+                result.planner_output,
+                trend_brief,
+                display_theme,
+            )
             result.designer_output = designer_text
             self._save("designer_output.txt", designer_text)
             self._emit(on_progress, "designer_done", {"chars": len(designer_text)})
 
-            # Step 3: Prompter
+            # Step 3: Prompt Builder
             self._emit(on_progress, "prompter_start", {})
-            prompter_text = self._run_prompter(result.planner_part2, designer_text)
-            result.prompter_output = prompter_text
-            self._save("prompter_output.txt", prompter_text)
-            self._emit(on_progress, "prompter_done", {"chars": len(prompter_text)})
+            prompt_builder_text = self._run_prompt_builder(
+                trend_brief=trend_brief,
+                pack_plan_text=result.planner_output,
+                sticker_spec_text=designer_text,
+                theme=display_theme,
+            )
+            result.prompter_output = prompt_builder_text
+            self._save("prompt_builder_output.txt", prompt_builder_text)
+            self._emit(on_progress, "prompter_done", {"chars": len(prompt_builder_text)})
 
-            # Step 4: Parse prompts (grouped by category)
-            grouped = parse_prompter_output(prompter_text)
+            # Step 4: Parse prompts
+            builder_parsed = parse_prompt_builder_output(prompt_builder_text)
+            if builder_parsed.get("pack_foundation"):
+                self._save("pack_foundation.txt", builder_parsed["pack_foundation"])
+            if builder_parsed.get("quality_control"):
+                self._save("quality_control.txt", builder_parsed["quality_control"])
+
+            grouped = parse_prompter_output(prompt_builder_text)
             result.prompts_grouped = grouped
             result.prompts_flat = flatten_prompts(grouped)
             total_count = len(result.prompts_flat)
             logger.info(
-                "解析出 %d 条 prompt，分 %d 个主题",
+                "Parsed %d prompts in %d groups",
                 total_count, len(grouped),
             )
 
-            # Step 5: Per-category preview images (multi-threaded)
-            if grouped:
-                self._emit(on_progress, "preview_start", {"categories": len(grouped)})
-                preview_paths = self._generate_previews_by_category(
-                    grouped, result.planner_part2,
-                )
-                result.preview_paths = preview_paths
-                self._emit(on_progress, "preview_done", {
-                    "count": len(preview_paths),
-                    "paths": preview_paths,
-                })
-
-            # Step 6: Generate sticker images (optional)
+            # Step 5: Generate sticker images
             if not skip_images and result.prompts_flat:
                 self._emit(on_progress, "images_start", {"count": total_count})
                 image_paths = self._generate_images(result.prompts_flat)
@@ -123,20 +137,19 @@ class StickerPackPipeline:
             self._emit(on_progress, "pipeline_done", {
                 "prompts": total_count,
                 "categories": len(grouped),
-                "previews": len(result.preview_paths),
                 "images": len(result.image_paths),
                 "duration": result.duration_seconds,
             })
 
         except Exception as e:
-            logger.error("Pipeline 失败: %s", e)
+            logger.error("Pipeline failed: %s", e)
             result.mark_failed(str(e))
             self._emit(on_progress, "pipeline_error", {"error": str(e)})
 
         return result
 
     # ------------------------------------------------------------------
-    # Agent 调用
+    # Agent calls
     # ------------------------------------------------------------------
 
     def _run_planner(
@@ -145,9 +158,16 @@ class StickerPackPipeline:
         user_style: Optional[str],
         user_color_mood: Optional[str],
         user_extra: str,
+        trend_brief: Optional[Dict[str, Any]],
     ) -> str:
         logger.info("Step 1: Planner Agent — theme=%s", theme)
-        user_prompt = build_planner_prompt(theme, user_style, user_color_mood, user_extra)
+        user_prompt = build_planner_prompt(
+            theme=theme if trend_brief is None else None,
+            user_style=user_style,
+            user_color_mood=user_color_mood,
+            user_extra=user_extra,
+            trend_brief=trend_brief,
+        )
         result = self.openai.generate(
             prompt=user_prompt,
             system=PLANNER_SYSTEM,
@@ -155,9 +175,18 @@ class StickerPackPipeline:
         )
         return result["text"]
 
-    def _run_designer(self, planner_part2: str) -> str:
-        logger.info("Step 2: Designer Agent")
-        user_prompt = build_designer_prompt(planner_part2)
+    def _run_designer(
+        self,
+        planner_full_output: str,
+        trend_brief: Optional[Dict[str, Any]],
+        theme: str,
+    ) -> str:
+        logger.info("Step 2: Designer Agent (Sticker Spec)")
+        user_prompt = build_designer_prompt(
+            planner_full_output,
+            trend_brief=trend_brief,
+            theme=theme,
+        )
         result = self.openai.generate(
             prompt=user_prompt,
             system=DESIGNER_SYSTEM,
@@ -165,87 +194,35 @@ class StickerPackPipeline:
         )
         return result["text"]
 
-    def _run_prompter(self, planner_part2: str, designer_output: str) -> str:
-        logger.info("Step 3: Prompter Agent")
-        user_prompt = build_prompter_prompt(planner_part2, designer_output)
+    def _run_prompt_builder(
+        self,
+        *,
+        trend_brief: Optional[Dict[str, Any]],
+        pack_plan_text: str,
+        sticker_spec_text: str,
+        theme: str,
+    ) -> str:
+        logger.info("Step 3: Prompt Builder")
+        user_prompt = build_prompt_builder_prompt(
+            sticker_spec_text,
+            trend_brief=trend_brief,
+            pack_plan_text=pack_plan_text,
+            theme=theme,
+        )
         result = self.openai.generate(
             prompt=user_prompt,
-            system=PROMPTER_SYSTEM,
+            system=PROMPT_BUILDER_SYSTEM,
             temperature=0.7,
         )
         return result["text"]
 
     # ------------------------------------------------------------------
-    # 按主题分类生成预览图（多线程）
-    # ------------------------------------------------------------------
-
-    def _generate_previews_by_category(
-        self,
-        grouped_prompts: Dict[str, List[Dict]],
-        style_direction: str,
-        max_workers: int = 3,
-    ) -> Dict[str, str]:
-        """为每个主题分类生成一张预览图，多线程并行。
-
-        Returns:
-            {category_name: image_path, ...}
-        """
-        logger.info("Step 5: 按主题生成预览图 (%d 个主题)", len(grouped_prompts))
-
-        preview_dir = self.output_dir / "previews"
-        preview_dir.mkdir(parents=True, exist_ok=True)
-
-        results: Dict[str, str] = {}
-
-        def _gen_one(category: str, stickers: List[Dict]) -> tuple[str, Optional[str]]:
-            sticker_text = "\n\n".join(
-                f"Sticker {s['index']}:\n{s['prompt']}" for s in stickers
-            )
-            meta_prompt = build_preview_prompt(
-                category_name=category,
-                sticker_prompts=sticker_text,
-                style_direction=style_direction,
-            )
-            meta_result = self.openai.generate(prompt=meta_prompt, temperature=0.7)
-            image_prompt = meta_result["text"]
-
-            safe_name = _sanitize_filename(category)
-            out_path = preview_dir / f"preview_{safe_name}.png"
-
-            img = self.gemini.generate_image(
-                prompt=image_prompt,
-                output_path=out_path,
-            )
-            if img.get("success"):
-                logger.info("预览图完成: %s → %s", category, out_path)
-                return category, str(out_path)
-            else:
-                logger.warning("预览图失败: %s — %s", category, img.get("error", "unknown"))
-                return category, None
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_gen_one, cat, stickers): cat
-                for cat, stickers in grouped_prompts.items()
-            }
-            for future in as_completed(futures):
-                cat_name = futures[future]
-                try:
-                    cat, path = future.result()
-                    if path:
-                        results[cat] = path
-                except Exception as e:
-                    logger.error("预览图线程异常 [%s]: %s", cat_name, e)
-
-        return results
-
-    # ------------------------------------------------------------------
-    # 逐张生图
+    # Image generation
     # ------------------------------------------------------------------
 
     def _generate_images(self, prompts: List[Dict[str, Any]]) -> List[str]:
-        """用 Gemini 批量生成贴纸图片。"""
-        logger.info("Step 6: 逐张生图 (%d 张)", len(prompts))
+        """Generate sticker images via Gemini in batch."""
+        logger.info("Step 5: generating images (%d stickers)", len(prompts))
 
         images_dir = self.output_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
@@ -254,7 +231,7 @@ class StickerPackPipeline:
         results = self.gemini.generate_batch(
             prompts=prompt_texts,
             output_dir=images_dir,
-            max_workers=3,
+            max_workers=self.image_workers,
         )
 
         paths = []
@@ -262,20 +239,20 @@ class StickerPackPipeline:
             if r.get("success") and r.get("image_path"):
                 paths.append(str(r["image_path"]))
             else:
-                logger.warning("Sticker %d 生成失败: %s", i + 1, r.get("error", "unknown"))
+                logger.warning("Sticker %d generation failed: %s", i + 1, r.get("error", "unknown"))
 
-        logger.info("生图完成: %d/%d 成功", len(paths), len(prompts))
+        logger.info("Image generation done: %d/%d succeeded", len(paths), len(prompts))
         return paths
 
     # ------------------------------------------------------------------
-    # 工具方法
+    # Utility methods
     # ------------------------------------------------------------------
 
     def _save(self, filename: str, content: str):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         path = self.output_dir / filename
         path.write_text(content, encoding="utf-8")
-        logger.debug("已保存: %s", path)
+        logger.debug("Saved: %s", path)
 
     @staticmethod
     def _emit(callback: ProgressCallback, event: str, data: Dict[str, Any]):
@@ -287,8 +264,8 @@ class StickerPackPipeline:
 
 
 def _sanitize_filename(name: str) -> str:
-    """将分类名转为安全的文件名片段。"""
+    """Convert a name into a filesystem-safe filename segment."""
     import re as _re
-    clean = _re.sub(r"[^\w\u4e00-\u9fff-]", "_", name)
+    clean = _re.sub(r"[^\w-]", "_", name)
     clean = _re.sub(r"_+", "_", clean).strip("_")
     return clean[:60] or "category"

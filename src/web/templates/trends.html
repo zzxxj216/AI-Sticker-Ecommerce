@@ -1,0 +1,384 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Trend Review</p>
+    <h1>热点咨询</h1>
+    <p class="page-subtitle">AI 评审 + 人工审核，双榜并列，记录每条采纳。</p>
+  </div>
+  <div class="header-actions">
+    {% if current_user %}
+    <button class="btn-crawl" id="btn-sync" onclick="syncData()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      运行热点挖掘引擎
+    </button>
+    {% else %}
+    <a href="/login?next=/trends" class="btn-secondary" style="padding:8px 16px;font-size:13px;text-decoration:none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M13.8 12H3"/></svg>
+      登录解锁全部功能
+    </a>
+    {% endif %}
+  </div>
+</section>
+
+{% set news_recommend = news_items|selectattr('score', 'ge', 70)|list %}
+{% set news_watchlist = news_items|selectattr('score', 'lt', 70)|list %}
+{% set news_approved = news_items|selectattr('review_status', 'equalto', 'approved')|list %}
+{% set news_batch_date = news_items[0].batch_date if news_items and news_items[0].batch_date else (news_items[0].created_at[:10] if news_items else '未知日期') %}
+
+<section class="stat-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+  <article class="stat-card">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M4 22h16a2 2 0 002-2V4a2 2 0 00-2-2H8a2 2 0 00-2 2v16a2 2 0 01-2 2zm0 0a2 2 0 01-2-2v-9c0-1.1.9-2 2-2h2"/></svg>
+      聚合热点
+    </span>
+    <strong class="stat-value">{{ news_items|length }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      人工已采纳
+    </span>
+    <strong class="stat-value">{{ news_approved|length }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M9 12a4 4 0 104 4V4a5 5 0 005 5"/></svg>
+      TikTok 话题
+    </span>
+    <strong class="stat-value">{{ tiktok_items|length }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      话题已采纳
+    </span>
+    <strong class="stat-value">{{ tiktok_items|selectattr('review_status', 'equalto', 'approved')|list|length }}</strong>
+  </article>
+</section>
+
+<!-- ── 三榜单 ── -->
+<div class="dual-board" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+
+  <!-- 列1：高分热点信息 -->
+  <div class="leaderboard" id="news-leaderboard-high">
+
+    <!-- 区段1: AI 推荐 (score ≥ 70) -->
+    <div class="leaderboard-header">
+      <div class="leaderboard-header-left">
+        <div class="leaderboard-icon news">🔥</div>
+        <span class="leaderboard-title">热点信息 <small style="font-weight:500; font-size:12px; opacity:0.7; margin-left:8px;">采集于: {{ news_batch_date }}</small></span>
+      </div>
+      <span class="leaderboard-count" title="评分 ≥ 70 · 高分系统推荐">{{ news_recommend|length }} 项 · 评分≥70</span>
+    </div>
+    <div class="leaderboard-body" style="max-height:none;">
+      {% if news_recommend %}
+        {% for item in news_recommend %}
+        <div class="leaderboard-item-wrap" id="item-{{ item.id|replace(':', '-') }}">
+          {% if current_user %}
+          <a class="leaderboard-item" href="/trends/{{ item.id }}">
+          {% else %}
+          <div class="leaderboard-item" style="cursor:default;">
+          {% endif %}
+            <div class="rank-number {% if loop.index == 1 %}top-1{% elif loop.index == 2 %}top-2{% elif loop.index == 3 %}top-3{% endif %}">
+              {{ loop.index }}
+            </div>
+            <div class="item-content">
+              <div class="item-title">{{ item.trend_name or item.title }}</div>
+              {% if item.summary %}
+              <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
+              {% endif %}
+            </div>
+            <div class="item-metrics">
+              <div class="metric">
+                <span class="metric-value">{{ '%.0f'|format(item.score or 0) }}</span>
+                <span class="metric-label">评分</span>
+              </div>
+            </div>
+            <div class="item-status">
+              {% if item.review_status == 'approved' %}
+                <span class="badge badge-approved" title="由 {{ item.reviewed_by or '?' }} 采纳">✓ 已采纳</span>
+              {% elif item.review_status == 'skipped' %}
+                <span class="badge badge-skipped">已跳过</span>
+              {% else %}
+                <span class="badge badge-ai-rec">热点信息</span>
+              {% endif %}
+            </div>
+          {% if current_user %}</a>{% else %}</div>{% endif %}
+          {% if current_user %}
+          {% if item.review_status == 'pending' %}
+          <div class="inline-actions">
+            <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳此热点">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              采纳
+            </button>
+            <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)" title="跳过此热点">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              跳过
+            </button>
+          </div>
+          {% elif item.review_status == 'approved' and item.reviewed_by %}
+          <div class="review-meta">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            {{ item.reviewed_by }} 采纳
+          </div>
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="leaderboard-empty" style="padding:30px 24px;">
+        <p>暂无高分推荐 (≥70 分)</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 列2：待人工审核栏 -->
+  <div class="leaderboard" id="news-leaderboard-review">
+    <div class="leaderboard-header" style="background: rgba(0,0,0,0.015);">
+      <div class="leaderboard-header-left">
+        <div class="leaderboard-icon news" style="filter: grayscale(0.6);">👀</div>
+        <span class="leaderboard-title">需人工审核</span>
+      </div>
+      <span class="leaderboard-count" title="评分 50-70">{{ news_watchlist|length }} 项 · 评分 50-70</span>
+    </div>
+
+    <!-- 区段2: 待人工审核 (score 50-70) -->
+    <div class="leaderboard-body" style="max-height:none;">
+      {% if news_watchlist %}
+      {% for item in news_watchlist %}
+      <div class="leaderboard-item-wrap" id="item-{{ item.id|replace(':', '-') }}">
+        {% if current_user %}
+        <a class="leaderboard-item" href="/trends/{{ item.id }}">
+        {% else %}
+        <div class="leaderboard-item" style="cursor:default;">
+        {% endif %}
+          <div class="rank-number">
+            {{ loop.index + news_recommend|length }}
+          </div>
+          <div class="item-content">
+            <div class="item-title">{{ item.trend_name or item.title }}</div>
+            {% if item.summary %}
+            <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
+            {% endif %}
+          </div>
+          <div class="item-metrics">
+            <div class="metric">
+              <span class="metric-value">{{ '%.0f'|format(item.score or 0) }}</span>
+              <span class="metric-label">评分</span>
+            </div>
+          </div>
+          <div class="item-status">
+            {% if item.review_status == 'approved' %}
+              <span class="badge badge-approved" title="由 {{ item.reviewed_by or '?' }} 采纳">✓ 已采纳</span>
+            {% elif item.review_status == 'skipped' %}
+              <span class="badge badge-skipped">已跳过</span>
+            {% else %}
+              <span class="badge badge-ai-watch">待审核</span>
+            {% endif %}
+          </div>
+        {% if current_user %}</a>{% else %}</div>{% endif %}
+        {% if current_user %}
+        {% if item.review_status == 'pending' %}
+        <div class="inline-actions">
+          <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳此热点">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            采纳
+          </button>
+          <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)" title="跳过此热点">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            跳过
+          </button>
+        </div>
+        {% elif item.review_status == 'approved' and item.reviewed_by %}
+        <div class="review-meta">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          {{ item.reviewed_by }} 采纳
+        </div>
+        {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% else %}
+      <div class="leaderboard-empty" style="padding:30px 24px;">
+        <p>暂无待审核数据</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 右栏：TikTok 话题榜 -->
+  <div class="leaderboard" id="tiktok-leaderboard">
+    <div class="leaderboard-header">
+      <div class="leaderboard-header-left">
+        <div class="leaderboard-icon tiktok">📱</div>
+        <span class="leaderboard-title">TikTok 话题榜</span>
+      </div>
+      <span class="leaderboard-count">{{ tiktok_items|length }} 项</span>
+    </div>
+    <div class="leaderboard-body">
+      {% if tiktok_items %}
+        {% for item in tiktok_items %}
+        <div class="leaderboard-item-wrap" id="item-{{ item.id|replace(':', '-') }}">
+          {% if current_user %}
+          <a class="leaderboard-item" href="/trends/{{ item.id }}">
+          {% else %}
+          <div class="leaderboard-item" style="cursor:default;">
+          {% endif %}
+            <div class="rank-number {% if loop.index == 1 %}top-1{% elif loop.index == 2 %}top-2{% elif loop.index == 3 %}top-3{% endif %}">
+              {{ loop.index }}
+            </div>
+            <div class="item-content">
+              <div class="item-title">#{{ item.title }}</div>
+              {% if item.summary %}
+              <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
+              {% elif item.trend_name and item.trend_name != item.title %}
+              <div class="item-subtitle">{{ item.trend_name }}</div>
+              {% endif %}
+            </div>
+            <div class="item-metrics">
+              <div class="metric">
+                <span class="metric-value views-value">{{ format_views(item.heat_score) }}</span>
+                <span class="metric-label">播放量</span>
+              </div>
+              {% if item.score > 0 %}
+              <div class="metric">
+                <span class="metric-value">{{ '%.0f'|format(item.score) }}</span>
+                <span class="metric-label">评分</span>
+              </div>
+              {% endif %}
+            </div>
+            <div class="item-status">
+              {% if item.review_status == 'approved' %}
+                <span class="badge badge-approved">✓ 已采纳</span>
+              {% elif item.review_status == 'skipped' %}
+                <span class="badge badge-skipped">已跳过</span>
+              {% else %}
+                <span class="badge" style="font-size:11px;padding:3px 8px;">pending</span>
+              {% endif %}
+            </div>
+          {% if current_user %}</a>{% else %}</div>{% endif %}
+          {% if current_user %}
+          {% if item.review_status == 'pending' %}
+          <div class="inline-actions">
+            <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              采纳
+            </button>
+            <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              跳过
+            </button>
+          </div>
+          {% elif item.review_status == 'approved' and item.reviewed_by %}
+          <div class="review-meta">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            {{ item.reviewed_by }} 采纳
+          </div>
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="leaderboard-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 104 4V4a5 5 0 005 5"/></svg>
+        <p>暂无 TikTok 话题数据</p>
+        <p style="font-size:11px;margin-top:4px;">需要先运行 TikTok 话题抓取</p>
+      </div>
+      {% endif %}
+    </div>
+    {% if current_user %}
+    <div class="leaderboard-footer">
+      <button class="btn-crawl" id="btn-crawl-tiktok" onclick="crawlTikTok()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 104 4V4a5 5 0 005 5"/></svg>
+        抓取 TikTok 话题
+      </button>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+async function reviewTrend(trendId, action, btn) {
+  const wrap = btn.closest('.leaderboard-item-wrap');
+  const actionsBar = btn.closest('.inline-actions');
+  const endpoint = action === 'approve'
+    ? `/api/trends/${encodeURIComponent(trendId)}/approve`
+    : `/api/trends/${encodeURIComponent(trendId)}/skip`;
+
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+
+  try {
+    const resp = await fetch(endpoint, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+
+    // Update UI in-place
+    const statusEl = wrap.querySelector('.item-status');
+    if (action === 'approve') {
+      statusEl.innerHTML = '<span class="badge badge-approved">✓ 已采纳</span>';
+      actionsBar.innerHTML = `<div class="review-meta">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        ${data.reviewed_by || 'anonymous'} 采纳
+      </div>`;
+    } else {
+      statusEl.innerHTML = '<span class="badge badge-skipped">已跳过</span>';
+      actionsBar.remove();
+    }
+    wrap.style.opacity = action === 'skip' ? '0.5' : '1';
+  } catch (e) {
+    alert('操作失败: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = action === 'approve' ? '采纳' : '跳过';
+  }
+}
+
+async function syncData() {
+  const btn = document.getElementById('btn-sync');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.classList.add('loading');
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 引擎启动中…';
+  try {
+    const resp = await fetch('/api/jobs/trigger', { method: 'POST' });
+    const data = await resp.json();
+    alert(`热点挖掘任务已下发后台 (Job ID: ${data.job_id})。由于分析耗时较长，请稍后前往「任务监控」或刷新本页查看结果。`);
+  } catch (e) {
+    alert('启动失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.innerHTML = orig;
+  }
+}
+
+async function crawlTikTok() {
+  const btn = document.getElementById('btn-crawl-tiktok');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.classList.add('loading');
+  btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><path d="M9 12a4 4 0 104 4V4a5 5 0 005 5"/></svg> 调度中…';
+  try {
+    const resp = await fetch('/api/tiktok/crawl', { method: 'POST' });
+    const data = await resp.json();
+    if (data.error) {
+      alert('调度失败: ' + data.error);
+    } else {
+      alert(`TikTok 前端抓取任务已发往后台！(Job ID: ${data.job_id})\n稍后刷新页面查看新趋势卡片。`);
+    }
+  } catch (e) {
+    alert('调度失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.innerHTML = orig;
+  }
+}
+</script>
+<style>
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+{% endblock %}

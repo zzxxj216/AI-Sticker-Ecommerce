@@ -1,11 +1,11 @@
-"""贴纸包生成 — 新版数据模型
+"""Sticker Pack Generation - Data Models
 
-多 Agent 架构数据结构：
-- PackPlan: Planner Agent 输出（6 板块纯文本规划）
-- StickerDesign: Designer Agent 输出（单张贴纸设计）
-- StickerPrompt: Prompter Agent 输出（单张图片生成 prompt）
-- CategoryPreview: 分类预览图结果
-- StickerPackConfig / StickerPackResult: 整包配置与结果
+Multi-agent architecture data structures:
+- PackPlan: Planner Agent output (6-section text planning)
+- StickerDesign: Designer Agent output (single sticker design)
+- StickerPrompt: Prompter Agent output (single image generation prompt)
+- CategoryPreview: Category preview result
+- StickerPackConfig / StickerPackResult: Full pack config and result
 """
 
 from datetime import datetime
@@ -15,85 +15,101 @@ from pydantic import BaseModel, Field
 
 
 # ------------------------------------------------------------------
-# Planner Agent 输出
+# Planner Agent output
 # ------------------------------------------------------------------
 
 class PackPlan(BaseModel):
-    """Planner Agent 的结构化输出
+    """Planner Agent structured output
 
-    从 AgentResponse.structured_data 解析而来，
-    6 个板块均为自由文本字符串，LLM 根据主题自行组织内容。
+    Parsed from AgentResponse.structured_data,
+    all 6 sections are free-text strings, LLM organizes content based on theme.
     """
 
-    theme_name: str = Field(default="", description="简短的产品化主题名称")
-    theme_direction: str = Field(default="", description="主题方向：情绪核心、主打氛围、为什么适合做贴纸包")
-    pack_structure: str = Field(default="", description="贴纸结构：分类模块、数量分配、各类用途")
-    design_style: str = Field(default="", description="设计风格：画风、质感、配色感觉、一致性")
-    sticker_format: str = Field(default="", description="贴纸形式：形状、尺寸搭配、内容与版型匹配")
-    hit_details: str = Field(default="", description="爆款细节：商品感驱动因素、常见坑")
-    bundle_example: str = Field(default="", description="组合示例：1 套完整卡包搭配方案")
+    theme_name: str = Field(default="", description="Short product theme name")
+    theme_direction: str = Field(
+        default="", description="Theme direction: emotional core, main atmosphere, why suitable for sticker pack"
+    )
+    pack_structure: str = Field(
+        default="", description="Pack structure: category modules, quantity allocation, usage types"
+    )
+    design_style: str = Field(
+        default="", description="Design style: illustration style, texture, color mood, consistency"
+    )
+    sticker_format: str = Field(
+        default="", description="Sticker format: shape, size combinations, content and format matching"
+    )
+    hit_details: str = Field(
+        default="", description="Hit-selling details: product appeal drivers, common pitfalls"
+    )
+    bundle_example: str = Field(
+        default="", description="Bundle example: 1 complete pack composition"
+    )
 
 
 # ------------------------------------------------------------------
-# Designer Agent 输出
+# Designer Agent output
 # ------------------------------------------------------------------
 
 STICKER_CATEGORIES = ("scene", "vehicle", "landmark", "icon", "text")
 
 
 class StickerDesign(BaseModel):
-    """Designer Agent 的输出：单张贴纸设计"""
+    """Designer Agent output: single sticker design"""
 
-    index: int = Field(..., description="序号 (1-based)")
-    main_element: str = Field(..., description="主元素")
-    decorative_elements: List[str] = Field(default_factory=list, description="装饰元素（2-3 个）")
-    text_slogan: str = Field(default="", description="文案/标语（可选）")
-    category: str = Field(default="scene", description="分类: scene/vehicle/landmark/icon/text")
+    index: int = Field(..., description="Index (1-based)")
+    main_element: str = Field(..., description="Main element")
+    decorative_elements: List[str] = Field(
+        default_factory=list, description="Decorative elements (2-3)"
+    )
+    text_slogan: str = Field(default="", description="Text/slogan (optional)")
+    category: str = Field(default="scene", description="Category: scene/vehicle/landmark/icon/text")
 
 
 # ------------------------------------------------------------------
-# Prompter Agent 输出
+# Prompter Agent output
 # ------------------------------------------------------------------
 
 class StickerPrompt(BaseModel):
-    """Prompter Agent 的输出：单张图片生成 prompt"""
+    """Prompter Agent output: single image generation prompt"""
 
-    index: int = Field(..., description="序号 (1-based)")
-    title: str = Field(default="", description="贴纸标题（3-6 词）")
-    image_prompt: str = Field(..., description="图片生成 prompt（50-90 词）")
-    category: str = Field(default="scene", description="分类")
+    index: int = Field(..., description="Index (1-based)")
+    title: str = Field(default="", description="Sticker title (3-6 words)")
+    image_prompt: str = Field(..., description="Image generation prompt (50-90 words)")
+    category: str = Field(default="scene", description="Category")
 
 
 # ------------------------------------------------------------------
-# 分类预览图结果
+# Category preview result
 # ------------------------------------------------------------------
 
 class CategoryPreview(BaseModel):
-    """单个分类的预览图生成结果"""
+    """Single category preview generation result"""
 
-    category: str = Field(..., description="分类名")
-    sticker_count: int = Field(default=0, description="该分类贴纸数")
-    preview_prompt: str = Field(default="", description="合成预览的 prompt")
-    preview_image_path: Optional[str] = Field(None, description="预览图路径")
+    category: str = Field(..., description="Category name")
+    sticker_count: int = Field(default=0, description="Sticker count in this category")
+    preview_prompt: str = Field(default="", description="Preview synthesis prompt")
+    preview_image_path: Optional[str] = Field(None, description="Preview image path")
     success: bool = Field(default=False)
     error: Optional[str] = Field(None)
 
 
 # ------------------------------------------------------------------
-# 整包配置与结果
+# Full pack config and result
 # ------------------------------------------------------------------
 
 class StickerPackConfig(BaseModel):
-    """一套贴纸包的完整配置"""
+    """Complete sticker pack configuration"""
 
-    pack_id: str = Field(default="", description="包 ID")
-    pack_index: int = Field(default=1, description="包序号 (1-based)")
-    pack_name: str = Field(default="", description="包名称")
+    pack_id: str = Field(default="", description="Pack ID")
+    pack_index: int = Field(default=1, description="Pack index (1-based)")
+    pack_name: str = Field(default="", description="Pack name")
 
-    plan: Optional[PackPlan] = Field(None, description="Planner 输出")
-    designs: List[StickerDesign] = Field(default_factory=list, description="Designer 输出")
-    prompts: List[StickerPrompt] = Field(default_factory=list, description="Prompter 输出")
-    category_previews: List[CategoryPreview] = Field(default_factory=list, description="分类预览图")
+    plan: Optional[PackPlan] = Field(None, description="Planner output")
+    designs: List[StickerDesign] = Field(default_factory=list, description="Designer output")
+    prompts: List[StickerPrompt] = Field(default_factory=list, description="Prompter output")
+    category_previews: List[CategoryPreview] = Field(
+        default_factory=list, description="Category previews"
+    )
 
     created_at: datetime = Field(default_factory=datetime.now)
 
@@ -115,7 +131,7 @@ class StickerPackConfig(BaseModel):
 
 
 class StickerPackResult(BaseModel):
-    """一套贴纸包的生成结果"""
+    """Sticker pack generation result"""
 
     pack_id: str = Field(default="")
     pack_index: int = Field(default=1)
@@ -148,23 +164,33 @@ class StickerPackResult(BaseModel):
 
 
 # ------------------------------------------------------------------
-# Pipeline 整体结果
+# Pipeline overall result
 # ------------------------------------------------------------------
 
 class PipelineResult(BaseModel):
-    """三 Agent Pipeline 的完整运行结果"""
+    """Full multi-agent Pipeline run result"""
 
     theme: str = Field(default="")
-    planner_output: str = Field(default="", description="Planner 完整输出")
-    planner_part2: str = Field(default="", description="Planner PART 2 摘取")
-    designer_output: str = Field(default="", description="Designer 完整输出")
-    prompter_output: str = Field(default="", description="Prompter 完整输出")
-    prompts_grouped: Dict[str, List[Dict[str, Any]]] = Field(
-        default_factory=dict, description="按主题分组的 prompt: {category: [{index, prompt}, ...]}"
+    planner_output: str = Field(default="", description="Planner full output")
+    planner_part2: str = Field(
+        default="",
+        description="Plan excerpt for Designer/Prompter (4-part: PART2-4; legacy: PART2)",
     )
-    prompts_flat: List[Dict[str, Any]] = Field(default_factory=list, description="展平后的逐张 prompt")
-    preview_paths: Dict[str, str] = Field(default_factory=dict, description="按主题分类的预览图路径")
-    image_paths: List[str] = Field(default_factory=list, description="逐张生图路径")
+    designer_output: str = Field(default="", description="Designer full output")
+    prompter_output: str = Field(default="", description="Prompter full output")
+    prompts_grouped: Dict[str, List[Dict[str, Any]]] = Field(
+        default_factory=dict,
+        description="Grouped prompts: {category: [{index, prompt}, ...]}",
+    )
+    prompts_flat: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Flattened per-sticker prompts"
+    )
+    preview_paths: Dict[str, str] = Field(
+        default_factory=dict, description="Preview image paths by category"
+    )
+    image_paths: List[str] = Field(
+        default_factory=list, description="Per-sticker generated image paths"
+    )
     status: str = Field(default="pending")
     error: Optional[str] = Field(None)
 

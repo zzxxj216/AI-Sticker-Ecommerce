@@ -1,14 +1,24 @@
-from dotenv import load_dotenv
-from openai import OpenAI
-load_dotenv('.env', override=True)
-import anthropic
+"""Smoke test for OpenAI-compatible API endpoint.
+
+Usage:
+    python scripts/test_claude.py
+"""
+
 import os
+from dotenv import load_dotenv
+
+load_dotenv(".env", override=True)
 
 os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
-client = OpenAI(api_key='sk_LAwReeB22oqhNb7K0MJFVP_33WHbJDvJeBpWYH_o9zQ',base_url='https://api.jiekou.ai/openai/')
+
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL"),
+)
 response = client.chat.completions.create(
-    model="gpt-5.4",
+    model=os.getenv("OPENAI_MODEL", "gpt-4o"),
     messages=[{"role": "user", "content": "Hello, world!"}],
-    reasoning_effort="medium"
 )
 print(response.choices[0].message.content)

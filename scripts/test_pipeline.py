@@ -1,67 +1,62 @@
-"""端到端测试: StickerPackPipeline
+"""End-to-end test: StickerPackPipeline
 
-串联 Planner → Designer → Prompter → 预览图 → 生图 的完整流程。
-
-用法:
+Usage:
   python -m scripts.test_pipeline --theme "Hot Dog Cartoon"
   python -m scripts.test_pipeline --theme "Route 66 Roadtrip" --skip-images
-  python -m scripts.test_pipeline --theme "猫咪日常" --style "kawaii" --skip-images
+  python -m scripts.test_pipeline --theme "Cat Daily Life" --style "kawaii" --skip-images
 """
 
-import sys
 import argparse
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
+from scripts.script_utils import print_header  # noqa: F401 (triggers sys.path setup)
 from src.services.ai.openai_service import OpenAIService
 from src.services.ai.gemini_service import GeminiService
 from src.services.batch.sticker_pipeline import StickerPackPipeline
 
 
 def on_progress(event: str, data: dict):
-    """打印 pipeline 进度事件"""
+    """Print pipeline progress events."""
     if event == "pipeline_start":
         print(f"\n{'='*60}")
-        print(f"Pipeline Start — Theme: {data.get('theme')}")
+        print(f"Pipeline Start - Theme: {data.get('theme')}")
         print(f"Output: {data.get('output_dir')}")
         print(f"{'='*60}\n")
     elif event == "planner_start":
-        print("[1/6] Planner Agent 开始...")
+        print("[1/6] Planner Agent starting...")
     elif event == "planner_done":
-        print(f"[1/6] Planner Agent 完成 ({data.get('chars')} chars)")
+        print(f"[1/6] Planner Agent done ({data.get('chars')} chars)")
     elif event == "designer_start":
-        print("[2/6] Designer Agent 开始...")
+        print("[2/6] Designer Agent starting...")
     elif event == "designer_done":
-        print(f"[2/6] Designer Agent 完成 ({data.get('chars')} chars)")
+        print(f"[2/6] Designer Agent done ({data.get('chars')} chars)")
     elif event == "prompter_start":
-        print("[3/6] Prompter Agent 开始...")
+        print("[3/6] Prompter Agent starting...")
     elif event == "prompter_done":
-        print(f"[3/6] Prompter Agent 完成 ({data.get('chars')} chars)")
+        print(f"[3/6] Prompter Agent done ({data.get('chars')} chars)")
     elif event == "preview_start":
         cats = data.get("categories", 0)
-        print(f"[4/6] 按主题生成预览图 ({cats} 个主题)...")
+        print(f"[4/6] Generating preview images ({cats} categories)...")
     elif event == "preview_done":
         count = data.get("count", 0)
-        print(f"[4/6] 预览图完成 ({count} 张)")
+        print(f"[4/6] Preview done ({count} images)")
         paths = data.get("paths", {})
         for cat, p in (paths.items() if isinstance(paths, dict) else enumerate(paths)):
             print(f"       [{cat}] {p}")
     elif event == "images_start":
-        print(f"[5/6] 逐张生图开始 ({data.get('count')} 张)...")
+        print(f"[5/6] Generating sticker images ({data.get('count')})...")
     elif event == "images_done":
         count = data.get("count", 0)
-        print(f"[5/6] 逐张生图完成 ({count} 张)")
+        print(f"[5/6] Image generation done ({count} images)")
     elif event == "pipeline_done":
         print(f"\n{'='*60}")
-        print("Pipeline 完成!")
+        print("Pipeline complete!")
         print(f"  Prompts: {data.get('prompts')} (across {data.get('categories')} categories)")
         print(f"  Previews: {data.get('previews')}")
         print(f"  Images: {data.get('images')}")
         print(f"  Duration: {data.get('duration', 0):.1f}s")
         print(f"{'='*60}\n")
     elif event == "pipeline_error":
-        print(f"\nPipeline 失败: {data.get('error')}")
+        print(f"\nPipeline failed: {data.get('error')}")
 
 
 def main():

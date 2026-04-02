@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Data Collection</p>
+    <h1>TikTok 话题采集</h1>
+    <p class="page-subtitle">TikTok Creative Center 热门话题原始数据，按播放量降序排列。</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>话题列表</h2>
+    <span class="muted">
+      共 <strong style="color:var(--text)">{{ total }}</strong> 条 &nbsp;&middot;&nbsp;
+      当前显示第 {{ (page - 1) * per_page + 1 }} - {{ [page * per_page, total] | min }} 条
+    </span>
+  </div>
+  <div class="table-wrap" style="overflow-x: auto;">
+    {% if items %}
+    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 900px;">
+      <thead>
+        <tr>
+          <th style="width: 30%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">话题名称</th>
+          <th style="width: 14%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted); text-align: right;">播放量</th>
+          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted); text-align: right;">发布数</th>
+          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">审核状态</th>
+          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">Brief</th>
+          <th style="width: 20%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">抓取 / 首次发现</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr style="transition: background var(--duration); cursor: default;">
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-weight: 500;">
+            <span style="color: var(--primary); margin-right: 4px;">#</span>{{ item.hashtag_name }}
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); text-align: right; font-family: monospace; font-weight: 600;">
+            {{ format_views(item.video_views) }}
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); text-align: right; font-family: monospace;">
+            {{ format_views(item.publish_cnt) }}
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            {% if item.review_status == 'approved' %}
+            <span class="badge" style="background: #dcfce7; color: #166534;">已通过</span>
+            {% elif item.review_status == 'rejected' or item.review_status == 'skipped' %}
+            <span class="badge" style="background: #fee2e2; color: #991b1b;">已跳过</span>
+            {% else %}
+            <span class="badge" style="background: var(--surface-hover); color: var(--text-muted);">待审核</span>
+            {% endif %}
+          </td>
+          <td style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft);">
+            {% if item.brief_status == 'ready' or item.brief_status == 'done' %}
+            <span class="badge" style="background: #dbeafe; color: #1e40af;">已生成</span>
+            {% elif item.brief_status == 'generating' %}
+            <span class="badge" style="background: #fef9c3; color: #854d0e;">生成中</span>
+            {% else %}
+            <span class="badge" style="background: var(--surface-hover); color: var(--text-muted);">未生成</span>
+            {% endif %}
+          </td>
+          <td class="muted" style="padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12px;">
+            <div>{{ item.crawled_at_display }}</div>
+            {% if item.first_seen_at_display and item.first_seen_at_display != item.crawled_at_display %}
+            <div style="margin-top: 2px; opacity: 0.7;">首次: {{ item.first_seen_at_display }}</div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div style="font-size:32px; margin-bottom:12px;">📭</div>
+      <p style="font-weight:600; color:var(--text);">暂无 TikTok 话题数据</p>
+      <p style="color:var(--text-muted); font-size:13px;">请先触发一次 TikTok 抓取任务，或等待系统定时获取。</p>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if total_pages > 1 %}
+  <div class="pagination" style="padding: 16px 24px; border-top: 1px solid var(--line-soft); display: flex; justify-content: space-between; align-items: center;">
+    <span class="muted" style="font-size: 13px;">第 {{ page }} / {{ total_pages }} 页</span>
+    <div style="display: flex; gap: 8px;">
+      {% if page > 1 %}
+      <a href="/tk-topics?page={{ page - 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
+      {% else %}
+      <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>上一页</button>
+      {% endif %}
+
+      {% if page < total_pages %}
+      <a href="/tk-topics?page={{ page + 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
+      {% else %}
+      <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>下一页</button>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

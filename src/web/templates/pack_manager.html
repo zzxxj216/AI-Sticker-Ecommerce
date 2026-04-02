@@ -1,0 +1,221 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Pack Manager</p>
+    <h1>卡包管理</h1>
+    <p class="page-subtitle">管理所有已生成的卡贴包：下载、生成 Listing 与 Blog。</p>
+  </div>
+  <div class="header-actions" id="batch-bar" style="display:none;align-items:center;gap:10px;">
+    <span style="font-size:14px;font-weight:600;white-space:nowrap;">
+      已选 <span id="sel-count" style="color:var(--primary,#7c5cfc);">0</span> 项
+    </span>
+    <button id="btn-batch-zip" class="btn-primary" style="padding:8px 18px;font-size:13px;font-weight:600;border-radius:var(--radius-md);cursor:pointer;white-space:nowrap;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      批量下载 ZIP
+    </button>
+    <button class="btn-secondary" style="padding:8px 18px;font-size:13px;cursor:pointer;white-space:nowrap;" onclick="alert('Listing 生成功能开发中，敬请期待！')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      生成 Listing
+    </button>
+    <a class="btn-secondary" style="padding:8px 18px;font-size:13px;cursor:pointer;white-space:nowrap;text-decoration:none;" href="/tools/chat-blog">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      生成 Blog
+    </a>
+    <button id="btn-clear-sel" class="btn-secondary" style="padding:8px 14px;font-size:12px;cursor:pointer;white-space:nowrap;">取消</button>
+  </div>
+  <div class="header-actions" id="stats-bar" style="display:flex;align-items:center;gap:10px;">
+    {% if jobs %}
+    <span class="muted">共 {{ jobs|length }} 个卡贴包</span>
+    {% endif %}
+    <a href="/tools/chat-blog" class="btn-crawl" style="text-decoration:none;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      生成 Blog
+    </a>
+    <a href="/blogs" class="btn-crawl" style="text-decoration:none;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Blog 管理
+    </a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>卡包列表</h2>
+  </div>
+  <div class="table-wrap" style="overflow-x:auto;">
+    {% if jobs %}
+    <table class="data-table" style="width:100%;border-collapse:collapse;text-align:left;min-width:1050px;">
+      <thead>
+        <tr>
+          <th style="width:4%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);">
+            <input type="checkbox" id="select-all" title="全选" style="cursor:pointer;width:16px;height:16px;">
+          </th>
+          <th style="width:22%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">卡包名称</th>
+          <th style="width:8%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">图片数</th>
+          <th style="width:8%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">来源</th>
+          <th style="width:18%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">来源话题</th>
+          <th style="width:8%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">评分</th>
+          <th style="width:14%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成时间</th>
+          <th style="width:18%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr data-job-id="{{ job.id }}">
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+            <input type="checkbox" class="pack-check" value="{{ job.id }}" style="cursor:pointer;width:16px;height:16px;">
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+            <strong><a href="/jobs/{{ job.id }}" class="primary-link">{{ job.trend_name or job.id }}</a></strong>
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+            <span class="badge" style="background:#dcfce7;color:#166534;">{{ job.image_count or job.images|length }}</span>
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+            {% if job.source_type %}
+            <span class="badge {% if job.source_type == 'tiktok' %}badge-ai-watch{% elif job.source_type == 'chat' %}badge-skipped{% else %}badge-approved{% endif %}" style="font-size:11px;">
+              {% if job.source_type == 'tiktok' %}TikTok{% elif job.source_type == 'chat' %}AI 对话{% else %}News{% endif %}
+            </span>
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);font-size:13px;">
+            {% if job.source_type == 'chat' %}
+            <span title="AI 对话生成">{{ job.trend_name or '对话生成' }}</span>
+            {% elif job.source_trend_name %}
+            <a href="/trends/{{ job.trend_id }}" class="primary-link">{{ job.source_trend_name }}</a>
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+            {% if job.source_score %}
+            <strong>{{ '%.0f'|format(job.source_score) }}</strong>
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);font-size:12px;color:var(--text-muted);">
+            {% if job.finished_at %}
+            {{ job.finished_at[:16] | replace('T', ' ') }}
+            {% else %}—{% endif %}
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <a href="/api/stickers/{{ job.id }}/download" class="btn-secondary" style="padding:4px 10px;font-size:11px;text-decoration:none;white-space:nowrap;">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                下载 ZIP
+              </a>
+              <a href="/stickers" class="btn-secondary" style="padding:4px 10px;font-size:11px;text-decoration:none;white-space:nowrap;">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                画廊
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state" style="padding:60px 24px;">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;margin-bottom:12px"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+      <p style="font-weight:600;color:var(--text);">暂无已完成的卡贴包</p>
+      <p style="color:var(--text-muted);font-size:13px;">在「已采纳资产库」中选择话题并点击「生成卡贴」即可开始。</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+(function(){
+  const selectAll = document.getElementById('select-all');
+  const batchBar = document.getElementById('batch-bar');
+  const statsBar = document.getElementById('stats-bar');
+  const selCount = document.getElementById('sel-count');
+  const btnZip = document.getElementById('btn-batch-zip');
+  const btnClear = document.getElementById('btn-clear-sel');
+
+  function getChecked() {
+    return Array.from(document.querySelectorAll('.pack-check:checked'));
+  }
+
+  function updateBar() {
+    const n = getChecked().length;
+    selCount.textContent = n;
+    if (n > 0) {
+      batchBar.style.display = 'flex';
+      if (statsBar) statsBar.style.display = 'none';
+    } else {
+      batchBar.style.display = 'none';
+      if (statsBar) statsBar.style.display = '';
+    }
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      document.querySelectorAll('.pack-check').forEach(cb => cb.checked = selectAll.checked);
+      updateBar();
+    });
+  }
+
+  document.querySelectorAll('.pack-check').forEach(cb => {
+    cb.addEventListener('change', updateBar);
+  });
+
+  if (btnClear) {
+    btnClear.addEventListener('click', function() {
+      document.querySelectorAll('.pack-check').forEach(cb => cb.checked = false);
+      if (selectAll) selectAll.checked = false;
+      updateBar();
+    });
+  }
+
+  if (btnZip) {
+    btnZip.addEventListener('click', async function() {
+      const checked = getChecked();
+      if (checked.length === 0) return;
+
+      if (checked.length === 1) {
+        window.location.href = '/api/stickers/' + checked[0].value + '/download';
+        return;
+      }
+
+      btnZip.disabled = true;
+      const origHTML = btnZip.innerHTML;
+      btnZip.textContent = '打包中...';
+
+      try {
+        const resp = await fetch('/api/stickers/download', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({job_ids: checked.map(cb => cb.value)})
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || 'Download failed');
+        }
+        const blob = await resp.blob();
+        const cd = resp.headers.get('content-disposition') || '';
+        const match = cd.match(/filename="?(.+?)"?$/);
+        const filename = match ? match[1] : 'sticker_packs.zip';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('下载失败: ' + e.message);
+      } finally {
+        btnZip.disabled = false;
+        btnZip.innerHTML = origHTML;
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

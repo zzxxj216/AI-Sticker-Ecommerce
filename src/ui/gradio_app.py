@@ -15,7 +15,6 @@ from datetime import datetime
 import asyncio
 
 from src.services.sticker import PackGenerator, StyleAnalyzer
-from src.services.blog import BlogAgent
 from src.core.constants import VariationDegree
 from src.core.logger import get_logger
 from src.core.config import Config
@@ -32,7 +31,7 @@ class StickerGeneratorUI:
         self.pack_generator = PackGenerator()
         # 默认使用 gemini 进行图片分析
         self.style_analyzer = StyleAnalyzer(analysis_model="claude")
-        self.blog_agent = BlogAgent()
+        self.blog_agent = None  # TODO: integrate BlogOrchestrator when Gradio blog tab is needed
 
         # 输出目录
         self.output_dir = Path(self.config.output_dir)

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from src.core.constants import VariationDegree
 
@@ -83,16 +83,13 @@ class StyleAnalysis(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return self.dict()
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+        return self.model_dump()
 
 
 class VariantConfig(BaseModel):
     """变种生成配置"""
+
+    model_config = ConfigDict(use_enum_values=True)
 
     style_analysis: StyleAnalysis = Field(..., description="风格分析结果")
     variation_degree: VariationDegree = Field(
@@ -106,7 +103,8 @@ class VariantConfig(BaseModel):
     preserve_elements: List[str] = Field(default_factory=list, description="保留元素")
     avoid_elements: List[str] = Field(default_factory=list, description="避免元素")
 
-    @validator('variation_degree', pre=True)
+    @field_validator('variation_degree', mode='before')
+    @classmethod
     def validate_variation_degree(cls, v):
         """验证变化程度"""
         if isinstance(v, str):
@@ -139,6 +137,3 @@ class VariantConfig(BaseModel):
             variant_instructions.append(f"额外要求: {self.additional_instructions}")
 
         return base_prompt + "\n".join(variant_instructions)
-
-    class Config:
-        use_enum_values = True

@@ -15,11 +15,10 @@ from config import config
 class NewsApiFetcher:
     SOURCE_NAME = "NewsAPI"
     BASE_URL = "https://newsapi.org/v2"
+    MAX_ITEMS = 50
 
-    # 新闻类别（贴纸相关）
     CATEGORIES = ["entertainment", "technology", "sports"]
 
-    # 贴纸业务专用关键词搜索（高价值流量词）
     STICKER_KEYWORDS = [
         "viral trend",
         "meme",
@@ -29,30 +28,34 @@ class NewsApiFetcher:
     ]
 
     def fetch(self) -> list[dict]:
-        """获取 NewsAPI 热点新闻"""
+        """获取 NewsAPI 热点新闻，总量上限 MAX_ITEMS 条"""
         if not config.NEWS_API_KEY:
             print(f"  [NewsAPI] 未配置 API Key，跳过")
             return []
 
-        print(f"  [NewsAPI] 开始获取...")
+        print(f"  [NewsAPI] 开始获取（上限 {self.MAX_ITEMS} 条）...")
         all_items = []
 
         # 1. 获取今日头条
-        top_items = self._fetch_top_headlines()
+        top_items = self._fetch_top_headlines(page_size=15)
         all_items.extend(top_items)
         print(f"  [NewsAPI] 头条: {len(top_items)} 条")
 
         # 2. 按娱乐/科技/体育类别获取
         for category in self.CATEGORIES:
-            cat_items = self._fetch_by_category(category)
+            if len(all_items) >= self.MAX_ITEMS:
+                break
+            cat_items = self._fetch_by_category(category, page_size=5)
             all_items.extend(cat_items)
-        print(f"  [NewsAPI] 类别新闻: {sum(0 for _ in self.CATEGORIES)*5} 条预期")
+        cat_count = len(all_items) - len(top_items)
+        print(f"  [NewsAPI] 类别新闻: {cat_count} 条")
 
         # 3. 贴纸专项关键词搜索
         kw_items = self._fetch_sticker_keywords()
         all_items.extend(kw_items)
         print(f"  [NewsAPI] 贴纸关键词: {len(kw_items)} 条")
 
+        all_items = all_items[:self.MAX_ITEMS]
         print(f"  [NewsAPI] 共获取 {len(all_items)} 条")
         return all_items
 
@@ -83,7 +86,7 @@ class NewsApiFetcher:
                 print(f"  [NewsAPI] 关键词'{keyword}'搜索失败: {e}")
         return items
 
-    def _fetch_top_headlines(self, page_size: int = 20) -> list[dict]:
+    def _fetch_top_headlines(self, page_size: int = 15) -> list[dict]:
         """获取美国今日头条"""
         try:
             resp = requests.get(
