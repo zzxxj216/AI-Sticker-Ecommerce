@@ -72,10 +72,10 @@ Thumbs.db
 *.tmp
 *.bak
 
-# Database
-*.db
+# Database (keep root ops_workbench.db tracked)
 *.db-wal
 *.db-shm
+data/*.db
 
 # Runtime logs & data
 error_log.txt
