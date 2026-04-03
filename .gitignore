@@ -33,24 +33,28 @@ ENV/
 *.swo
 *~
 
-# Environment
+# Environment (secrets)
 .env
 .env.local
 .env.*.local
 
-# Logs
+# Logs (keep log files untracked but don't delete them)
 logs/
 *.log
 
 # Data & generated output
 data/
-data/output/
-data/cache/
-data/temp/
+output/
 tests/data/output/
 tests/stickers_analyzer/data/output/
 trend_fetcher/output/
-output/
+briefs/
+briefs_v2/
+
+# Database
+*.db-wal
+*.db-shm
+data/*.db
 
 # Cursor IDE
 .cursor/
@@ -68,19 +72,12 @@ Thumbs.db
 # Gradio
 .gradio/
 
-# Temporary files
+# Temporary / one-off scripts
 *.tmp
 *.bak
-
-# Database (keep root ops_workbench.db tracked)
-*.db-wal
-*.db-shm
-data/*.db
-
-# Runtime logs & data
+_migrate*.py
+_check*.py
+_test_*.py
+check_*.py
 error_log.txt
 full_logs.txt
-briefs/
-briefs_v2/
-check_*.py
-_migrate*.py

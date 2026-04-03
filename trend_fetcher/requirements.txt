@@ -12,11 +12,5 @@ python-dotenv>=1.0.0     # .env 文件加载
 # 数据处理
 pandas>=2.1.0            # pytrends 依赖
 
-# 定时调度（可选）
-schedule>=1.2.1          # 定时任务
-
 # AI 分析（可选，需要 API Key）
 anthropic>=0.40.0        # Claude API
-
-# Web UI（贴纸包生成器）
-gradio>=4.0.0            # Web 界面框架
