@@ -18,6 +18,7 @@ PUBLIC_PATH_PREFIXES = (
     "/healthz",
     "/static/",
     "/outputs/",
+    "/blog-outputs/",
     "/auth/",
     "/login",
 )
