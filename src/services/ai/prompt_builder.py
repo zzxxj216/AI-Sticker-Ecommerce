@@ -320,7 +320,7 @@ Return a JSON array:
     "title": "Short English title (max 5 words)",
     "sticker_text": "The actual text that appears on the sticker (2-8 words). Use ♥ ⚡ ★ symbols where appropriate.",
     "concept": "One-sentence design concept in English — mention which icon/symbol replaces which letter and the overall layout",
-    "image_prompt": "English image-generation prompt (50-90 words). Describe: (1) the exact text and its layout (stacked lines, which word is biggest), (2) font style (extra-bold, rounded, blocky sans-serif), (3) which letter/word is replaced by what icon/symbol, (4) 2-3 specific hex colors from the palette used for text fill, (5) thick white outer contour/border, (6) solid color or transparent background. Do NOT describe characters, scenes, or objects beyond the icon substitution."
+    "image_prompt": "English image-generation prompt (50-90 words). Describe: (1) the exact text and its layout (stacked lines, which word is biggest), (2) font style (extra-bold, rounded, blocky sans-serif), (3) which letter/word is replaced by what icon/symbol, (4) 2-3 specific hex colors from the palette used for text fill, (5) thick white outer contour/border, (6) plain pure white background with absolutely nothing behind the subject — no surface, no shadow, no gradient, no decoration. Do NOT describe characters, scenes, or objects beyond the icon substitution."
   }}
 ]
 ```
@@ -371,7 +371,7 @@ Return a JSON array:
     "type": "element",
     "title": "Short English title (max 5 words)",
     "concept": "One-sentence design concept in English — which trending topic it represents and how",
-    "image_prompt": "English image-generation prompt (40-80 words) describing the visual subject: what it depicts (character, object, icon, mascot), pose/angle, expression, details. MUST follow the style guide art_style, line_style, and use colors from the palette. Do NOT describe any text. Do NOT use words: sticker, kawaii, cute sticker."
+    "image_prompt": "English image-generation prompt (40-80 words) describing the visual subject: what it depicts (character, object, icon, mascot), pose/angle, expression, details. MUST follow the style guide art_style, line_style, and use colors from the palette. End with: thick white die-cut sticker border, isolated on plain pure white background. Do NOT describe any text. Do NOT use words: sticker, kawaii, cute sticker."
   }}
 ]
 ```
@@ -381,6 +381,7 @@ Rules:
 - Each sticker should visually represent or be inspired by a trending topic.
 - Spread across different topics — don't repeat the same subject.
 - image_prompt must strictly follow the Pack Style Guide (art_style, palette, line_style, consistency rules).
+- EVERY image_prompt MUST end with "thick white die-cut sticker border, isolated on plain pure white background." — no environment, no surface, no shadow.
 - Ensure variety: mix objects, characters/mascots, abstract icons, and symbolic representations.
 """
         return prompt
@@ -425,7 +426,7 @@ Return a JSON array:
     "title": "Short English title (max 5 words)",
     "sticker_text": "The text that appears on the sticker (2-6 words, creatively remixed)",
     "concept": "One-sentence design concept in English — how text and graphic complement each other",
-    "image_prompt": "English image-generation prompt (40-80 words) describing BOTH the visual element (character/object/icon) AND the text treatment (position, font style, effects). Text and graphic must be described as one unified composition. MUST use style guide palette and art_style. Do NOT use words: sticker, kawaii, cute sticker."
+    "image_prompt": "English image-generation prompt (40-80 words) describing BOTH the visual element (character/object/icon) AND the text treatment (position, font style, effects). Text and graphic must be described as one unified composition. MUST use style guide palette and art_style. End with: thick white die-cut sticker border, isolated on plain pure white background. Do NOT use words: sticker, kawaii, cute sticker."
   }}
 ]
 ```
@@ -435,6 +436,7 @@ Rules:
 - Each sticker pairs a creatively remixed phrase with a visual element inspired by trending topics.
 - Text and graphic must complement each other (e.g. a robot mascot holding a speech bubble with "Ask AI").
 - image_prompt must strictly follow the Pack Style Guide.
+- EVERY image_prompt MUST end with "thick white die-cut sticker border, isolated on plain pure white background." — no environment, no surface, no shadow.
 - Mix pairing strategies: text-as-speech-bubble, text-as-banner, text-integrated-into-scene, text-as-label.
 - Ensure variety in both text content and visual subjects.
 """
@@ -663,8 +665,9 @@ Each prompt must:
 3. If the concept has a text overlay, describe the EXACT text and its visual treatment \
    (font style, position, effects — e.g. bold text banner at bottom, speech bubble, etc.).
 4. Follow the Pack Style Guide above (art_style, palette colors by hex code, line_style).
-5. End with: "thick white die-cut sticker border, isolated on white background."
-6. Do NOT use the words: kawaii, cute sticker, sticker sheet.
+5. End with: "thick white die-cut sticker border, isolated on plain pure white background."
+6. The background MUST be plain pure white (#FFFFFF) with absolutely NO environment, surface, table, texture, shadow, gradient, or decorative elements behind the subject.
+7. Do NOT use the words: kawaii, cute sticker, sticker sheet.
 
 Return a JSON array (no markdown fences, no explanation):
 
@@ -733,6 +736,8 @@ image_prompt 编写规则：
 - 描述主体形象（角色/物品/场景）
 - 描述风格（realistic/3D render/digital painting/watercolor/flat illustration等）
 - 描述色调（pastel/vibrant/monochrome/warm tones/cool tones等）
+- 必须以 "thick white die-cut sticker border, isolated on plain pure white background" 结尾
+- 背景必须是纯白色(#FFFFFF)，禁止任何环境、桌面、纹理、阴影、渐变或装饰元素
 - 不要出现 sticker、kawaii、cute sticker 等词汇
 - 每条 40-80 词，具体生动
 
@@ -945,6 +950,8 @@ image_prompt 编写规则：
 - 每张图只描述一个独立的主体
 - 主体必须完整、可独立存在
 - 描述主体形象、风格、色调
+- 必须以 "thick white die-cut sticker border, isolated on plain pure white background" 结尾
+- 背景必须是纯白色(#FFFFFF)，禁止任何环境、桌面、纹理、阴影、渐变或装饰元素
 - 不要出现 sticker、kawaii 等词汇
 - 每条 40-80 词{style_hint}
 """

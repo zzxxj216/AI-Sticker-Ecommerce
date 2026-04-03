@@ -142,11 +142,24 @@ class GeminiService(BaseLLMService):
     # Image generation
     # ================================================================
 
+    # Suffix appended to every image-generation prompt to enforce a
+    # clean white background, making downstream background removal trivial.
+    _BG_CONSTRAINT = (
+        "\n\nCRITICAL BACKGROUND REQUIREMENT: "
+        "The image MUST have a perfectly plain, pure white (#FFFFFF) background. "
+        "Do NOT render any environment, scene, surface, table, texture, shadow on "
+        "the ground, bokeh, gradient, decorative elements, or any objects behind "
+        "the subject. The subject must be completely isolated — floating on a "
+        "flat white void with absolutely nothing else visible."
+    )
+
     def generate_image(
         self,
         prompt: str,
         reference_image: Optional[str] = None,
         output_path: Optional[Path] = None,
+        *,
+        enforce_white_bg: bool = True,
     ) -> Dict[str, Any]:
         """Generate image
 
@@ -154,6 +167,9 @@ class GeminiService(BaseLLMService):
             prompt: Image generation prompt
             reference_image: Reference image (local path/URL/base64)
             output_path: Output path (optional)
+            enforce_white_bg: Append a strict white-background constraint
+                to the prompt (default True).  Set False for special use
+                cases like blog hero images that intentionally need a scene.
 
         Returns:
             Dict: {
@@ -166,6 +182,9 @@ class GeminiService(BaseLLMService):
             }
         """
         start_time = time.time()
+
+        if enforce_white_bg:
+            prompt = prompt + self._BG_CONSTRAINT
 
         try:
             contents: list = []

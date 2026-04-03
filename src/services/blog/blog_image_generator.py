@@ -129,6 +129,7 @@ class BlogImageGenerator:
                     self.gemini.generate_image,
                     prompt=enhanced_prompt,
                     output_path=output_path,
+                    enforce_white_bg=False,
                 )
 
                 if result.get("success"):

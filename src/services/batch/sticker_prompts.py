@@ -564,6 +564,8 @@ Important prompt-writing rules:
 - If the sticker should not contain text, do not invent any.
 - Preserve distinction between hero, support, text, badge-label, and filler stickers.
 - Make the prompt suitable for sticker-style image generation, not poster illustration.
+- EVERY generation prompt MUST end with: "thick white die-cut sticker border, isolated on plain pure white background."
+- The background MUST be plain pure white (#FFFFFF). NEVER include any environment, surface, table, texture, shadow on the ground, bokeh, gradient, or decorative elements behind the subject. The sticker subject must float on a clean white void.
 
 ===== PART 3: QUALITY CONTROL NOTES =====
 End with a concise quality control section.
@@ -861,8 +863,8 @@ Write the image generation prompt following these rules:
 3. Briefly describe each sticker's appearance (10-20 words each). Preserve the DIVERSITY of sticker types — illustrations, text stickers, character combos, icons, badges.
 4. Use the style direction as a unifying visual thread.
 5. Each sticker has "thick white die-cut border".
-6. Background: "isolated on clean white background".
-7. End with: "Professional graphic design, high resolution, diverse sticker art styles unified by a cohesive color palette."
+6. Background: "isolated on plain pure white background" — absolutely NO environment, surface, table, texture, shadow, or decorative elements behind the stickers.
+7. End with: "Professional graphic design, high resolution, diverse sticker art styles unified by a cohesive color palette, plain pure white background."
 8. Total prompt: 150-300 words.
 
 Return ONLY the prompt text. No JSON, no markdown fences."""

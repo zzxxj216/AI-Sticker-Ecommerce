@@ -291,8 +291,9 @@ Each prompt must:
 1. Describe WHAT we see — the subject, composition, colors, and mood.
 2. If text_overlay is provided, describe the EXACT text content and how it appears visually.
 3. Match the overall mood and color palette from the Style Guide (warm/cool, vibrant/muted).
-4. End with: "thick white die-cut sticker border, isolated on white background."
-5. Do NOT use the words: kawaii, cute sticker, sticker sheet.
+4. End with: "thick white die-cut sticker border, isolated on plain pure white background."
+5. The background MUST be plain pure white (#FFFFFF). Do NOT include any environment, surface, table, texture, shadow on ground, bokeh, gradient, or decorative elements behind the subject. The subject floats on a clean white void.
+6. Do NOT use the words: kawaii, cute sticker, sticker sheet.
 
 Return a JSON array (no markdown fences):
 

@@ -836,7 +836,7 @@ class BlogAgentService:
             output_path = Path(record.get("path", f"output/blogs/images/regen_{uuid.uuid4().hex[:8]}.png"))
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            result = gemini.generate_image(prompt=enhanced, output_path=output_path)
+            result = gemini.generate_image(prompt=enhanced, output_path=output_path, enforce_white_bg=False)
             if not result.get("success"):
                 return f"图片重新生成失败: {result.get('error', 'unknown')}"
 
