@@ -13,6 +13,7 @@ logger = get_logger("web.feishu")
 
 class FeishuAuthService:
     AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+    APP_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
     TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token"
     USER_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 
@@ -40,15 +41,32 @@ class FeishuAuthService:
         )
         return f"{self.AUTHORIZE_URL}?{query}"
 
+    def _get_app_access_token(self) -> str:
+        """Obtain app_access_token from Feishu (internal app)."""
+        resp = requests.post(
+            self.APP_ACCESS_TOKEN_URL,
+            json={
+                "app_id": self.app_id,
+                "app_secret": self.app_secret,
+            },
+            timeout=15,
+        )
+        data = resp.json()
+        if data.get("code") != 0:
+            raise ValueError(f"Feishu app_access_token failed: {data}")
+        token = data.get("app_access_token", "")
+        if not token:
+            raise ValueError(f"Feishu app_access_token empty: {data}")
+        return token
+
     def exchange_code(self, code: str) -> dict:
+        app_token = self._get_app_access_token()
         resp = requests.post(
             self.TOKEN_URL,
+            headers={"Authorization": f"Bearer {app_token}"},
             json={
                 "grant_type": "authorization_code",
                 "code": code,
-                "app_id": self.app_id,
-                "app_secret": self.app_secret,
-                "redirect_uri": self.redirect_uri,
             },
             timeout=15,
         )
