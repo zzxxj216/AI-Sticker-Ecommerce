@@ -322,7 +322,7 @@ async function reviewTrend(trendId, action, btn) {
       statusEl.innerHTML = '<span class="badge badge-approved">✓ 已采纳</span>';
       actionsBar.innerHTML = `<div class="review-meta">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        ${data.reviewed_by || 'anonymous'} 采纳
+        ${esc(data.reviewed_by || 'anonymous')} 采纳
       </div>`;
     } else {
       statusEl.innerHTML = '<span class="badge badge-skipped">已跳过</span>';

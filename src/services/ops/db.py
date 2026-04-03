@@ -432,15 +432,7 @@ class OpsDatabase:
         sql += " ORDER BY score DESC, updated_at DESC"
         c = self.conn.execute(sql, params)
         cols = [col[0] for col in c.description]
-        items = [dict(zip(cols, row)) for row in c.fetchall()]
-
-        for item in items:
-            item["platform"] = json.loads(item["platform_json"]) if item["platform_json"] else []
-            item["risk_flags"] = json.loads(item["risk_flags_json"]) if item["risk_flags_json"] else []
-            item["visual_symbols"] = json.loads(item["visual_symbols_json"]) if item["visual_symbols_json"] else []
-            item["emotional_core"] = json.loads(item["emotional_core_json"]) if item["emotional_core_json"] else []
-            item["raw_payload"] = json.loads(item["raw_payload_json"]) if item["raw_payload_json"] else {}
-        return items
+        return [self._decode_trend_row(dict(zip(cols, row))) for row in c.fetchall()]
 
     def list_approved_trends(self) -> list[dict[str, Any]]:
         sql = """
@@ -459,15 +451,7 @@ class OpsDatabase:
         """
         c = self.conn.execute(sql)
         cols = [col[0] for col in c.description]
-        items = [dict(zip(cols, row)) for row in c.fetchall()]
-
-        for item in items:
-            item["platform"] = json.loads(item["platform_json"]) if item["platform_json"] else []
-            item["risk_flags"] = json.loads(item["risk_flags_json"]) if item["risk_flags_json"] else []
-            item["visual_symbols"] = json.loads(item["visual_symbols_json"]) if item["visual_symbols_json"] else []
-            item["emotional_core"] = json.loads(item["emotional_core_json"]) if item["emotional_core_json"] else []
-            item["raw_payload"] = json.loads(item["raw_payload_json"]) if item["raw_payload_json"] else {}
-        return items
+        return [self._decode_trend_row(dict(zip(cols, row))) for row in c.fetchall()]
 
     def list_archive_trends(self, search_text: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
         count_sql = "SELECT COUNT(*) FROM trend_items WHERE 1=1"
@@ -488,14 +472,7 @@ class OpsDatabase:
         
         c = self.conn.execute(sql, params)
         cols = [col[0] for col in c.description]
-        items = [dict(zip(cols, row)) for row in c.fetchall()]
-
-        for item in items:
-            item["platform"] = json.loads(item["platform_json"]) if item["platform_json"] else []
-            item["risk_flags"] = json.loads(item["risk_flags_json"]) if item["risk_flags_json"] else []
-            item["visual_symbols"] = json.loads(item["visual_symbols_json"]) if item["visual_symbols_json"] else []
-            item["emotional_core"] = json.loads(item["emotional_core_json"]) if item["emotional_core_json"] else []
-            item["raw_payload"] = json.loads(item["raw_payload_json"]) if item["raw_payload_json"] else {}
+        items = [self._decode_trend_row(dict(zip(cols, row))) for row in c.fetchall()]
         return items, total
 
     def get_trend(self, trend_id: str) -> dict[str, Any] | None:
@@ -535,36 +512,55 @@ class OpsDatabase:
         return result
 
     def list_completed_jobs_with_images(self) -> list[dict[str, Any]]:
-        """Return completed jobs with their image outputs, including source trend info."""
-        jobs = self.conn.execute(
+        """Return completed jobs with their image outputs, including source trend info.
+
+        Uses a single query with JOIN to avoid N+1 per-job image lookups.
+        """
+        rows = self.conn.execute(
             """
             SELECT gj.*,
                    t.trend_name AS source_trend_name,
                    t.title AS source_title,
                    t.source_type AS source_type,
-                   t.score AS source_score
+                   t.score AS source_score,
+                   go.id AS img_id,
+                   go.file_path AS img_file_path,
+                   go.preview_path AS img_preview_path,
+                   go.metadata_json AS img_metadata_json,
+                   go.created_at AS img_created_at
             FROM generation_jobs gj
             LEFT JOIN trend_items t ON t.id = gj.trend_id
+            LEFT JOIN generation_outputs go
+                   ON go.job_id = gj.id AND go.output_type = 'image'
             WHERE gj.status = 'completed'
-            ORDER BY gj.finished_at DESC
+            ORDER BY gj.finished_at DESC, go.created_at ASC
             """
         ).fetchall()
-        result = []
-        for job_row in jobs:
-            job = dict(job_row)
-            if job.get("trend_id", "").startswith("chat:"):
-                job["source_type"] = "chat"
-                if not job.get("source_trend_name"):
-                    job["source_trend_name"] = job.get("trend_name", "")
-            images = self.conn.execute(
-                "SELECT * FROM generation_outputs WHERE job_id = ? AND output_type = 'image' ORDER BY created_at",
-                (job["id"],),
-            ).fetchall()
-            job["images"] = [dict(img) for img in images]
-            for img in job["images"]:
-                img["metadata_json"] = self._loads(img.get("metadata_json"), {})
-            result.append(job)
-        return result
+
+        from collections import OrderedDict
+        jobs_map: OrderedDict[str, dict] = OrderedDict()
+        for row in rows:
+            r = dict(row)
+            jid = r["id"]
+            if jid not in jobs_map:
+                job = {k: v for k, v in r.items() if not k.startswith("img_")}
+                if job.get("trend_id", "").startswith("chat:"):
+                    job["source_type"] = "chat"
+                    if not job.get("source_trend_name"):
+                        job["source_trend_name"] = job.get("trend_name", "")
+                job["images"] = []
+                jobs_map[jid] = job
+            if r.get("img_id"):
+                jobs_map[jid]["images"].append({
+                    "id": r["img_id"],
+                    "job_id": jid,
+                    "output_type": "image",
+                    "file_path": r["img_file_path"],
+                    "preview_path": r["img_preview_path"],
+                    "metadata_json": self._loads(r.get("img_metadata_json"), {}),
+                    "created_at": r["img_created_at"],
+                })
+        return list(jobs_map.values())
 
     def get_job_image_paths(self, job_id: str) -> list[str]:
         """Return image file paths for a single job."""

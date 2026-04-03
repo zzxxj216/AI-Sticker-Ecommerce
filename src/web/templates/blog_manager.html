@@ -191,9 +191,9 @@ async function viewBlog(blogId) {
     const data = await resp.json();
     document.getElementById('modal-title').textContent = data.meta_title || '文章预览';
     document.getElementById('modal-meta').innerHTML = `
-      <span><strong>话题:</strong> ${data.topic || '-'}</span>
-      <span><strong>Slug:</strong> ${data.url_slug || '-'}</span>
-      <span><strong>语言:</strong> ${(data.language||'en').toUpperCase()}</span>
+      <span><strong>话题:</strong> ${esc(data.topic || '-')}</span>
+      <span><strong>Slug:</strong> ${esc(data.url_slug || '-')}</span>
+      <span><strong>语言:</strong> ${esc((data.language||'en').toUpperCase())}</span>
       <span><strong>迭代:</strong> ${data.iteration || 0} 轮</span>
     `;
     document.getElementById('modal-content').innerHTML = mdToHtml(data.content || '');
@@ -263,23 +263,7 @@ async function batchDelete() {
   location.reload();
 }
 
-function mdToHtml(md) {
-  if (!md) return '<p style="color:var(--text-muted);">无内容</p>';
-  let html = md
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-    .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br>');
-  return '<p>' + html + '</p>';
-}
+// mdToHtml() provided by /static/common.js
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBlogModal(); });
 </script>

@@ -3,7 +3,6 @@
 from src.services.ai.base import BaseLLMService, try_parse_json
 from src.services.ai.claude_service import ClaudeService
 from src.services.ai.gemini_service import GeminiService
-from src.services.ai.chat_service import ChatService
 from src.services.ai.prompt_builder import (
     PromptBuilder,
     # v3 topic generation
@@ -30,7 +29,6 @@ from src.services.ai.prompt_builder import (
 __all__ = [
     "ClaudeService",
     "GeminiService",
-    "ChatService",
     "PromptBuilder",
     # v3 topic generation
     "build_topic_generation_prompt",

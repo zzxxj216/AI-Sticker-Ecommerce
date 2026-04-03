@@ -101,6 +101,7 @@
 <script>
 (function(){
   const selectAll = document.getElementById('select-all');
+  if (!selectAll) return;
   const batchBar = document.getElementById('batch-bar');
   const selCount = document.getElementById('sel-count');
   const btnBatch = document.getElementById('btn-batch-gen');

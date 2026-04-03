@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import json as _json
 import os
+import queue
 import re
 import secrets
 import zipfile
@@ -67,6 +69,24 @@ def start_scheduler():
 def stop_scheduler():
     scheduler.shutdown()
 
+
+def _sse_response(q: queue.Queue) -> StreamingResponse:
+    """Create a Server-Sent Events response from a task queue."""
+    def _generate():
+        while True:
+            try:
+                event = q.get(timeout=60)
+                if event is None:
+                    yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+                    break
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+            except Exception:
+                yield f"data: {_json.dumps({'type': 'heartbeat'})}\n\n"
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _format_views(value: float | int) -> str:
@@ -653,27 +673,10 @@ def chat_sticker_restore(payload: dict):
 
 @app.get("/api/tools/chat-sticker/stream/{task_id}")
 def chat_sticker_stream(task_id: str):
-    import json as _json
     q = chat_sticker_svc.get_task_queue(task_id)
     if not q:
         raise HTTPException(404, "Task not found")
-
-    def event_generator():
-        while True:
-            try:
-                event = q.get(timeout=60)
-                if event is None:
-                    yield f"data: {_json.dumps({'type': 'done'})}\n\n"
-                    break
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-            except Exception:
-                yield f"data: {_json.dumps({'type': 'heartbeat'})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_response(q)
 
 
 # ── Chat Blog API ───────────────────────────────────────────
@@ -708,27 +711,10 @@ def chat_blog_restore(payload: dict):
 
 @app.get("/api/tools/chat-blog/stream/{task_id}")
 def chat_blog_stream(task_id: str):
-    import json as _json
     q = chat_blog_svc.get_task_queue(task_id)
     if not q:
         raise HTTPException(404, "Task not found")
-
-    def event_generator():
-        while True:
-            try:
-                event = q.get(timeout=60)
-                if event is None:
-                    yield f"data: {_json.dumps({'type': 'done'})}\n\n"
-                    break
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-            except Exception:
-                yield f"data: {_json.dumps({'type': 'heartbeat'})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_response(q)
 
 
 def _safe_folder_name(name: str) -> str:

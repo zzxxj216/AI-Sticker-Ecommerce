@@ -106,7 +106,7 @@
   const btnReset = document.getElementById('btn-reset');
   let isSending = false;
 
-  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  // esc() provided by /static/common.js
 
   function addUserMsg(text) {
     const div = document.createElement('div');
@@ -292,10 +292,17 @@
     grid.innerHTML = '';
 
     (data.image_urls || []).forEach(url => {
-      grid.innerHTML += `
-        <div class="result-thumb" onclick="openLightbox('${url}')">
-          <img src="${url}" loading="lazy" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;\\'>加载失败</div>'">
-        </div>`;
+      const safeUrl = esc(url);
+      const thumb = document.createElement('div');
+      thumb.className = 'result-thumb';
+      thumb.onclick = function() { openLightbox(url); };
+      const img = document.createElement('img');
+      img.src = url;
+      img.loading = 'lazy';
+      img.alt = '生成卡贴';
+      img.onerror = function() { thumb.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;">加载失败</div>'; };
+      thumb.appendChild(img);
+      grid.appendChild(thumb);
     });
     summary.innerHTML = `共 ${data.image_count} 张卡贴${data.duration ? '，耗时 ' + Math.round(data.duration) + ' 秒' : ''} &nbsp;·&nbsp; <a href="/stickers" style="color:var(--accent);font-weight:600;">前往卡贴画廊</a> &nbsp;·&nbsp; <a href="/packs" style="color:var(--accent);font-weight:600;">前往卡包管理</a>`;
   }
