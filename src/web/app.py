@@ -47,6 +47,10 @@ OUTPUTS_DIR = Path("output/h5_jobs")
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 
+BLOG_OUTPUTS_DIR = Path("output/blogs")
+BLOG_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/blog-outputs", StaticFiles(directory=str(BLOG_OUTPUTS_DIR)), name="blog-outputs")
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 trend_service = TrendService()
 chat_sticker_svc = StickerAgentService()
@@ -317,7 +321,46 @@ def api_retry_job(job_id: str) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return RedirectResponse(url="/trends")
+    db = trend_service.db
+    pending_news = db.list_trends("news", status="pending")
+    pending_tk = db.list_trends("tiktok", status="pending")
+    approved = db.list_approved_trends()
+    pending_produce = sum(1 for t in approved if t.get("queue_status") in (None, "pending"))
+    jobs = db.list_jobs()
+    running_jobs = sum(1 for j in jobs if j.get("status") == "running")
+    completed_packs = sum(1 for j in jobs if j.get("status") == "completed")
+    blogs = db.list_blog_drafts()
+
+    recent_jobs = [j for j in jobs if j.get("status") == "completed"][:5]
+
+    reviewed = db.conn.execute(
+        "SELECT * FROM trend_items WHERE review_status IN ('approved','skipped') "
+        "ORDER BY reviewed_at DESC LIMIT 5"
+    ).fetchall()
+    recent_reviews = []
+    for r in reviewed:
+        d = dict(r)
+        d["name"] = d.get("trend_name") or d.get("id", "")
+        recent_reviews.append(d)
+
+    stats = {
+        "pending_review": len(pending_news) + len(pending_tk),
+        "pending_produce": pending_produce,
+        "running_jobs": running_jobs,
+        "completed_packs": completed_packs,
+        "blog_count": len(blogs),
+    }
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        _base_context(
+            request,
+            stats=stats,
+            recent_jobs=recent_jobs,
+            recent_reviews=recent_reviews,
+            page_title="工作台",
+        ),
+    )
 
 
 @app.get("/trends", response_class=HTMLResponse)
@@ -817,6 +860,13 @@ def api_get_blog(blog_id: str):
     draft = trend_service.db.get_blog_draft(blog_id)
     if not draft:
         raise HTTPException(404, "Blog not found")
+    content = draft.get("content", "")
+    content = re.sub(
+        r"!\[([^\]]*)\]\((?!https?://|/)(images/[^)]+)\)",
+        r"![\1](/blog-outputs/\2)",
+        content,
+    )
+    draft["content"] = content
     return draft
 
 

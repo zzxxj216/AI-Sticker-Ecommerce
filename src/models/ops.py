@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_CN_TZ = timezone(timedelta(hours=8))
+
+def _now() -> datetime:
+    return datetime.now(_CN_TZ)
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -33,8 +38,8 @@ class TrendItem(BaseModel):
     emotional_core: list[str] = Field(default_factory=list)
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     source_url: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 class TrendBriefRecord(BaseModel):
@@ -44,8 +49,8 @@ class TrendBriefRecord(BaseModel):
     source_ref: str = ""
     edited_by: str = ""
     edited_at: datetime | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 class GenerationJob(BaseModel):
@@ -57,10 +62,10 @@ class GenerationJob(BaseModel):
     image_count: int = 0
     error_message: str = ""
     created_by: str = "system"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 class GenerationOutput(BaseModel):
@@ -70,4 +75,4 @@ class GenerationOutput(BaseModel):
     file_path: str
     preview_path: str = ""
     metadata_json: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_now)

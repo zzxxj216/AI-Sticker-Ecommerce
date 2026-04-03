@@ -163,6 +163,8 @@ Do not explain them.
 
 Writing rules:
 - Write in English.
+- All sticker names, labels, text content, and theme descriptions must be in English. NEVER include Chinese characters or any CJK text — our products target English-speaking overseas customers.
+- If the input theme is in Chinese, translate it into natural English before planning.
 - Be clear, concrete, commercially aware, and direct.
 - Sound like a planner with product sense, not a generic assistant.
 - Do not output JSON.
@@ -404,13 +406,14 @@ Rules for each field:
 - Priority: choose from high / medium / low
 - Core idea: one clear sentence describing what this sticker is
 - Key visual elements: list the main visible elements only
-- Text content: write the exact wording if this is a text sticker; otherwise write "none"
+- Text content: write the exact English wording if this is a text sticker; otherwise write "none". NEVER use Chinese or any CJK characters — our target customers are English-speaking overseas buyers.
 - Composition note: describe the visual arrangement briefly and concretely
 - Color note: explain how this sticker uses the pack palette
-- Must avoid: list what should not appear in this sticker
+- Must avoid: list what should not appear in this sticker (always include "Chinese characters or CJK text")
 - Pack function: explain why this sticker exists in the pack and what role it plays in overall balance
 
 Important rules:
+- All sticker text content must be in English only. No Chinese, Japanese, or Korean characters.
 - Do not force all roles to appear equally.
 - The lineup must reflect the approved pack strategy, not a default formula.
 - If the pack should be hero-heavy, make it hero-heavy.
@@ -548,13 +551,16 @@ Rules:
 
 Important prompt-writing rules:
 - The generation prompt must be in English.
+- NEVER include Chinese characters, Japanese kanji, or any CJK text in generation prompts or sticker names.
+- All text content on stickers (labels, captions, slogans) must be in English only — our target market is English-speaking overseas customers.
+- If the input theme or spec contains Chinese, translate it into natural English before writing the prompt.
 - Keep prompts specific and visual.
 - Focus on subject, composition, style, palette behavior, sticker look, and usable detail level.
 - Do not overload prompts with too many decorative adjectives.
 - Do not write like a story.
 - Do not include camera language unless truly needed.
 - Do not introduce new concepts that are not in the approved spec.
-- If the sticker has text, include the exact text clearly.
+- If the sticker has text, include the exact English text clearly.
 - If the sticker should not contain text, do not invent any.
 - Preserve distinction between hero, support, text, badge-label, and filler stickers.
 - Make the prompt suitable for sticker-style image generation, not poster illustration.

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_CN_TZ = timezone(timedelta(hours=8))
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +26,8 @@ class OpsSyncService:
     ):
         self.db = db or OpsDatabase()
         resolved_trend_output_dir = trend_output_dir or os.getenv("TREND_OUTPUT_DIR", "trend_fetcher/output")
-        resolved_tiktok_db_path = tiktok_db_path or os.getenv("TIKTOK_DB_PATH", "data/ops_workbench.db")
+        # Use the same DB path as OpsDatabase to ensure crawl and sync share the same data
+        resolved_tiktok_db_path = tiktok_db_path or str(self.db.db_path)
         self.trend_output_dir = Path(resolved_trend_output_dir)
         self.tiktok_db_path = Path(resolved_tiktok_db_path)
 
@@ -83,8 +86,8 @@ class OpsSyncService:
                             brief_status="ready" if brief.get("brief_status") == "ready" else "generated",
                             brief_json=self._convert_tiktok_brief(brief),
                             source_ref=str(self.tiktok_db_path),
-                            created_at=datetime.utcnow(),
-                            updated_at=datetime.utcnow(),
+                            created_at=datetime.now(_CN_TZ),
+                            updated_at=datetime.now(_CN_TZ),
                         )
                     )
                 count += 1

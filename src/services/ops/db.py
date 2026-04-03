@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +12,10 @@ from src.models.ops import GenerationJob, GenerationOutput, TrendBriefRecord, Tr
 logger = get_logger("service.ops.db")
 
 
-def _utcnow() -> str:
-    return datetime.utcnow().isoformat()
+_CN_TZ = timezone(timedelta(hours=8))
+
+def _now() -> str:
+    return datetime.now(_CN_TZ).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class OpsDatabase:
@@ -247,7 +249,7 @@ class OpsDatabase:
         c.commit()
 
     def upsert_trend_item(self, item: TrendItem) -> None:
-        now = _utcnow()
+        now = _now()
         payload = item.model_dump()
         payload["updated_at"] = now
         payload.setdefault("created_at", now)
@@ -314,7 +316,7 @@ class OpsDatabase:
         self.conn.commit()
 
     def upsert_brief(self, brief: TrendBriefRecord) -> None:
-        now = _utcnow()
+        now = _now()
         payload = brief.model_dump()
         payload["updated_at"] = now
         payload.setdefault("created_at", now)
@@ -378,7 +380,7 @@ class OpsDatabase:
     def update_job(self, job_id: str, **fields: Any) -> None:
         if not fields:
             return
-        fields["updated_at"] = _utcnow()
+        fields["updated_at"] = _now()
         assignments = ", ".join(f"{key} = ?" for key in fields)
         values = [self._to_iso(value) for value in fields.values()]
         values.append(job_id)
@@ -594,7 +596,7 @@ class OpsDatabase:
         return result
 
     def set_trend_review(self, trend_id: str, review_status: str, decision: str = "", reviewed_by: str = "") -> None:
-        now = _utcnow()
+        now = _now()
         self.conn.execute(
             "UPDATE trend_items SET review_status = ?, decision = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?",
             (review_status, decision, reviewed_by, now, now, trend_id),
@@ -606,7 +608,7 @@ class OpsDatabase:
             return
         self.conn.execute(
             "UPDATE trend_items SET queue_status = ?, updated_at = ? WHERE id = ?",
-            (queue_status, _utcnow(), trend_id),
+            (queue_status, _now(), trend_id),
         )
         self.conn.commit()
 
@@ -615,21 +617,21 @@ class OpsDatabase:
     def create_sys_task(self, job_id: str, job_type: str) -> None:
         self.conn.execute(
             "INSERT INTO sys_task_jobs (id, job_type, status, started_at) VALUES (?, ?, ?, ?)",
-            (job_id, job_type, "running", _utcnow()),
+            (job_id, job_type, "running", _now()),
         )
         self.conn.commit()
 
     def update_sys_task(self, job_id: str, status: str, result_summary: str = "{}") -> None:
         self.conn.execute(
             "UPDATE sys_task_jobs SET status = ?, completed_at = ?, result_summary = ? WHERE id = ?",
-            (status, _utcnow(), result_summary, job_id),
+            (status, _now(), result_summary, job_id),
         )
         self.conn.commit()
 
     def log_task_step(self, job_id: str, message: str, step_name: str = "", log_level: str = "INFO") -> None:
         self.conn.execute(
             "INSERT INTO sys_task_logs (job_id, step_name, log_level, message, created_at) VALUES (?, ?, ?, ?, ?)",
-            (job_id, step_name, log_level, message, _utcnow()),
+            (job_id, step_name, log_level, message, _now()),
         )
         self.conn.commit()
 
@@ -668,7 +670,7 @@ class OpsDatabase:
                     str(item.get("source", "RSS")),
                     str(item.get("published_at") or item.get("published") or ""),
                     batch_date,
-                    _utcnow()
+                    _now()
                 )
             )
         c.commit()
@@ -690,21 +692,21 @@ class OpsDatabase:
     def create_crawl_job(self, job_id: str, job_type: str) -> None:
         self.conn.execute(
             "INSERT INTO crawl_jobs (id, job_type, status, started_at) VALUES (?, ?, ?, ?)",
-            (job_id, job_type, "running", _utcnow()),
+            (job_id, job_type, "running", _now()),
         )
         self.conn.commit()
 
     def update_crawl_job(self, job_id: str, status: str, result_summary: str = "{}") -> None:
         self.conn.execute(
             "UPDATE crawl_jobs SET status = ?, completed_at = ?, result_summary = ? WHERE id = ?",
-            (status, _utcnow(), result_summary, job_id),
+            (status, _now(), result_summary, job_id),
         )
         self.conn.commit()
 
     def log_crawl_step(self, job_id: str, message: str, step_name: str = "", log_level: str = "INFO") -> None:
         self.conn.execute(
             "INSERT INTO crawl_job_logs (job_id, step_name, log_level, message, created_at) VALUES (?, ?, ?, ?, ?)",
-            (job_id, step_name, log_level, message, _utcnow()),
+            (job_id, step_name, log_level, message, _now()),
         )
         self.conn.commit()
     
@@ -744,7 +746,7 @@ class OpsDatabase:
     # --- Blog Drafts ---
 
     def insert_blog_draft(self, data: dict) -> None:
-        now = _utcnow()
+        now = _now()
         self.conn.execute(
             """
             INSERT INTO blog_drafts (
@@ -807,7 +809,7 @@ class OpsDatabase:
         shopify_article_id: str = "",
         shopify_url: str = "",
     ) -> None:
-        now = _utcnow()
+        now = _now()
         published_at = now if publish_status in ("shopify_draft", "published") else None
         self.conn.execute(
             """
@@ -830,7 +832,7 @@ class OpsDatabase:
     def ensure_chat_session(
         self, session_id: str, agent_type: str, created_by: str = "system",
     ) -> None:
-        now = _utcnow()
+        now = _now()
         self.conn.execute(
             """
             INSERT OR IGNORE INTO chat_sessions (id, agent_type, created_by, created_at, updated_at)
@@ -848,7 +850,7 @@ class OpsDatabase:
         tool_name: str = "",
         tool_call_id: str = "",
     ) -> None:
-        now = _utcnow()
+        now = _now()
         self.conn.execute(
             """
             INSERT INTO chat_messages (session_id, role, content, tool_name, tool_call_id, created_at)

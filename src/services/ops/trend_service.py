@@ -58,19 +58,17 @@ class TrendService:
             self.db.log_task_step(job_id, "[Stage 1] Running News Aggregation Pipeline")
             import os
             from trend_fetcher.main import fetch_raw_data
-            from trend_fetcher.aggregator import TrendAggregator
             from trend_fetcher.sticker_pipeline import StickerOpportunityPipeline
 
             raw_data = fetch_raw_data()
-            aggregator = TrendAggregator()
-            result = aggregator.aggregate(raw_data)
 
             all_raw_items = []
             for items in raw_data.values():
                 all_raw_items.extend(items)
                 
             from datetime import datetime
-            batch_date = datetime.utcnow().strftime("%Y-%m-%d")
+            from datetime import timezone, timedelta
+            batch_date = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
             self.db.insert_raw_news(all_raw_items, batch_date)
 
             # Pass the db instance and job_id so pipeline logs to sys_task_logs and DB

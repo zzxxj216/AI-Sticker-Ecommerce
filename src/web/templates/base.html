@@ -24,68 +24,96 @@
         </div>
         <nav class="sidebar-nav" id="main-nav">
 
+          <!-- 工作台首页（独立入口，不折叠） -->
+          <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/" style="display:flex;align-items:center;gap:6px;padding:10px 16px;font-weight:600;margin-bottom:14px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            工作台
+          </a>
+
           {% if current_user %}
-          <!-- 趋势数据 -->
+          <!-- 热点发现 -->
           <div class="nav-group {% if not request.url.path.startswith('/hot-news') and not request.url.path.startswith('/aggregated-topics') and not request.url.path.startswith('/tk-topics') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
                <div style="display:flex;align-items:center;">
                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="icon" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path></svg>
-                 趋势数据
+                 热点发现
                </div>
                <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path.startswith('/hot-news') %}active{% endif %}" href="/hot-news">
-                热点新闻
+                新闻动态
               </a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/tk-topics') %}active{% endif %}" href="/tk-topics">
-                TikTok 话题
+                TikTok 动态
               </a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/aggregated-topics') %}active{% endif %}" href="/aggregated-topics">
-                聚合话题
+                话题总览
               </a>
             </div>
           </div>
           {% endif %}
 
-          <!-- 审核中心 -->
+          <!-- 选题审核 -->
           <div class="nav-group {% if request.url.path != '/trends' and not request.url.path.startswith('/trends/') and not request.url.path.startswith('/approved') and not request.url.path.startswith('/archive') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
                <div style="display:flex;align-items:center;">
                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
-                 审核中心
+                 选题审核
                </div>
                <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path == '/trends' or request.url.path.startswith('/trends/') %}active{% endif %}" href="/trends">
-                趋势总览
+                审核看板
               </a>
               {% if current_user %}
               <a class="nav-link sub-link {% if request.url.path.startswith('/approved') %}active{% endif %}" href="/approved">
-                已采纳素材
+                待生产素材
               </a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/archive') %}active{% endif %}" href="/archive">
-                历史归档
+                归档记录
               </a>
               {% endif %}
             </div>
           </div>
 
           {% if current_user %}
-          <!-- 生产管理 -->
-          <div class="nav-group {% if not request.url.path.startswith('/jobs') and not request.url.path.startswith('/stickers') and not request.url.path.startswith('/packs') and not request.url.path.startswith('/blogs') %}collapsed{% endif %}">
+          <!-- 创作中心 -->
+          <div class="nav-group {% if not request.url.path.startswith('/tools/') and not request.url.path.startswith('/chat-history') and not request.url.path.startswith('/jobs') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
-                生产管理
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                创作中心
               </div>
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/jobs') %}active{% endif %}" href="/jobs">
-                任务监控
+              <a class="nav-link sub-link {% if request.url.path == '/tools/chat-sticker' %}active{% endif %}" href="/tools/chat-sticker">
+                AI 卡贴创作
               </a>
+              <a class="nav-link sub-link {% if request.url.path == '/tools/chat-blog' %}active{% endif %}" href="/tools/chat-blog">
+                AI Blog 创作
+              </a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/jobs') %}active{% endif %}" href="/jobs">
+                生产任务
+              </a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/chat-history') %}active{% endif %}" href="/chat-history">
+                对话记录
+              </a>
+            </div>
+          </div>
+
+          <!-- 资产管理 -->
+          <div class="nav-group {% if not request.url.path.startswith('/stickers') and not request.url.path.startswith('/packs') and not request.url.path.startswith('/blogs') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+                资产管理
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path.startswith('/stickers') %}active{% endif %}" href="/stickers">
                 卡贴画廊
               </a>
@@ -94,28 +122,6 @@
               </a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/blogs') %}active{% endif %}" href="/blogs">
                 Blog 管理
-              </a>
-            </div>
-          </div>
-
-          <!-- 其他工具 -->
-          <div class="nav-group {% if not request.url.path.startswith('/tools/') and not request.url.path.startswith('/chat-history') %}collapsed{% endif %}">
-            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
-              <div style="display:flex;align-items:center;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
-                其他工具
-              </div>
-              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-            </div>
-            <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path == '/tools/chat-sticker' %}active{% endif %}" href="/tools/chat-sticker">
-                对话生成卡贴
-              </a>
-              <a class="nav-link sub-link {% if request.url.path == '/tools/chat-blog' %}active{% endif %}" href="/tools/chat-blog">
-                对话生成 Blog
-              </a>
-              <a class="nav-link sub-link {% if request.url.path.startswith('/chat-history') %}active{% endif %}" href="/chat-history">
-                对话记录
               </a>
             </div>
           </div>

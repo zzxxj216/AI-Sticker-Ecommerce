@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_CN_TZ = timezone(timedelta(hours=8))
 from pathlib import Path
 
 from src.core.logger import get_logger
@@ -40,8 +42,8 @@ class JobService:
             trend_name=trend_name,
             status="queued",
             created_by=created_by,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(_CN_TZ),
+            updated_at=datetime.now(_CN_TZ),
         )
         self.db.create_job(job)
         self.db.set_trend_queue_status(trend_id, "queued")
@@ -73,7 +75,7 @@ class JobService:
         if not job:
             return
 
-        self.db.update_job(job_id, status="running", started_at=datetime.utcnow())
+        self.db.update_job(job_id, status="running", started_at=datetime.now(_CN_TZ))
         self.db.set_trend_queue_status(job["trend_id"], "running")
 
         try:
@@ -92,7 +94,7 @@ class JobService:
                 output_dir=output_dir,
                 image_count=len(result.image_paths),
                 error_message=result.error or "",
-                finished_at=datetime.utcnow(),
+                finished_at=datetime.now(_CN_TZ),
             )
             self.db.set_trend_queue_status(job["trend_id"], result.status if result.status in {"completed", "failed"} else "completed")
         except Exception as exc:
@@ -101,7 +103,7 @@ class JobService:
                 job_id,
                 status="failed",
                 error_message=str(exc),
-                finished_at=datetime.utcnow(),
+                finished_at=datetime.now(_CN_TZ),
             )
             self.db.set_trend_queue_status(job["trend_id"], "failed")
 
@@ -122,7 +124,7 @@ class JobService:
                     file_path=str(path),
                     preview_path=str(path) if output_type == "image" else "",
                     metadata_json={"name": path.name, "size": path.stat().st_size},
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(_CN_TZ),
                 )
             )
         return outputs

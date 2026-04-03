@@ -11,7 +11,9 @@ import json
 import queue
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_CN_TZ = timezone(timedelta(hours=8))
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -171,7 +173,9 @@ class StickerAgentService:
         for row in rows:
             role = row["role"]
             content = row["content"]
-            if role == "tool":
+            if role == "assistant_tool_calls":
+                self._memory.add_message(session_id, "assistant_tool_calls", content)
+            elif role == "tool":
                 tool_name = row.get("tool_name", "")
                 tool_call_id = row.get("tool_call_id", "")
                 self._memory.add_message(session_id, "tool", json.dumps({
@@ -236,14 +240,21 @@ class StickerAgentService:
 
         SYSTEM = (
             "You are a sticker pack design assistant for 'Inkelligent', an AI sticker e-commerce brand.\n"
+            "Our customers are overseas (English-speaking markets).\n"
             "Help users design and generate sticker packs.\n\n"
             "Rules:\n"
-            "- Respond in the SAME language the user uses\n"
+            "- Respond in the SAME language the user uses (Chinese is fine for conversation)\n"
             "- When user describes a sticker idea, help refine it: suggest theme, style, colors\n"
             "- When design is clear enough, confirm with user then call generate_sticker_pack\n"
             "- IMPORTANT: When user's intent clearly maps to a tool, call it immediately\n"
             "- Keep responses concise and friendly\n"
             "- After generation completes, remind user they can check gallery or generate more\n\n"
+            "CRITICAL — Language rule for tool calls:\n"
+            "- When calling generate_sticker_pack, ALL parameters (theme, style, color_mood, extras) "
+            "MUST be written in English, even if the user speaks Chinese.\n"
+            "- Translate and adapt the user's Chinese description into natural English.\n"
+            "- Sticker images are for overseas customers — no Chinese characters allowed in any sticker content.\n"
+            "- If the user's idea includes Chinese text for stickers, translate it into English equivalents.\n\n"
             "Design dimensions you can help with:\n"
             "- Theme: core topic (e.g. cute cats, coffee lover, space adventure)\n"
             "- Style: visual style (cute/kawaii, minimalist, retro, watercolor, flat, cyberpunk)\n"
@@ -254,7 +265,24 @@ class StickerAgentService:
         messages = [{"role": "system", "content": SYSTEM}]
         for msg in self._memory.get_history(session_id):
             role = msg["role"]
-            if role == "tool":
+            if role == "assistant_tool_calls":
+                try:
+                    calls = json.loads(msg["content"])
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": c["id"],
+                                "type": "function",
+                                "function": {"name": c["name"], "arguments": c["arguments"]},
+                            }
+                            for c in calls
+                        ],
+                    })
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif role == "tool":
                 try:
                     td = json.loads(msg["content"])
                     messages.append({
@@ -287,6 +315,14 @@ class StickerAgentService:
 
             if msg_obj.tool_calls:
                 messages.append(msg_obj)
+
+                # Persist the assistant message that contains tool_calls
+                tc_payload = json.dumps([
+                    {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+                    for tc in msg_obj.tool_calls
+                ], ensure_ascii=False)
+                self._memory.add_message(session_id, "assistant_tool_calls", tc_payload)
+                self._persist(session_id, "assistant_tool_calls", tc_payload, created_by=created_by)
 
                 for tc in msg_obj.tool_calls:
                     tool_name = tc.function.name
@@ -442,10 +478,10 @@ class StickerAgentService:
                 image_count=len(result.image_paths),
                 error_message=result.error or "",
                 created_by=created_by,
-                created_at=datetime.utcnow(),
-                started_at=datetime.utcnow(),
-                finished_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(_CN_TZ),
+                started_at=datetime.now(_CN_TZ),
+                finished_at=datetime.now(_CN_TZ),
+                updated_at=datetime.now(_CN_TZ),
             )
             db.create_job(job)
 

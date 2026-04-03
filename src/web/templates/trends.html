@@ -25,21 +25,23 @@
 {% set news_watchlist = news_items|selectattr('score', 'lt', 70)|list %}
 {% set news_approved = news_items|selectattr('review_status', 'equalto', 'approved')|list %}
 {% set news_batch_date = news_items[0].batch_date if news_items and news_items[0].batch_date else (news_items[0].created_at[:10] if news_items else '未知日期') %}
+{% set tk_recommend = tiktok_items|selectattr('score', 'ge', 70)|list %}
+{% set tk_pending = tiktok_items|selectattr('review_status', 'equalto', 'pending')|list %}
+{% set tk_watchlist = tiktok_items|selectattr('score', 'lt', 70)|selectattr('review_status', 'equalto', 'pending')|list %}
+{% set tk_approved = tiktok_items|selectattr('review_status', 'equalto', 'approved')|list %}
+{% set all_review = [] %}
+{# Jinja2 list concat workaround #}
+{% for item in news_watchlist %}{% if all_review.append(item) %}{% endif %}{% endfor %}
+{% for item in tk_watchlist %}{% if all_review.append(item) %}{% endif %}{% endfor %}
 
-<section class="stat-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+<section class="stat-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;">
   <article class="stat-card">
     <span class="stat-label">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M4 22h16a2 2 0 002-2V4a2 2 0 00-2-2H8a2 2 0 00-2 2v16a2 2 0 01-2 2zm0 0a2 2 0 01-2-2v-9c0-1.1.9-2 2-2h2"/></svg>
       聚合热点
     </span>
     <strong class="stat-value">{{ news_items|length }}</strong>
-  </article>
-  <article class="stat-card">
-    <span class="stat-label">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-      人工已采纳
-    </span>
-    <strong class="stat-value">{{ news_approved|length }}</strong>
+    <small class="stat-sub" style="font-size:11px;color:var(--text-muted);">已采纳 {{ news_approved|length }}</small>
   </article>
   <article class="stat-card">
     <span class="stat-label">
@@ -47,247 +49,203 @@
       TikTok 话题
     </span>
     <strong class="stat-value">{{ tiktok_items|length }}</strong>
+    <small class="stat-sub" style="font-size:11px;color:var(--text-muted);">已采纳 {{ tk_approved|length }}</small>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      待人工审核
+    </span>
+    <strong class="stat-value">{{ all_review|length }}</strong>
+    <small class="stat-sub" style="font-size:11px;color:var(--text-muted);">热点 {{ news_watchlist|length }} + TK {{ tk_watchlist|length }}</small>
   </article>
   <article class="stat-card">
     <span class="stat-label">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-      话题已采纳
+      总已采纳
     </span>
-    <strong class="stat-value">{{ tiktok_items|selectattr('review_status', 'equalto', 'approved')|list|length }}</strong>
+    <strong class="stat-value">{{ news_approved|length + tk_approved|length }}</strong>
+    <small class="stat-sub" style="font-size:11px;color:var(--text-muted);">热点 {{ news_approved|length }} + TK {{ tk_approved|length }}</small>
   </article>
 </section>
 
+{# ── Unified review item macro ── #}
+{% macro review_item(item, idx) %}
+<div class="leaderboard-item-wrap review-page-item" id="item-{{ item.id|replace(':', '-') }}" data-source="{{ item.source_type or 'news' }}">
+  {% if current_user %}
+  <a class="leaderboard-item" href="/trends/{{ item.id }}">
+  {% else %}
+  <div class="leaderboard-item" style="cursor:default;">
+  {% endif %}
+    <div class="rank-number">{{ idx }}</div>
+    <div class="item-content">
+      <div class="item-title">
+        {% if item.source_type == 'tiktok' %}<span style="color:var(--primary);margin-right:2px;">#</span>{% endif %}
+        {{ item.trend_name or item.title }}
+      </div>
+      {% if item.summary %}
+      <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
+      {% elif item.trend_name and item.trend_name != item.title %}
+      <div class="item-subtitle">{{ item.title }}</div>
+      {% endif %}
+    </div>
+    <div class="item-metrics">
+      {% if item.source_type == 'tiktok' %}
+      <div class="metric">
+        <span class="metric-value views-value">{{ format_views(item.heat_score) }}</span>
+        <span class="metric-label">播放量</span>
+      </div>
+      {% endif %}
+      {% if item.score and item.score > 0 %}
+      <div class="metric">
+        <span class="metric-value">{{ '%.0f'|format(item.score) }}</span>
+        <span class="metric-label">评分</span>
+      </div>
+      {% endif %}
+    </div>
+    <div class="item-status" style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
+      {% if item.review_status == 'approved' %}
+        <span class="badge badge-approved" title="由 {{ item.reviewed_by or '?' }} 采纳">✓ 已采纳</span>
+      {% elif item.review_status == 'skipped' %}
+        <span class="badge badge-skipped">已跳过</span>
+      {% else %}
+        <span class="badge badge-ai-watch">待审核</span>
+      {% endif %}
+      <span class="badge" style="font-size:10px;padding:1px 6px;background:{% if item.source_type == 'tiktok' %}rgba(0,0,0,0.06){% else %}rgba(59,130,246,0.08){% endif %};color:var(--text-muted);">
+        {{ 'TikTok' if item.source_type == 'tiktok' else '热点' }}
+      </span>
+    </div>
+  {% if current_user %}</a>{% else %}</div>{% endif %}
+  {% if current_user %}
+  {% if item.review_status == 'pending' %}
+  <div class="inline-actions">
+    <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      采纳
+    </button>
+    <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)" title="跳过">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      跳过
+    </button>
+  </div>
+  {% elif item.review_status == 'approved' and item.reviewed_by %}
+  <div class="review-meta">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    {{ item.reviewed_by }} 采纳
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endmacro %}
+
 <!-- ── 三榜单 ── -->
-<div class="dual-board" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+<div class="dual-board" style="grid-template-columns: 1fr 1.2fr 1fr;">
 
-  <!-- 列1：高分热点信息 -->
+  <!-- 列1：热点信息 AI 推荐 -->
   <div class="leaderboard" id="news-leaderboard-high">
-
-    <!-- 区段1: AI 推荐 (score ≥ 70) -->
     <div class="leaderboard-header">
       <div class="leaderboard-header-left">
         <div class="leaderboard-icon news">🔥</div>
-        <span class="leaderboard-title">热点信息 <small style="font-weight:500; font-size:12px; opacity:0.7; margin-left:8px;">采集于: {{ news_batch_date }}</small></span>
+        <span class="leaderboard-title">热点信息 <small style="font-weight:500; font-size:12px; opacity:0.7; margin-left:8px;">{{ news_batch_date }}</small></span>
       </div>
-      <span class="leaderboard-count" title="评分 ≥ 70 · 高分系统推荐">{{ news_recommend|length }} 项 · 评分≥70</span>
+      <span class="leaderboard-count" data-pager="news-count" title="评分 ≥ 70">{{ news_recommend|length }} 项</span>
     </div>
-    <div class="leaderboard-body" style="max-height:none;">
+    <div class="leaderboard-body pager-body" data-pager="news" style="max-height:none;">
       {% if news_recommend %}
         {% for item in news_recommend %}
-        <div class="leaderboard-item-wrap" id="item-{{ item.id|replace(':', '-') }}">
-          {% if current_user %}
-          <a class="leaderboard-item" href="/trends/{{ item.id }}">
-          {% else %}
-          <div class="leaderboard-item" style="cursor:default;">
-          {% endif %}
-            <div class="rank-number {% if loop.index == 1 %}top-1{% elif loop.index == 2 %}top-2{% elif loop.index == 3 %}top-3{% endif %}">
-              {{ loop.index }}
-            </div>
-            <div class="item-content">
-              <div class="item-title">{{ item.trend_name or item.title }}</div>
-              {% if item.summary %}
-              <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
-              {% endif %}
-            </div>
-            <div class="item-metrics">
-              <div class="metric">
-                <span class="metric-value">{{ '%.0f'|format(item.score or 0) }}</span>
-                <span class="metric-label">评分</span>
-              </div>
-            </div>
-            <div class="item-status">
-              {% if item.review_status == 'approved' %}
-                <span class="badge badge-approved" title="由 {{ item.reviewed_by or '?' }} 采纳">✓ 已采纳</span>
-              {% elif item.review_status == 'skipped' %}
-                <span class="badge badge-skipped">已跳过</span>
-              {% else %}
-                <span class="badge badge-ai-rec">热点信息</span>
-              {% endif %}
-            </div>
-          {% if current_user %}</a>{% else %}</div>{% endif %}
-          {% if current_user %}
-          {% if item.review_status == 'pending' %}
-          <div class="inline-actions">
-            <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳此热点">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              采纳
-            </button>
-            <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)" title="跳过此热点">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-              跳过
-            </button>
-          </div>
-          {% elif item.review_status == 'approved' and item.reviewed_by %}
-          <div class="review-meta">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            {{ item.reviewed_by }} 采纳
-          </div>
-          {% endif %}
-          {% endif %}
-        </div>
+        {{ review_item(item, loop.index) }}
         {% endfor %}
       {% else %}
-      <div class="leaderboard-empty" style="padding:30px 24px;">
+      <div class="leaderboard-empty pager-empty" style="padding:30px 24px;">
         <p>暂无高分推荐 (≥70 分)</p>
       </div>
       {% endif %}
     </div>
+    {% if news_recommend|length > 6 %}
+    <div class="col-pagination" style="padding:8px 16px;border-top:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:center;">
+      <span data-pager="news-info" style="font-size:12px;color:var(--text-muted);"></span>
+      <div style="display:flex;gap:6px;">
+        <button class="btn-secondary" data-pager="news-prev" onclick="pagerGo('news',-1)" style="padding:4px 10px;font-size:12px;" disabled>上一页</button>
+        <button class="btn-secondary" data-pager="news-next" onclick="pagerGo('news',1)" style="padding:4px 10px;font-size:12px;">下一页</button>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
-  <!-- 列2：待人工审核栏 -->
-  <div class="leaderboard" id="news-leaderboard-review">
+  <!-- 列2：需人工审核（合并热点 + TikTok） -->
+  <div class="leaderboard" id="review-leaderboard">
     <div class="leaderboard-header" style="background: rgba(0,0,0,0.015);">
       <div class="leaderboard-header-left">
         <div class="leaderboard-icon news" style="filter: grayscale(0.6);">👀</div>
         <span class="leaderboard-title">需人工审核</span>
       </div>
-      <span class="leaderboard-count" title="评分 50-70">{{ news_watchlist|length }} 项 · 评分 50-70</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <select id="review-filter" onchange="filterReview()" style="font-size:11px;padding:2px 6px;border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);color:var(--text-secondary);">
+          <option value="all">全部</option>
+          <option value="news">仅热点</option>
+          <option value="tiktok">仅 TikTok</option>
+        </select>
+        <span class="leaderboard-count" data-pager="review-count">{{ all_review|length }} 项</span>
+      </div>
     </div>
 
-    <!-- 区段2: 待人工审核 (score 50-70) -->
-    <div class="leaderboard-body" style="max-height:none;">
-      {% if news_watchlist %}
-      {% for item in news_watchlist %}
-      <div class="leaderboard-item-wrap" id="item-{{ item.id|replace(':', '-') }}">
-        {% if current_user %}
-        <a class="leaderboard-item" href="/trends/{{ item.id }}">
-        {% else %}
-        <div class="leaderboard-item" style="cursor:default;">
-        {% endif %}
-          <div class="rank-number">
-            {{ loop.index + news_recommend|length }}
-          </div>
-          <div class="item-content">
-            <div class="item-title">{{ item.trend_name or item.title }}</div>
-            {% if item.summary %}
-            <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
-            {% endif %}
-          </div>
-          <div class="item-metrics">
-            <div class="metric">
-              <span class="metric-value">{{ '%.0f'|format(item.score or 0) }}</span>
-              <span class="metric-label">评分</span>
-            </div>
-          </div>
-          <div class="item-status">
-            {% if item.review_status == 'approved' %}
-              <span class="badge badge-approved" title="由 {{ item.reviewed_by or '?' }} 采纳">✓ 已采纳</span>
-            {% elif item.review_status == 'skipped' %}
-              <span class="badge badge-skipped">已跳过</span>
-            {% else %}
-              <span class="badge badge-ai-watch">待审核</span>
-            {% endif %}
-          </div>
-        {% if current_user %}</a>{% else %}</div>{% endif %}
-        {% if current_user %}
-        {% if item.review_status == 'pending' %}
-        <div class="inline-actions">
-          <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳此热点">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            采纳
-          </button>
-          <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)" title="跳过此热点">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-            跳过
-          </button>
-        </div>
-        {% elif item.review_status == 'approved' and item.reviewed_by %}
-        <div class="review-meta">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          {{ item.reviewed_by }} 采纳
-        </div>
-        {% endif %}
-        {% endif %}
-      </div>
-      {% endfor %}
+    <div class="leaderboard-body pager-body" data-pager="review" style="max-height:none;">
+      {% if all_review %}
+        {% for item in all_review %}
+        {{ review_item(item, loop.index) }}
+        {% endfor %}
       {% else %}
-      <div class="leaderboard-empty" style="padding:30px 24px;">
+      <div class="leaderboard-empty pager-empty" style="padding:30px 24px;">
         <p>暂无待审核数据</p>
       </div>
       {% endif %}
     </div>
+
+    {% if all_review|length > 0 %}
+    <div class="col-pagination" style="padding:8px 16px;border-top:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:center;">
+      <span data-pager="review-info" style="font-size:12px;color:var(--text-muted);"></span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <select id="review-pagesize" onchange="changePageSize()" style="font-size:11px;padding:2px 6px;border:1px solid var(--line-soft);border-radius:4px;background:var(--surface);color:var(--text-secondary);">
+          <option value="6" selected>6条/页</option>
+          <option value="10">10条/页</option>
+          <option value="20">20条/页</option>
+        </select>
+        <button class="btn-secondary" data-pager="review-prev" onclick="pagerGo('review',-1)" style="padding:4px 10px;font-size:12px;" disabled>上一页</button>
+        <button class="btn-secondary" data-pager="review-next" onclick="pagerGo('review',1)" style="padding:4px 10px;font-size:12px;">下一页</button>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
-  <!-- 右栏：TikTok 话题榜 -->
+  <!-- 列3：TikTok AI 推荐 -->
   <div class="leaderboard" id="tiktok-leaderboard">
     <div class="leaderboard-header">
       <div class="leaderboard-header-left">
         <div class="leaderboard-icon tiktok">📱</div>
-        <span class="leaderboard-title">TikTok 话题榜</span>
+        <span class="leaderboard-title">TikTok AI 推荐</span>
       </div>
-      <span class="leaderboard-count">{{ tiktok_items|length }} 项</span>
+      <span class="leaderboard-count" data-pager="tk-count" title="评分 ≥ 70">{{ tk_recommend|length }} 项</span>
     </div>
-    <div class="leaderboard-body">
-      {% if tiktok_items %}
-        {% for item in tiktok_items %}
-        <div class="leaderboard-item-wrap" id="item-{{ item.id|replace(':', '-') }}">
-          {% if current_user %}
-          <a class="leaderboard-item" href="/trends/{{ item.id }}">
-          {% else %}
-          <div class="leaderboard-item" style="cursor:default;">
-          {% endif %}
-            <div class="rank-number {% if loop.index == 1 %}top-1{% elif loop.index == 2 %}top-2{% elif loop.index == 3 %}top-3{% endif %}">
-              {{ loop.index }}
-            </div>
-            <div class="item-content">
-              <div class="item-title">#{{ item.title }}</div>
-              {% if item.summary %}
-              <div class="item-subtitle">{{ item.summary[:60] }}{% if item.summary|length > 60 %}…{% endif %}</div>
-              {% elif item.trend_name and item.trend_name != item.title %}
-              <div class="item-subtitle">{{ item.trend_name }}</div>
-              {% endif %}
-            </div>
-            <div class="item-metrics">
-              <div class="metric">
-                <span class="metric-value views-value">{{ format_views(item.heat_score) }}</span>
-                <span class="metric-label">播放量</span>
-              </div>
-              {% if item.score > 0 %}
-              <div class="metric">
-                <span class="metric-value">{{ '%.0f'|format(item.score) }}</span>
-                <span class="metric-label">评分</span>
-              </div>
-              {% endif %}
-            </div>
-            <div class="item-status">
-              {% if item.review_status == 'approved' %}
-                <span class="badge badge-approved">✓ 已采纳</span>
-              {% elif item.review_status == 'skipped' %}
-                <span class="badge badge-skipped">已跳过</span>
-              {% else %}
-                <span class="badge" style="font-size:11px;padding:3px 8px;">pending</span>
-              {% endif %}
-            </div>
-          {% if current_user %}</a>{% else %}</div>{% endif %}
-          {% if current_user %}
-          {% if item.review_status == 'pending' %}
-          <div class="inline-actions">
-            <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              采纳
-            </button>
-            <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-              跳过
-            </button>
-          </div>
-          {% elif item.review_status == 'approved' and item.reviewed_by %}
-          <div class="review-meta">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            {{ item.reviewed_by }} 采纳
-          </div>
-          {% endif %}
-          {% endif %}
-        </div>
+    <div class="leaderboard-body pager-body" data-pager="tk" style="max-height:none;">
+      {% if tk_recommend %}
+        {% for item in tk_recommend %}
+        {{ review_item(item, loop.index) }}
         {% endfor %}
       {% else %}
-      <div class="leaderboard-empty">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 104 4V4a5 5 0 005 5"/></svg>
-        <p>暂无 TikTok 话题数据</p>
-        <p style="font-size:11px;margin-top:4px;">需要先运行 TikTok 话题抓取</p>
+      <div class="leaderboard-empty pager-empty" style="padding:30px 24px;">
+        <p>暂无 TikTok 高分推荐 (≥70 分)</p>
       </div>
       {% endif %}
     </div>
+    {% if tk_recommend|length > 6 %}
+    <div class="col-pagination" style="padding:8px 16px;border-top:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:center;">
+      <span data-pager="tk-info" style="font-size:12px;color:var(--text-muted);"></span>
+      <div style="display:flex;gap:6px;">
+        <button class="btn-secondary" data-pager="tk-prev" onclick="pagerGo('tk',-1)" style="padding:4px 10px;font-size:12px;" disabled>上一页</button>
+        <button class="btn-secondary" data-pager="tk-next" onclick="pagerGo('tk',1)" style="padding:4px 10px;font-size:12px;">下一页</button>
+      </div>
+    </div>
+    {% endif %}
     {% if current_user %}
     <div class="leaderboard-footer">
       <button class="btn-crawl" id="btn-crawl-tiktok" onclick="crawlTikTok()">
@@ -301,6 +259,74 @@
 </div>
 
 <script>
+/* ── Generic column paginator ── */
+class ColPager {
+  constructor(key, pageSize, filterFn) {
+    this.key = key;
+    this.page = 1;
+    this.pageSize = pageSize;
+    this.filterFn = filterFn || null;
+    this.body = document.querySelector(`[data-pager="${key}"]`);
+  }
+  get allItems() { return this.body ? Array.from(this.body.querySelectorAll('.review-page-item')) : []; }
+  get visible() { return this.filterFn ? this.filterFn(this.allItems) : this.allItems; }
+  render() {
+    if (!this.body) return;
+    const all = this.allItems;
+    const vis = this.visible;
+    const total = vis.length;
+    const pages = Math.max(1, Math.ceil(total / this.pageSize));
+    if (this.page > pages) this.page = pages;
+    const start = (this.page - 1) * this.pageSize;
+    const end = start + this.pageSize;
+    all.forEach(el => el.style.display = 'none');
+    vis.forEach((el, i) => {
+      el.style.display = (i >= start && i < end) ? '' : 'none';
+      const rank = el.querySelector('.rank-number');
+      if (rank) rank.textContent = i + 1;
+    });
+    const empty = this.body.querySelector('.pager-empty');
+    if (empty) empty.style.display = total === 0 ? '' : 'none';
+    this._el(`${this.key}-info`, el => el.textContent = `第 ${this.page} / ${pages} 页`);
+    this._el(`${this.key}-count`, el => el.textContent = `${total} 项`);
+    this._el(`${this.key}-prev`, el => el.disabled = this.page <= 1);
+    this._el(`${this.key}-next`, el => el.disabled = this.page >= pages);
+  }
+  go(delta) { this.page += delta; this.render(); }
+  _el(name, fn) { const el = document.querySelector(`[data-pager="${name}"]`); if (el) fn(el); }
+}
+
+/* ── Instantiate three pagers ── */
+let reviewFilter = 'all';
+const newsPager = new ColPager('news', 6);
+const reviewPager = new ColPager('review', 6, items => {
+  if (reviewFilter === 'all') return items;
+  return items.filter(el => el.dataset.source === reviewFilter);
+});
+const tkPager = new ColPager('tk', 6);
+
+function renderAll() { newsPager.render(); reviewPager.render(); tkPager.render(); }
+
+/* Review column: filter + page size */
+function filterReview() {
+  reviewFilter = document.getElementById('review-filter').value;
+  reviewPager.page = 1;
+  reviewPager.render();
+}
+function changePageSize() {
+  reviewPager.pageSize = parseInt(document.getElementById('review-pagesize').value, 10);
+  reviewPager.page = 1;
+  reviewPager.render();
+}
+
+/* Unified page navigation */
+function pagerGo(key, delta) {
+  ({news: newsPager, review: reviewPager, tk: tkPager})[key]?.go(delta);
+}
+
+document.addEventListener('DOMContentLoaded', renderAll);
+
+/* ── Review actions ── */
 async function reviewTrend(trendId, action, btn) {
   const wrap = btn.closest('.leaderboard-item-wrap');
   const actionsBar = btn.closest('.inline-actions');
@@ -316,7 +342,6 @@ async function reviewTrend(trendId, action, btn) {
     if (!resp.ok) throw new Error(await resp.text());
     const data = await resp.json();
 
-    // Update UI in-place
     const statusEl = wrap.querySelector('.item-status');
     if (action === 'approve') {
       statusEl.innerHTML = '<span class="badge badge-approved">✓ 已采纳</span>';

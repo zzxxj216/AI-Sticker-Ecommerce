@@ -40,13 +40,15 @@ function mdToHtml(md) {
       .replace(/\*\*(.+?)\*\*/g, (_, t) => '<strong>' + t + '</strong>')
       .replace(/\*(.+?)\*/g, (_, t) => '<em>' + t + '</em>')
       .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
-        const safeSrc = src.replace(/["']/g, '');
-        if (!/^https?:\/\//.test(safeSrc)) return esc(raw);
-        return '<img src="' + safeSrc + '" alt="' + esc(alt) + '" style="max-width:100%">';
+        const safeSrc = src.replace(/["'<>]/g, '');
+        if (/^(https?:\/\/|\/outputs\/|\/blog-outputs\/|\/static\/|data:image\/)/.test(safeSrc)) {
+          return '<img src="' + safeSrc + '" alt="' + esc(alt) + '" style="max-width:100%;cursor:pointer;" onclick="openLightbox(\'' + safeSrc.replace(/'/g,'') + '\')">';
+        }
+        return esc(raw);
       })
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, href) => {
         const safeHref = href.replace(/["']/g, '');
-        if (!/^https?:\/\//.test(safeHref)) return esc(text);
+        if (!/^(https?:\/\/|\/blog-outputs\/|\/outputs\/)/.test(safeHref)) return esc(text);
         return '<a href="' + safeHref + '" target="_blank" rel="noopener">' + text + '</a>';
       });
     out.push(s + '<br>');

@@ -314,7 +314,9 @@ class BlogAgentService:
         for row in rows:
             role = row["role"]
             content = row["content"]
-            if role == "tool":
+            if role == "assistant_tool_calls":
+                self._memory.add_message(session_id, "assistant_tool_calls", content)
+            elif role == "tool":
                 tool_name = row.get("tool_name", "")
                 tool_call_id = row.get("tool_call_id", "")
                 self._memory.add_message(session_id, "tool", json.dumps({
@@ -397,7 +399,24 @@ class BlogAgentService:
         messages = [{"role": "system", "content": AGENT_SYSTEM}]
         for msg in self._memory.get_history(session_id):
             role = msg["role"]
-            if role == "tool":
+            if role == "assistant_tool_calls":
+                try:
+                    calls = json.loads(msg["content"])
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": c["id"],
+                                "type": "function",
+                                "function": {"name": c["name"], "arguments": c["arguments"]},
+                            }
+                            for c in calls
+                        ],
+                    })
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif role == "tool":
                 try:
                     td = json.loads(msg["content"])
                     messages.append({
@@ -430,6 +449,13 @@ class BlogAgentService:
 
             if msg_obj.tool_calls:
                 messages.append(msg_obj)
+
+                tc_payload = json.dumps([
+                    {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+                    for tc in msg_obj.tool_calls
+                ], ensure_ascii=False)
+                self._memory.add_message(session_id, "assistant_tool_calls", tc_payload)
+                self._persist(session_id, "assistant_tool_calls", tc_payload, created_by=created_by)
 
                 for tc in msg_obj.tool_calls:
                     tool_name = tc.function.name
