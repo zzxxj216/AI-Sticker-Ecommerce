@@ -862,8 +862,8 @@ def api_get_blog(blog_id: str):
         raise HTTPException(404, "Blog not found")
     content = draft.get("content", "")
     content = re.sub(
-        r"!\[([^\]]*)\]\((?!https?://|/)(images/[^)]+)\)",
-        r"![\1](/blog-outputs/\2)",
+        r"!\[([^\]]*)\]\((?!https?://|/)([^)]+)\)",
+        r"![\1](/blog-outputs/images/\2)",
         content,
     )
     draft["content"] = content
