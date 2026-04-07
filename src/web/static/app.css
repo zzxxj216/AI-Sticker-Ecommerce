@@ -1305,3 +1305,8 @@ th[data-sort-key]:hover .sort-arrow { opacity: 1; }
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

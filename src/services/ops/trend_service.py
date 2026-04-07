@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 
+from src.core.logger import get_logger
 from src.services.ops.db import OpsDatabase
 from src.services.ops.job_service import JobService
 from src.services.ops.sync_service import OpsSyncService
 from src.models.ops import TrendBriefRecord
 
 logger = logging.getLogger(__name__)
+_brief_diag = get_logger("ops.brief", enable_file=True)
 
 
 class BriefService:
@@ -31,6 +34,14 @@ class BriefService:
             edited_by=edited_by,
         )
         self.db.upsert_brief(record)
+        try:
+            self.db.log_brief_generation(
+                trend_id,
+                f"手动保存 Brief（{edited_by}）",
+                source="manual",
+            )
+        except Exception:
+            pass
         return self.db.get_brief(trend_id) or {}
 
 
@@ -78,6 +89,12 @@ class TrendService:
             # Pass the db instance and job_id so pipeline logs to sys_task_logs and DB
             pipeline = StickerOpportunityPipeline(db=self.db, job_id=job_id)
             pipeline.run(all_raw_items)
+            stale_news = self.db.skip_stale_pending_trends("news", batch_date)
+            if job_id:
+                self.db.log_task_step(
+                    job_id,
+                    f"[Stage 1] Auto-skipped {stale_news} stale pending news (batch_date < {batch_date})",
+                )
             self.db.log_task_step(job_id, "[Stage 1] News Pipeline completed successfully")
             
             # 2. Run TikTok Pipeline
@@ -164,6 +181,16 @@ class TrendService:
             
         sync_count = self.sync_service.sync_tiktok_pipeline()
 
+        from datetime import datetime, timezone, timedelta
+        _cn = timezone(timedelta(hours=8))
+        tk_batch = datetime.now(_cn).strftime("%Y-%m-%d")
+        stale_tk = self.db.skip_stale_pending_trends("tiktok", tk_batch)
+        if job_id:
+            self.db.log_task_step(
+                job_id,
+                f"[TikTok] Auto-skipped {stale_tk} stale pending (batch_date < {tk_batch})",
+            )
+
         return {
             "new": db_stats.get("new", 0),
             "duplicate": db_stats.get("duplicate", 0),
@@ -195,17 +222,39 @@ class TrendService:
 
     def approve_trend(self, trend_id: str, reviewed_by: str = "system") -> dict | None:
         self.db.set_trend_review(trend_id, "approved", "recommend", reviewed_by=reviewed_by)
-        existing_brief = self.db.get_brief(trend_id)
-        if not existing_brief or not existing_brief.get("brief_json"):
-            self._generate_brief_on_approve(trend_id)
         return self.get_trend(trend_id)
 
+    def _brief_trace(
+        self,
+        trend_id: str,
+        message: str,
+        log_level: str = "INFO",
+        source: str = "trend_service",
+    ) -> None:
+        try:
+            self.db.log_brief_generation(trend_id, message, log_level, source)
+        except Exception as exc:
+            logger.warning("persist brief gen log failed: %s", exc)
+        line = f"[{trend_id}] {message}"
+        if log_level == "ERROR":
+            _brief_diag.error(line)
+        elif log_level in ("WARN", "WARNING"):
+            _brief_diag.warning(line)
+        else:
+            _brief_diag.info(line)
+
     def _generate_brief_on_approve(self, trend_id: str) -> None:
-        """人工采纳后，为没有 Brief 的 trend 补生成。"""
+        """人工采纳后，为没有 Brief 的 trend 补生成（同步调用，可由后台任务驱动）。"""
         trend = self.db.get_trend(trend_id)
         if not trend:
+            self._brief_trace(trend_id, "跳过生成：trend 不存在", "WARN", "sync_brief")
             return
         source_type = trend.get("source_type", "")
+        self._brief_trace(
+            trend_id,
+            f"开始生成 Brief（source_type={source_type}）",
+            source="sync_brief",
+        )
         try:
             if source_type == "tiktok":
                 self._generate_tiktok_brief(trend_id, trend)
@@ -213,44 +262,36 @@ class TrendService:
                 self._generate_news_brief(trend_id, trend)
             logger.info("Brief generated on approve for %s", trend_id)
         except Exception as e:
-            logger.warning("Brief generation (LLM) failed for %s: %s — falling back to local builder", trend_id, e)
-            try:
-                self._generate_fallback_brief(trend_id, trend)
-                logger.info("Fallback brief generated for %s", trend_id)
-            except Exception as e2:
-                logger.warning("Fallback brief also failed for %s: %s", trend_id, e2)
+            logger.warning("Brief generation failed for %s: %s", trend_id, e)
+            raise
 
-    def _generate_fallback_brief(self, trend_id: str, trend: dict) -> None:
-        """不依赖 LLM，直接用 trend 已有字段构造最小可用 Brief。"""
-        raw = trend.get("raw_payload", {})
-        review = raw.get("review", {})
-
-        def _to_list(v):
-            if isinstance(v, list): return v
-            if not v: return []
-            return [s.strip() for s in str(v).split(",") if s.strip()]
-
-        brief_data = {
-            "trend_name": trend.get("trend_name") or trend.get("title", ""),
-            "trend_type": trend.get("trend_type") or review.get("theme_type", ""),
-            "one_line_explanation": trend.get("summary") or review.get("one_line_interpretation", ""),
-            "why_now": trend.get("summary", ""),
-            "lifecycle": review.get("lifecycle", "growth"),
-            "platform": _to_list(trend.get("platform")) or _to_list(review.get("best_platform", "")),
-            "product_goal": ["sticker_pack"],
-            "target_audience": {"profile": "Gen-Z & Millennials", "usage_scenarios": ["messaging", "social_media"]},
-            "emotional_core": _to_list(trend.get("emotional_core")) or _to_list(review.get("emotional_hooks", "")),
-            "visual_symbols": _to_list(trend.get("visual_symbols")) or _to_list(review.get("visual_symbols", "")),
-            "must_avoid": _to_list(trend.get("risk_flags")),
-            "pack_size_goal": {"min": 12, "max": 24},
-            "risk_notes": _to_list(trend.get("risk_flags")),
-        }
-        self.db.upsert_brief(TrendBriefRecord(
-            trend_id=trend_id,
-            brief_status="generated",
-            brief_json=brief_data,
-            source_ref="local_fallback",
-        ))
+    def generate_brief_background(self, trend_id: str) -> None:
+        """后台任务入口：调用 LLM 生成 Brief。调用前应先标记 brief_status=generating。"""
+        t0 = time.monotonic()
+        self._brief_trace(trend_id, "后台 AI Brief 任务开始执行", source="background")
+        try:
+            self._generate_brief_on_approve(trend_id)
+            elapsed = time.monotonic() - t0
+            self._brief_trace(
+                trend_id,
+                f"后台 AI Brief 生成成功，耗时 {elapsed:.1f}s",
+                source="background",
+            )
+        except Exception as e:
+            elapsed = time.monotonic() - t0
+            self._brief_trace(
+                trend_id,
+                f"后台 AI Brief 失败（{elapsed:.1f}s）: {e}",
+                "ERROR",
+                "background",
+            )
+            self.db.upsert_brief(TrendBriefRecord(
+                trend_id=trend_id,
+                brief_status="failed",
+                brief_json={},
+                source_ref=str(e)[:500],
+            ))
+            logger.exception("Background brief generation failed for %s", trend_id)
 
     def _generate_news_brief(self, trend_id: str, trend: dict) -> None:
         """用规则引擎为 News 类 trend 生成 Brief（和批量管线同一套逻辑）。"""
@@ -278,6 +319,7 @@ class TrendService:
             brief_status="generated",
             brief_json=brief_data,
         ))
+        self._brief_trace(trend_id, "规则引擎 Brief 已写入（非 LLM）", source="news_brief")
 
     def _generate_tiktok_brief(self, trend_id: str, trend: dict) -> None:
         """用 LLM 为 TikTok 类 trend 生成 Brief（和 TopicPipeline 同一套 Prompt）。"""
@@ -307,10 +349,25 @@ class TrendService:
         }
 
         card_text = build_reviewed_card(row)
+        # 人工采纳后生成 Brief：系统 Prompt 要求 Watchlist 可不写 Brief，会导致模型拒答或只写 PART1
+        card_text += (
+            "\n\n【工作台强制指令】运营已在系统内点击「采纳」，必须交付下游卡贴可用的完整 Brief。"
+            "无论卡片上原决策为 Approve 或 Watchlist，均须输出「Brief Ready」"
+            "并写满 PART 2 全部字段；保持 ===== PART 1/2/3 ===== 三段结构；"
+            "PART 2 中每个字段以「-- 字段名」单独起行（与系统模板一致）。"
+            "禁止仅输出 Brief Not Ready 或省略 PART 2。"
+        )
+        base = (config.OPENAI_BASE_URL or "").strip() or "default"
+        self._brief_trace(
+            trend_id,
+            f"调用 LLM：model={config.OPENAI_MODEL} base={base[:80]}",
+            source="tiktok_brief",
+        )
         client = OpenAI(
             api_key=config.OPENAI_API_KEY,
             base_url=config.OPENAI_BASE_URL or None,
         )
+        t0 = time.monotonic()
         resp = client.chat.completions.create(
             model=config.OPENAI_MODEL,
             messages=[
@@ -320,21 +377,47 @@ class TrendService:
             temperature=0.5,
             max_tokens=3000,
         )
+        api_s = time.monotonic() - t0
         response_text = resp.choices[0].message.content or ""
+        self._brief_trace(
+            trend_id,
+            f"LLM 返回：{api_s:.1f}s，原文长度 {len(response_text)} 字符",
+            source="tiktok_brief",
+        )
         parsed = parse_brief_response(response_text)
 
         brief_data = {k: v for k, v in parsed.items() if k != "brief_status" and v}
+        if not brief_data:
+            self._brief_trace(
+                trend_id,
+                "Brief 解析后仍无有效字段，请重试或手动编辑 Brief",
+                "ERROR",
+                source="tiktok_brief",
+            )
+            raise ValueError(
+                "TikTok Brief 解析失败：模型未按「-- 字段名」或 PART 结构输出。"
+                "请点击「重新生成 Brief」；若多次失败请手动填写 Brief。"
+            )
         self.db.upsert_brief(TrendBriefRecord(
             trend_id=trend_id,
             brief_status="generated",
             brief_json=brief_data,
             source_ref=response_text[:2000],
         ))
+        self._brief_trace(
+            trend_id,
+            f"TikTok AI Brief 已落库，有效字段数 {len(brief_data)}",
+            source="tiktok_brief",
+        )
 
     def restore_trend(self, trend_id: str, restored_by: str = "system") -> dict | None:
         """Restore a skipped trend back to pending status."""
         self.db.set_trend_review(trend_id, "pending", "", reviewed_by=restored_by)
         return self.get_trend(trend_id)
+
+    def revert_approved_awaiting_brief_to_pending(self, reverted_by: str = "system:revert-awaiting-brief") -> int:
+        """待生产素材中：已采纳但 Brief 未就绪的条目全部改回「需要审核」。"""
+        return self.db.revert_approved_awaiting_brief_to_pending(reverted_by=reverted_by)
 
     def skip_trend(self, trend_id: str, reviewed_by: str = "system") -> dict | None:
         self.db.set_trend_review(trend_id, "skipped", "skip", reviewed_by=reviewed_by)
@@ -347,11 +430,10 @@ class TrendService:
             raise ValueError(f"Trend not found: {trend_id}")
         brief = self.db.get_brief(trend_id)
         if not brief or not brief.get("brief_json"):
-            logger.info("Brief missing for %s, attempting auto-generation...", trend_id)
-            self._generate_brief_on_approve(trend_id)
-            brief = self.db.get_brief(trend_id)
-        if not brief or not brief.get("brief_json"):
-            raise ValueError("Brief 生成失败，请在详情页手动编辑 Brief 后重试")
+            brief_status = (brief or {}).get("brief_status", "none")
+            if brief_status == "generating":
+                raise ValueError("Brief 正在由 AI 生成中，请稍后再试")
+            raise ValueError("Brief 尚未生成，请等待 AI 生成完成或在详情页手动编辑 Brief")
         trend_name = trend.get("trend_name") or trend.get("title") or trend_id
         job = self.job_service.create_job(trend_id, trend_name, created_by)
         self.job_service.start_job_async(job.id, brief["brief_json"], trend_name)

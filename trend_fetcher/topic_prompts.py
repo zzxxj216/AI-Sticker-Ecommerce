@@ -530,12 +530,20 @@ def _split_parts(text: str) -> dict[int, str]:
     return result
 
 
+def _normalize_kv_key(raw: str) -> str:
+    k = raw.strip().lower().replace(" ", "_").replace("-", "_")
+    k = re.sub(r"^\*+|\*+$", "", k)
+    return k
+
+
 def _extract_kv(text: str) -> dict[str, str]:
     """从 brief 文本提取键值对。
 
-    支持两种格式:
-      1) 单行: - key: value
-      2) 多行: - key\n  value line 1\n  value line 2  (值在后续行)
+    支持:
+      1) 单行: - key: value 或 -- key: value
+      2) TOPIC_TO_BRIEF 约定标题行: -- trend_name（无冒号，值在后续行）
+      3) Markdown: **trend_name**: value
+      4) 多行值: 标题行后缩进/正文直到下一标题
     """
     result: dict[str, str] = {}
     lines = text.split("\n")
@@ -556,23 +564,59 @@ def _extract_kv(text: str) -> dict[str, str]:
         if not stripped:
             continue
 
-        is_heading = stripped.startswith("-") and not stripped.startswith("--")
-        if is_heading:
+        # Markdown **field**: value
+        md = re.match(r"^\*\*([^*]+)\*\*\s*:\s*(.*)$", stripped)
+        if md:
             _flush()
-            content = stripped.lstrip("-").strip()
+            key = _normalize_kv_key(md.group(1))
+            rest = md.group(2).strip()
+            if key:
+                current_key = key
+                current_val_lines = [rest] if rest else []
+            continue
+
+        # -- field (与 TOPIC_TO_BRIEF_PROMPT 中「-- trend_name」一致；旧逻辑误跳过 --)
+        if stripped.startswith("--"):
+            _flush()
+            content = stripped[2:].strip()
             if ":" in content:
                 key_part, _, val_part = content.partition(":")
-                key = key_part.strip().lower().replace(" ", "_").replace("-", "_")
+                key = _normalize_kv_key(key_part)
                 val_part = val_part.strip()
                 if key:
                     current_key = key
                     current_val_lines = [val_part] if val_part else []
             else:
-                key = content.strip().lower().replace(" ", "_").replace("-", "_")
+                key = _normalize_kv_key(content)
                 if key:
                     current_key = key
                     current_val_lines = []
-        elif current_key is not None:
+            continue
+
+        # 单行 - key: value（排除 --- 分隔线）
+        is_single_dash_heading = (
+            stripped.startswith("-")
+            and not stripped.startswith("--")
+            and not stripped.startswith("---")
+        )
+        if is_single_dash_heading:
+            _flush()
+            content = stripped[1:].strip()
+            if ":" in content:
+                key_part, _, val_part = content.partition(":")
+                key = _normalize_kv_key(key_part)
+                val_part = val_part.strip()
+                if key:
+                    current_key = key
+                    current_val_lines = [val_part] if val_part else []
+            else:
+                key = _normalize_kv_key(content)
+                if key:
+                    current_key = key
+                    current_val_lines = []
+            continue
+
+        if current_key is not None:
             current_val_lines.append(stripped)
 
     _flush()
@@ -706,6 +750,14 @@ def parse_brief_response(text: str) -> dict[str, Any]:
     # PART 2 → structured brief
     part2 = parts.get(2, "")
     kv = _extract_kv(part2)
+    # 模型未打 PART 标记时，从全文再抽一遍（常见：直接输出 -- trend_name 列表）
+    if not any(kv.get(k) for k in (
+        "trend_name", "one_line_explanation", "trend_type", "visual_symbols",
+    )):
+        kv_full = _extract_kv(text)
+        for k, v in kv_full.items():
+            if v and not kv.get(k):
+                kv[k] = v
 
     return {
         "brief_status": brief_status,

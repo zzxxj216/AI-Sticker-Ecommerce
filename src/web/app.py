@@ -21,6 +21,7 @@ from src.core.logger import get_logger
 from src.services.ops.trend_service import TrendService
 from src.services.tools.sticker_agent import StickerAgentService
 from src.services.tools.blog_agent import BlogAgentService
+from src.services.video.script_agent import VideoScriptAgent
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -55,6 +56,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 trend_service = TrendService()
 chat_sticker_svc = StickerAgentService()
 chat_blog_svc = BlogAgentService()
+video_script_agent = VideoScriptAgent(db=trend_service.db)
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -291,6 +293,43 @@ def api_trend_queue(request: Request, trend_id: str) -> dict:
 def api_save_brief(request: Request, trend_id: str, payload: dict) -> dict:
     edited_by = (_current_user(request) or {}).get("name") or "system"
     return trend_service.brief_service.save_brief(trend_id, payload, edited_by=edited_by)
+
+
+@app.get("/api/trends/{trend_id}/brief-status")
+def api_brief_status(trend_id: str) -> dict:
+    brief = trend_service.db.get_brief(trend_id)
+    if not brief:
+        return {"status": "none", "has_content": False}
+    return {
+        "status": brief.get("brief_status", "none"),
+        "has_content": bool(brief.get("brief_json")),
+        "error": brief.get("source_ref", "") if brief.get("brief_status") == "failed" else "",
+    }
+
+
+@app.get("/api/trends/{trend_id}/brief-logs")
+def api_brief_gen_logs(trend_id: str, limit: int = 100) -> dict:
+    """Brief 生成/保存过程日志（数据库 + 同步写入 logs/ops.brief.log）。"""
+    trend = trend_service.get_trend(trend_id)
+    if not trend:
+        raise HTTPException(404, "Trend not found")
+    return {"trend_id": trend_id, "logs": trend_service.db.list_brief_gen_logs(trend_id, limit=limit)}
+
+
+@app.post("/api/trends/{trend_id}/retry-brief")
+def api_retry_brief(trend_id: str, background_tasks: BackgroundTasks) -> dict:
+    from src.models.ops import TrendBriefRecord
+    trend = trend_service.get_trend(trend_id)
+    if not trend:
+        raise HTTPException(404, "Trend not found")
+    trend_service.db.upsert_brief(TrendBriefRecord(
+        trend_id=trend_id, brief_status="generating", brief_json={},
+    ))
+    trend_service.db.log_brief_generation(
+        trend_id, "已排队重新生成 Brief（API retry-brief）", source="retry_api",
+    )
+    background_tasks.add_task(trend_service.generate_brief_background, trend_id)
+    return {"ok": True, "status": "generating"}
 
 
 @app.get("/api/jobs")
@@ -627,9 +666,21 @@ def save_brief_form(request: Request, trend_id: str, brief_json: str = Form(...)
 
 
 @app.post("/trends/{trend_id}/approve", response_class=HTMLResponse)
-def approve_form(request: Request, trend_id: str):
+def approve_form(request: Request, trend_id: str, background_tasks: BackgroundTasks):
+    from src.models.ops import TrendBriefRecord
     reviewer = (_current_user(request) or {}).get("name", "anonymous")
     trend_service.approve_trend(trend_id, reviewed_by=reviewer)
+    existing_brief = trend_service.db.get_brief(trend_id)
+    if not existing_brief or not existing_brief.get("brief_json"):
+        trend_service.db.upsert_brief(TrendBriefRecord(
+            trend_id=trend_id, brief_status="generating", brief_json={},
+        ))
+        trend_service.db.log_brief_generation(
+            trend_id,
+            f"采纳后已排队后台 Brief 生成（审核人 {reviewer}）",
+            source="approve_form",
+        )
+        background_tasks.add_task(trend_service.generate_brief_background, trend_id)
     return RedirectResponse(url=f"/trends/{trend_id}", status_code=303)
 
 
@@ -1023,6 +1074,65 @@ def api_batch_delete_chat_sessions(payload: dict):
         raise HTTPException(400, "ids is required")
     count = trend_service.db.delete_chat_sessions_batch(ids)
     return {"deleted": count}
+
+
+# ── Video Script Plans ──────────────────────────────────────
+
+
+@app.get("/api/video-scripts")
+def api_video_scripts():
+    tpls = trend_service.db.list_video_script_templates(active_only=True)
+    return {"templates": tpls}
+
+
+@app.post("/api/video-plans/generate")
+def api_generate_video_plans(request: Request, payload: dict, background_tasks: BackgroundTasks):
+    job_ids = payload.get("job_ids", [])
+    template_ids = payload.get("template_ids", [])
+    if not job_ids or not template_ids:
+        raise HTTPException(400, "job_ids and template_ids are required")
+    created_by = (_current_user(request) or {}).get("name") or "system"
+
+    plans = video_script_agent.generate_batch(job_ids, template_ids, created_by=created_by)
+    return {"plans": plans}
+
+
+@app.get("/api/video-plans")
+def api_list_video_plans(job_id: str | None = None):
+    plans = trend_service.db.list_video_plans(job_id=job_id)
+    return {"plans": plans}
+
+
+@app.get("/api/video-plans/{plan_id}")
+def api_get_video_plan(plan_id: str):
+    plan = trend_service.db.get_video_plan(plan_id)
+    if not plan:
+        raise HTTPException(404, "Video plan not found")
+    return plan
+
+
+@app.delete("/api/video-plans/{plan_id}")
+def api_delete_video_plan(plan_id: str):
+    ok = trend_service.db.delete_video_plan(plan_id)
+    if not ok:
+        raise HTTPException(404, "Video plan not found")
+    return {"ok": True}
+
+
+@app.get("/video-plans", response_class=HTMLResponse)
+def video_plans_page(request: Request):
+    plans = trend_service.db.list_video_plans()
+    script_tpls = trend_service.db.list_video_script_templates(active_only=True)
+    return templates.TemplateResponse(
+        request,
+        "video_plans.html",
+        _base_context(
+            request,
+            plans=plans,
+            script_templates=script_tpls,
+            page_title="视频方案",
+        ),
+    )
 
 
 @app.exception_handler(HTTPException)

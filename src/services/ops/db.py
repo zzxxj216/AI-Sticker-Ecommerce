@@ -90,6 +90,16 @@ class OpsDatabase:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS trend_brief_gen_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trend_id TEXT NOT NULL,
+                log_level TEXT DEFAULT 'INFO',
+                message TEXT NOT NULL,
+                source TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_trend_brief_gen_logs_tid ON trend_brief_gen_logs(trend_id);
+
             CREATE TABLE IF NOT EXISTS generation_jobs (
                 id TEXT PRIMARY KEY,
                 trend_id TEXT NOT NULL REFERENCES trend_items(id),
@@ -219,9 +229,34 @@ class OpsDatabase:
             CREATE INDEX IF NOT EXISTS idx_generation_outputs_job_id ON generation_outputs(job_id);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_chat_sessions_agent ON chat_sessions(agent_type);
+
+            -- Video Script Templates & Plans --
+            CREATE TABLE IF NOT EXISTS video_script_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                target TEXT DEFAULT '',
+                structure_json TEXT NOT NULL DEFAULT '{}',
+                is_active INTEGER DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS video_plans (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                template_id TEXT NOT NULL,
+                plan_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT DEFAULT 'completed',
+                created_by TEXT DEFAULT 'system',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_video_plans_job ON video_plans(job_id);
+            CREATE INDEX IF NOT EXISTS idx_video_plans_template ON video_plans(template_id);
             """
         )
         c.commit()
+        self._seed_video_script_templates(c)
         self._migrate_columns(c)
 
     def _migrate_columns(self, c: sqlite3.Connection) -> None:
@@ -290,6 +325,9 @@ class OpsDatabase:
                 emotional_core_json=excluded.emotional_core_json,
                 raw_payload_json=excluded.raw_payload_json,
                 source_url=excluded.source_url,
+                batch_date=CASE
+                    WHEN trend_items.reviewed_by IS NOT NULL AND trim(trend_items.reviewed_by) != ''
+                    THEN trend_items.batch_date ELSE excluded.batch_date END,
                 updated_at=excluded.updated_at
             """,
             (
@@ -617,6 +655,37 @@ class OpsDatabase:
             result[jid]["paths"].append(row[2])
         return result
 
+    def skip_stale_pending_trends(self, source_type: str, current_batch_date: str) -> int:
+        """将早于本次爬取批次、且从未人工审核过的 pending 趋势标记为跳过。"""
+        now = _now()
+        cur = self.conn.execute(
+            """
+            UPDATE trend_items
+            SET review_status = 'skipped',
+                decision = 'skip',
+                queue_status = 'idle',
+                reviewed_by = ?,
+                reviewed_at = ?,
+                updated_at = ?
+            WHERE source_type = ?
+              AND review_status = 'pending'
+              AND (reviewed_by IS NULL OR trim(reviewed_by) = '')
+              AND (
+                  batch_date IS NULL OR trim(batch_date) = ''
+                  OR batch_date < ?
+              )
+            """,
+            (
+                "system:auto-stale-batch",
+                now,
+                now,
+                source_type,
+                current_batch_date,
+            ),
+        )
+        self.conn.commit()
+        return cur.rowcount or 0
+
     def set_trend_review(self, trend_id: str, review_status: str, decision: str = "", reviewed_by: str = "") -> None:
         now = _now()
         self.conn.execute(
@@ -624,6 +693,48 @@ class OpsDatabase:
             (review_status, decision, reviewed_by, now, now, trend_id),
         )
         self.conn.commit()
+
+    def revert_approved_awaiting_brief_to_pending(self, reverted_by: str = "system") -> int:
+        """已采纳但尚无可用 Brief、Brief 为空或仍在生成中的趋势，改回待审核（pending）。"""
+        now = _now()
+        rows = self.conn.execute(
+            "SELECT id FROM trend_items WHERE review_status = 'approved'"
+        ).fetchall()
+        to_revert: list[str] = []
+        for row in rows:
+            tid = row["id"]
+            br = self.get_brief(tid)
+            if br is None:
+                to_revert.append(tid)
+                continue
+            if (br.get("brief_status") or "").lower() == "generating":
+                to_revert.append(tid)
+                continue
+            bj = br.get("brief_json")
+            if not bj:
+                to_revert.append(tid)
+        if not to_revert:
+            return 0
+        ph = ",".join("?" * len(to_revert))
+        self.conn.execute(
+            f"""
+            UPDATE trend_briefs
+            SET brief_status = 'failed', source_ref = 'reverted_to_pending', updated_at = ?
+            WHERE trend_id IN ({ph}) AND brief_status = 'generating'
+            """,
+            [now, *to_revert],
+        )
+        self.conn.execute(
+            f"""
+            UPDATE trend_items
+            SET review_status = 'pending', decision = '', reviewed_by = ?, reviewed_at = ?, updated_at = ?,
+                queue_status = 'idle'
+            WHERE id IN ({ph})
+            """,
+            [reverted_by, now, now, *to_revert],
+        )
+        self.conn.commit()
+        return len(to_revert)
 
     def set_trend_queue_status(self, trend_id: str, queue_status: str) -> None:
         if trend_id.startswith("chat:"):
@@ -740,6 +851,39 @@ class OpsDatabase:
         c = self.conn.execute("SELECT * FROM sys_task_logs WHERE job_id = ? ORDER BY id ASC", (job_id,))
         cols = [col[0] for col in c.description]
         return [dict(zip(cols, row)) for row in c.fetchall()]
+
+    def log_brief_generation(
+        self,
+        trend_id: str,
+        message: str,
+        log_level: str = "INFO",
+        source: str = "",
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO trend_brief_gen_logs (trend_id, log_level, message, source, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (trend_id, log_level, message, source, _now()),
+        )
+        self.conn.commit()
+
+    def list_brief_gen_logs(self, trend_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 500))
+        if trend_id:
+            c = self.conn.execute(
+                "SELECT * FROM trend_brief_gen_logs WHERE trend_id = ? ORDER BY id DESC LIMIT ?",
+                (trend_id, limit),
+            )
+        else:
+            c = self.conn.execute(
+                "SELECT * FROM trend_brief_gen_logs ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+        cols = [col[0] for col in c.description]
+        rows = [dict(zip(cols, row)) for row in c.fetchall()]
+        rows.reverse()
+        return rows
 
 
     # --- Job & Tracing Methods ---
@@ -970,6 +1114,178 @@ class OpsDatabase:
         )
         self.conn.commit()
         return cur.rowcount
+
+    # --- Video Script Templates & Plans ---
+
+    def _seed_video_script_templates(self, c: sqlite3.Connection) -> None:
+        """Seed default A/B/C video script templates if the table is empty."""
+        count = c.execute("SELECT COUNT(*) FROM video_script_templates").fetchone()[0]
+        if count > 0:
+            return
+
+        now = _now()
+        seeds = [
+            (
+                "template_a",
+                "纯视觉停留测试",
+                "测试贴纸设计的第一眼吸引力：图案是否抓眼、颜色是否吸睛、轮廓是否适合贴纸",
+                "visual_retention",
+                json.dumps({
+                    "test_goal": "visual_retention",
+                    "total_duration": "6-8s",
+                    "segments": [
+                        {"time_range": "0-1s", "purpose": "hero_shot", "guidance": "直接展示贴纸成品大图，占满画面，白底或简洁背景"},
+                        {"time_range": "1-3s", "purpose": "application_scene", "guidance": "贴纸应用场景（电脑/水杯/行李箱/车窗），展示真实使用感"},
+                        {"time_range": "3-6s", "purpose": "multi_angle", "guidance": "快速切换3个不同角度或不同贴纸款式"},
+                        {"time_range": "6-8s", "purpose": "cta", "guidance": "轻CTA提问，如 Would you put this on your laptop?"},
+                    ],
+                    "cta_style": "question",
+                    "suitable_for": "偏纯视觉审美的设计，适合测试第一眼吸引力",
+                }, ensure_ascii=False),
+                1,
+                1,
+                now,
+            ),
+            (
+                "template_b",
+                "热点语境测试",
+                "测试用户是否懂梗、愿意互动：meme理解成本、文案与视觉匹配度、美区语感",
+                "trend_context",
+                json.dumps({
+                    "test_goal": "trend_context",
+                    "total_duration": "7-10s",
+                    "segments": [
+                        {"time_range": "0-2s", "purpose": "hook_text", "guidance": "热点句子/梗先出现，用文字叠加或旁白，立刻抓住注意力"},
+                        {"time_range": "2-4s", "purpose": "sticker_reveal", "guidance": "贴纸视觉出现，展示设计如何呼应这个梗/话题"},
+                        {"time_range": "4-7s", "purpose": "real_use", "guidance": "展示贴在具体物体上的效果，强调实物感"},
+                        {"time_range": "7-10s", "purpose": "engagement_cta", "guidance": "引导评论，如 Too much or actually funny? / Need this or pass?"},
+                    ],
+                    "cta_style": "engagement",
+                    "suitable_for": "热点性强、带梗/meme的设计，适合测试语境共鸣",
+                }, ensure_ascii=False),
+                1,
+                2,
+                now,
+            ),
+            (
+                "template_c",
+                "购买意图测试",
+                "测试是否有下单冲动：从有趣转化为想买，哪种设计更适合商业化",
+                "purchase_intent",
+                json.dumps({
+                    "test_goal": "purchase_intent",
+                    "total_duration": "8-12s",
+                    "segments": [
+                        {"time_range": "0-2s", "purpose": "scene_hook", "guidance": "场景化开头，如 I'd actually buy this for my water bottle"},
+                        {"time_range": "2-5s", "purpose": "product_showcase", "guidance": "贴纸成品展示：尺寸、防水感、材质质感"},
+                        {"time_range": "5-8s", "purpose": "lifestyle_context", "guidance": "上身场景：展示贴在日常物品上的生活方式感"},
+                        {"time_range": "8-12s", "purpose": "conversion_cta", "guidance": "轻转化CTA，如 Comment sticker if you want this one / 挂购物车引导"},
+                    ],
+                    "cta_style": "conversion",
+                    "suitable_for": "产品感强的设计，适合测试购买转化意图",
+                }, ensure_ascii=False),
+                1,
+                3,
+                now,
+            ),
+        ]
+        c.executemany(
+            """INSERT OR IGNORE INTO video_script_templates
+               (id, name, description, target, structure_json, is_active, sort_order, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            seeds,
+        )
+        c.commit()
+        logger.info("Seeded %d video script templates", len(seeds))
+
+    def list_video_script_templates(self, active_only: bool = True) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM video_script_templates"
+        if active_only:
+            sql += " WHERE is_active = 1"
+        sql += " ORDER BY sort_order ASC, id ASC"
+        rows = self.conn.execute(sql).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["structure"] = self._loads(d.pop("structure_json", "{}"), {})
+            result.append(d)
+        return result
+
+    def get_video_script_template(self, template_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM video_script_templates WHERE id = ?", (template_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["structure"] = self._loads(d.pop("structure_json", "{}"), {})
+        return d
+
+    def insert_video_plan(self, data: dict) -> None:
+        now = _now()
+        self.conn.execute(
+            """INSERT INTO video_plans (id, job_id, template_id, plan_json, status, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data["id"],
+                data["job_id"],
+                data["template_id"],
+                json.dumps(data.get("plan_json", {}), ensure_ascii=False),
+                data.get("status", "completed"),
+                data.get("created_by", "system"),
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    def list_video_plans(self, job_id: str | None = None) -> list[dict[str, Any]]:
+        if job_id:
+            rows = self.conn.execute(
+                """SELECT vp.*, vst.name AS template_name, vst.target AS template_target,
+                          gj.trend_name AS job_trend_name
+                   FROM video_plans vp
+                   LEFT JOIN video_script_templates vst ON vst.id = vp.template_id
+                   LEFT JOIN generation_jobs gj ON gj.id = vp.job_id
+                   WHERE vp.job_id = ?
+                   ORDER BY vp.created_at DESC""",
+                (job_id,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT vp.*, vst.name AS template_name, vst.target AS template_target,
+                          gj.trend_name AS job_trend_name
+                   FROM video_plans vp
+                   LEFT JOIN video_script_templates vst ON vst.id = vp.template_id
+                   LEFT JOIN generation_jobs gj ON gj.id = vp.job_id
+                   ORDER BY vp.created_at DESC"""
+            ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["plan"] = self._loads(d.pop("plan_json", "{}"), {})
+            result.append(d)
+        return result
+
+    def get_video_plan(self, plan_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """SELECT vp.*, vst.name AS template_name, vst.target AS template_target,
+                      gj.trend_name AS job_trend_name
+               FROM video_plans vp
+               LEFT JOIN video_script_templates vst ON vst.id = vp.template_id
+               LEFT JOIN generation_jobs gj ON gj.id = vp.job_id
+               WHERE vp.id = ?""",
+            (plan_id,),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["plan"] = self._loads(d.pop("plan_json", "{}"), {})
+        return d
+
+    def delete_video_plan(self, plan_id: str) -> bool:
+        cur = self.conn.execute("DELETE FROM video_plans WHERE id = ?", (plan_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
 
     @staticmethod
     def _to_iso(value: Any) -> Any:

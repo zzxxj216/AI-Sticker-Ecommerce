@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Video Plans</p>
+    <h1>视频方案</h1>
+    <p class="page-subtitle">查看所有已生成的 TikTok 视频脚本方案。</p>
+  </div>
+  <div class="header-actions">
+    {% if plans %}
+    <span class="muted">共 {{ plans|length }} 个方案</span>
+    {% endif %}
+    <a href="/packs" class="btn-secondary" style="text-decoration:none;padding:8px 16px;font-size:13px;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+      卡包管理
+    </a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>方案列表</h2>
+  </div>
+
+  {% if plans %}
+  <div style="padding:16px 24px;" id="plans-container">
+    {% for p in plans %}
+    <div class="vp-card" data-plan-id="{{ p.id }}">
+      <div class="vp-card-header">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <strong style="font-size:14px;">{{ p.plan.title or p.template_name or '视频方案' }}</strong>
+          {% set target = p.template_target or '' %}
+          <span class="vp-target-badge vp-target-{{ target }}" style="padding:2px 8px;font-size:11px;border-radius:10px;">
+            {{ p.template_name or '' }}
+          </span>
+          <a href="/jobs/{{ p.job_id }}" class="text-link" style="font-size:12px;">
+            {{ p.job_trend_name or p.job_id }}
+          </a>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:11px;color:var(--text-muted);">{{ p.created_at[:16] | replace('T', ' ') if p.created_at else '' }}</span>
+          <button class="btn-secondary vp-toggle-btn" style="padding:3px 10px;font-size:11px;cursor:pointer;">展开</button>
+          <button class="btn-secondary vp-del-btn" data-id="{{ p.id }}" style="padding:3px 8px;font-size:11px;cursor:pointer;color:var(--danger,#ef4444);">删除</button>
+        </div>
+      </div>
+
+      <!-- Hook preview (always visible) -->
+      {% if p.plan.hook_line %}
+      <div style="padding:8px 14px;background:linear-gradient(135deg,rgba(124,92,252,0.06),rgba(6,182,212,0.06));border-radius:var(--radius-md,8px);margin-top:8px;">
+        <span style="font-size:11px;font-weight:600;color:var(--primary,#7c5cfc);">HOOK:</span>
+        <span style="font-size:13px;font-weight:500;">{{ p.plan.hook_line }}</span>
+      </div>
+      {% endif %}
+
+      <!-- Expandable detail -->
+      <div class="vp-detail" style="display:none;margin-top:12px;">
+        {% if p.plan.cta_text or p.plan.music_mood or p.plan.hashtags %}
+        <div class="vp-meta">
+          {% if p.plan.cta_text %}
+          <span class="vp-meta-tag" style="background:#dbeafe;color:#1e40af;">CTA: {{ p.plan.cta_text }}</span>
+          {% endif %}
+          {% if p.plan.music_mood %}
+          <span class="vp-meta-tag">Music: {{ p.plan.music_mood }}</span>
+          {% endif %}
+          {% if p.plan.hashtags %}
+          <span class="vp-meta-tag">{{ p.plan.hashtags[:5] | join(' ') }}</span>
+          {% endif %}
+          {% if p.plan.sticker_hero %}
+          <span class="vp-meta-tag" style="background:#fef3c7;color:#92400e;">Hero: {{ p.plan.sticker_hero }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if p.plan.segments %}
+        <div style="margin-top:8px;">
+          {% for s in p.plan.segments %}
+          <div class="vp-segment">
+            <div class="vp-time">{{ s.time_range or '' }}</div>
+            <div style="flex:1;">
+              <div style="margin-bottom:3px;">{{ s.visual_description or '' }}</div>
+              {% if s.text_overlay %}
+              <div style="font-size:12px;color:var(--primary,#7c5cfc);"><strong>Text:</strong> {{ s.text_overlay }}</div>
+              {% endif %}
+              {% if s.voiceover %}
+              <div style="font-size:12px;color:var(--text-muted);"><strong>VO:</strong> {{ s.voiceover }}</div>
+              {% endif %}
+              {% if s.transition %}
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Transition: {{ s.transition }}</div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if p.plan.production_notes %}
+        <div style="margin-top:10px;padding:8px 12px;background:var(--surface-hover,#f9fafb);border-radius:6px;font-size:12px;color:var(--text-muted);">
+          <strong>Production Notes:</strong> {{ p.plan.production_notes }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:60px 24px;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;margin-bottom:12px"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+    <p style="font-weight:600;color:var(--text);">暂无视频方案</p>
+    <p style="color:var(--text-muted);font-size:13px;">在「卡包管理」中选择卡包并点击「生成视频方案」即可开始。</p>
+  </div>
+  {% endif %}
+</section>
+
+<style>
+.vp-card {
+  border: 1px solid var(--line-soft, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  padding: 16px;
+  margin-bottom: 12px;
+  transition: border-color 0.15s;
+}
+.vp-card:hover { border-color: var(--primary, #7c5cfc); }
+.vp-card-header { display: flex; justify-content: space-between; align-items: center; }
+.vp-segment { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft, #e5e7eb); font-size: 13px; }
+.vp-segment:last-child { border-bottom: none; }
+.vp-time { font-weight: 600; color: var(--primary, #7c5cfc); white-space: nowrap; min-width: 60px; }
+.vp-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; font-size: 12px; }
+.vp-meta-tag { padding: 3px 10px; border-radius: 12px; background: var(--surface-hover, #f3f4f6); color: var(--text-muted, #6b7280); }
+.vp-target-visual_retention { background: #dcfce7; color: #166534; }
+.vp-target-trend_context { background: #fef3c7; color: #92400e; }
+.vp-target-purchase_intent { background: #dbeafe; color: #1e40af; }
+</style>
+
+<script>
+(function(){
+  document.querySelectorAll('.vp-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.vp-card');
+      const detail = card.querySelector('.vp-detail');
+      if (detail.style.display === 'none') {
+        detail.style.display = 'block';
+        btn.textContent = '收起';
+      } else {
+        detail.style.display = 'none';
+        btn.textContent = '展开';
+      }
+    });
+  });
+
+  document.querySelectorAll('.vp-del-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('确定删除该视频方案？')) return;
+      const pid = btn.dataset.id;
+      try {
+        await fetch('/api/video-plans/' + pid, {method: 'DELETE'});
+        const card = btn.closest('.vp-card');
+        if (card) card.remove();
+        const container = document.getElementById('plans-container');
+        if (container && !container.querySelector('.vp-card')) {
+          location.reload();
+        }
+      } catch(e) {
+        alert('删除失败');
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

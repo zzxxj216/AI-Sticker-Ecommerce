@@ -22,6 +22,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       生成 Blog
     </a>
+    <button id="btn-video-plan" class="btn-primary" style="padding:8px 18px;font-size:13px;font-weight:600;border-radius:var(--radius-md);cursor:pointer;white-space:nowrap;background:linear-gradient(135deg,#7c5cfc,#06b6d4);border:none;color:#fff;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      生成视频方案
+    </button>
     <button id="btn-clear-sel" class="btn-secondary" style="padding:8px 14px;font-size:12px;cursor:pointer;white-space:nowrap;">取消</button>
   </div>
   <div class="header-actions" id="stats-bar" style="display:flex;align-items:center;gap:10px;">
@@ -128,6 +132,22 @@
   </div>
 </section>
 
+<!-- Script Picker Modal -->
+<div id="script-picker-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.45);align-items:center;justify-content:center;">
+  <div style="background:var(--surface,#fff);border-radius:var(--radius-lg,12px);width:480px;max-width:92vw;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:28px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="margin:0;font-size:17px;font-weight:700;">选择视频脚本模板</h3>
+      <button id="modal-close" style="background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted);padding:4px;">&times;</button>
+    </div>
+    <div id="modal-templates" style="display:flex;flex-direction:column;gap:10px;"></div>
+    <div id="modal-status" style="margin-top:16px;font-size:13px;color:var(--text-muted);display:none;"></div>
+    <div style="margin-top:20px;display:flex;gap:10px;justify-content:flex-end;">
+      <button id="modal-cancel" class="btn-secondary" style="padding:8px 20px;font-size:13px;cursor:pointer;">取消</button>
+      <button id="modal-confirm" class="btn-primary" style="padding:8px 24px;font-size:13px;font-weight:600;cursor:pointer;">开始生成</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   const selectAll = document.getElementById('select-all');
@@ -136,6 +156,11 @@
   const selCount = document.getElementById('sel-count');
   const btnZip = document.getElementById('btn-batch-zip');
   const btnClear = document.getElementById('btn-clear-sel');
+  const btnVideo = document.getElementById('btn-video-plan');
+  const modal = document.getElementById('script-picker-modal');
+  const modalTemplates = document.getElementById('modal-templates');
+  const modalStatus = document.getElementById('modal-status');
+  const modalConfirm = document.getElementById('modal-confirm');
 
   function getChecked() {
     return Array.from(document.querySelectorAll('.pack-check:checked'));
@@ -216,6 +241,106 @@
       }
     });
   }
+
+  // --- Video Plan: Script Picker Modal ---
+
+  const TARGET_LABELS = {visual_retention:'视觉停留',trend_context:'热点语境',purchase_intent:'购买意图'};
+  const TARGET_COLORS = {visual_retention:'#dcfce7',trend_context:'#fef3c7',purchase_intent:'#dbeafe'};
+  const TARGET_TEXT   = {visual_retention:'#166534',trend_context:'#92400e',purchase_intent:'#1e40af'};
+
+  let cachedTemplates = null;
+
+  async function loadTemplates() {
+    if (cachedTemplates) return cachedTemplates;
+    const resp = await fetch('/api/video-scripts');
+    const data = await resp.json();
+    cachedTemplates = data.templates || [];
+    return cachedTemplates;
+  }
+
+  function renderTemplates(tpls) {
+    modalTemplates.innerHTML = '';
+    tpls.forEach(t => {
+      const target = t.target || '';
+      const label = TARGET_LABELS[target] || target;
+      const bg = TARGET_COLORS[target] || '#f3f4f6';
+      const tc = TARGET_TEXT[target] || '#374151';
+      const el = document.createElement('label');
+      el.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border:1px solid var(--line-soft,#e5e7eb);border-radius:var(--radius-md,8px);cursor:pointer;transition:border-color 0.15s;';
+      el.innerHTML = `
+        <input type="checkbox" class="tpl-check" value="${t.id}" style="margin-top:3px;width:16px;height:16px;cursor:pointer;" checked>
+        <div style="flex:1;">
+          <div style="font-weight:600;font-size:14px;margin-bottom:4px;">
+            ${t.name}
+            <span style="display:inline-block;margin-left:6px;padding:2px 8px;font-size:11px;font-weight:500;border-radius:10px;background:${bg};color:${tc};">${label}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted,#6b7280);line-height:1.5;">${t.description}</div>
+        </div>
+      `;
+      el.addEventListener('mouseenter', () => el.style.borderColor = 'var(--primary,#7c5cfc)');
+      el.addEventListener('mouseleave', () => el.style.borderColor = 'var(--line-soft,#e5e7eb)');
+      modalTemplates.appendChild(el);
+    });
+  }
+
+  function openModal() {
+    modalStatus.style.display = 'none';
+    modalConfirm.disabled = false;
+    modalConfirm.textContent = '开始生成';
+    modal.style.display = 'flex';
+    loadTemplates().then(renderTemplates);
+  }
+
+  function closeModal() {
+    modal.style.display = 'none';
+  }
+
+  if (btnVideo) btnVideo.addEventListener('click', openModal);
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+  modalConfirm.addEventListener('click', async () => {
+    const jobIds = getChecked().map(cb => cb.value);
+    const tplIds = Array.from(document.querySelectorAll('.tpl-check:checked')).map(cb => cb.value);
+    if (jobIds.length === 0 || tplIds.length === 0) {
+      modalStatus.textContent = '请至少选择一个卡包和一个脚本模板';
+      modalStatus.style.display = 'block';
+      modalStatus.style.color = 'var(--danger,#ef4444)';
+      return;
+    }
+    modalConfirm.disabled = true;
+    modalConfirm.textContent = '生成中...';
+    modalStatus.textContent = `正在为 ${jobIds.length} 个卡包 × ${tplIds.length} 个模板生成方案，请稍候...`;
+    modalStatus.style.display = 'block';
+    modalStatus.style.color = 'var(--text-muted)';
+
+    try {
+      const resp = await fetch('/api/video-plans/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({job_ids: jobIds, template_ids: tplIds})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.detail || 'Generation failed');
+      }
+      const data = await resp.json();
+      const success = (data.plans || []).filter(p => p.status === 'completed').length;
+      const failed = (data.plans || []).filter(p => p.status === 'failed').length;
+      modalStatus.style.color = '#166534';
+      modalStatus.textContent = `完成！成功 ${success} 个${failed ? '，失败 ' + failed + ' 个' : ''}`;
+      modalConfirm.textContent = '查看方案';
+      modalConfirm.disabled = false;
+      modalConfirm.onclick = () => { window.location.href = '/video-plans'; };
+    } catch (e) {
+      modalStatus.style.color = 'var(--danger,#ef4444)';
+      modalStatus.textContent = '生成失败: ' + e.message;
+      modalConfirm.disabled = false;
+      modalConfirm.textContent = '重试';
+    }
+  });
+
 })();
 </script>
 {% endblock %}

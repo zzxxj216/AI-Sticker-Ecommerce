@@ -80,16 +80,31 @@ class OpsSyncService:
                 )
                 self.db.upsert_trend_item(item)
                 if brief:
+                    payload = self._convert_tiktok_brief(brief)
+                    st = "ready" if brief.get("brief_status") == "ready" else "generated"
+                    prev = self.db.get_brief(trend_id)
                     self.db.upsert_brief(
                         TrendBriefRecord(
                             trend_id=trend_id,
-                            brief_status="ready" if brief.get("brief_status") == "ready" else "generated",
-                            brief_json=self._convert_tiktok_brief(brief),
+                            brief_status=st,
+                            brief_json=payload,
                             source_ref=str(self.tiktok_db_path),
                             created_at=datetime.now(_CN_TZ),
                             updated_at=datetime.now(_CN_TZ),
                         )
                     )
+                    try:
+                        old_j = json.dumps((prev or {}).get("brief_json") or {}, sort_keys=True, ensure_ascii=False)
+                        new_j = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+                        no_logs = not self.db.list_brief_gen_logs(trend_id, limit=1)
+                        if old_j != new_j or prev is None or no_logs:
+                            self.db.log_brief_generation(
+                                trend_id,
+                                f"TikTok 管线 Brief 已同步（#{title}）status={st}",
+                                source="tk_pipeline_sync",
+                            )
+                    except Exception:
+                        pass
                 count += 1
         finally:
             trend_db.close()
