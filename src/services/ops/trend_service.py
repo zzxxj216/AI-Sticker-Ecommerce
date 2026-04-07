@@ -310,7 +310,11 @@ class TrendService:
             raise ValueError(f"Trend not found: {trend_id}")
         brief = self.db.get_brief(trend_id)
         if not brief or not brief.get("brief_json"):
-            raise ValueError("Trend brief missing")
+            logger.info("Brief missing for %s, attempting auto-generation...", trend_id)
+            self._generate_brief_on_approve(trend_id)
+            brief = self.db.get_brief(trend_id)
+        if not brief or not brief.get("brief_json"):
+            raise ValueError("Brief 生成失败，请在详情页手动编辑 Brief 后重试")
         trend_name = trend.get("trend_name") or trend.get("title") or trend_id
         job = self.job_service.create_job(trend_id, trend_name, created_by)
         self.job_service.start_job_async(job.id, brief["brief_json"], trend_name)

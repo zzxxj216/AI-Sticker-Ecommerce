@@ -643,7 +643,10 @@ def skip_form(request: Request, trend_id: str):
 @app.post("/trends/{trend_id}/queue", response_class=HTMLResponse)
 def queue_form(request: Request, trend_id: str):
     created_by = (_current_user(request) or {}).get("name") or "system"
-    trend_service.queue_trend(trend_id, created_by=created_by)
+    try:
+        trend_service.queue_trend(trend_id, created_by=created_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RedirectResponse(url="/jobs", status_code=303)
 
 
