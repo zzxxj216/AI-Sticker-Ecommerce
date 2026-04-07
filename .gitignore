@@ -72,6 +72,11 @@ Thumbs.db
 # Gradio
 .gradio/
 
+# Local dev runtime (start.sh / cloudflared)
+.server.pid
+.tunnel.pid
+.tunnel_url
+
 # Temporary / one-off scripts
 *.tmp
 *.bak
