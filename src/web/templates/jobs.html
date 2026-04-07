@@ -40,14 +40,14 @@
   </div>
   <div class="table-wrap">
     {% if sys_jobs %}
-    <table id="sys-jobs-table">
+    <table id="sys-jobs-table" data-sortable>
       <thead>
         <tr>
-          <th>任务ID</th>
-          <th>任务类型</th>
-          <th>状态</th>
-          <th>开始时间</th>
-          <th>完成时间</th>
+          <th data-sort-key="id">任务ID</th>
+          <th data-sort-key="type">任务类型</th>
+          <th data-sort-key="status">状态</th>
+          <th data-sort-key="started" data-sort-type="date" data-sort-default="desc">开始时间</th>
+          <th data-sort-key="completed" data-sort-type="date" data-sort-default="desc">完成时间</th>
           <th>操作</th>
         </tr>
       </thead>
@@ -103,15 +103,15 @@
   </div>
   <div class="table-wrap">
     {% if jobs %}
-    <table id="jobs-table">
+    <table id="jobs-table" data-sortable>
       <thead>
         <tr>
-          <th>任务ID</th>
-          <th>趋势</th>
-          <th>状态</th>
-          <th>图片数</th>
+          <th data-sort-key="id">任务ID</th>
+          <th data-sort-key="trend">趋势</th>
+          <th data-sort-key="status">状态</th>
+          <th data-sort-key="images" data-sort-type="number" data-sort-default="desc">图片数</th>
           <th>输出目录</th>
-          <th>创建时间</th>
+          <th data-sort-key="created" data-sort-type="date" data-sort-default="desc">创建时间</th>
         </tr>
       </thead>
       <tbody>

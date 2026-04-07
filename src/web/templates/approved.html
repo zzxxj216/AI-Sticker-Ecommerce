@@ -23,20 +23,22 @@
     <h2>精华库</h2>
     <span class="muted">{{ items|length }} 项已采纳</span>
   </div>
+  <div id="approved-date-filter" style="padding:0 16px;"></div>
+  <script>document.addEventListener('DOMContentLoaded',function(){initDateFilter('approved-date-filter',{serverSide:false})});</script>
   <div class="table-wrap" style="overflow-x:auto;">
     {% if items %}
-    <table class="data-table" id="approved-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width:1000px;">
+    <table class="data-table" data-sortable data-date-col="1" id="approved-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width:1000px;">
       <thead>
         <tr>
           <th style="width:4%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);">
             <input type="checkbox" id="select-all" title="全选/取消" style="cursor:pointer;width:16px;height:16px;">
           </th>
-          <th style="width:12%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">采集日期</th>
-          <th style="width:7%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">来源</th>
-          <th style="width:22%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">话题/标题</th>
+          <th data-sort-key="date" data-sort-type="date" data-sort-default="desc" style="width:12%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">采集日期</th>
+          <th data-sort-key="source" style="width:7%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">来源</th>
+          <th data-sort-key="title" style="width:22%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">话题/标题</th>
           <th style="width:25%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">AI 核心评价</th>
-          <th style="width:10%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成状态</th>
-          <th style="width:12%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成时间</th>
+          <th data-sort-key="status" style="width:10%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成状态</th>
+          <th data-sort-key="finished" data-sort-type="date" data-sort-default="desc" style="width:12%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成时间</th>
           <th style="width:8%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">操作人</th>
         </tr>
       </thead>

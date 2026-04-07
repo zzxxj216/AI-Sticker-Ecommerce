@@ -1240,6 +1240,25 @@ pre {
   white-space: nowrap;
 }
 
+/* ---------- Sortable Table & Date Filter ---------- */
+th[data-sort-key] { cursor: pointer; user-select: none; white-space: nowrap; }
+th[data-sort-key]:hover { color: var(--text); }
+.sort-arrow { font-size: 11px; opacity: 0.4; transition: opacity 0.15s; margin-left: 2px; }
+th[data-sort-key]:hover .sort-arrow { opacity: 1; }
+
+.date-filter-row {
+  display: flex; align-items: center; gap: 8px; padding: 12px 0; flex-wrap: wrap;
+}
+.date-filter-row label {
+  font-size: 13px; color: var(--text-muted); white-space: nowrap; font-weight: 500;
+}
+.date-input {
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-size: 13px; font-family: inherit;
+  outline: none; transition: border-color var(--duration);
+}
+.date-input:focus { border-color: var(--accent); }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
   .layout-two,

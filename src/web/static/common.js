@@ -82,3 +82,162 @@ function closeLightbox() {
   const lb = document.getElementById('lightbox-overlay');
   if (lb) lb.style.display = 'none';
 }
+
+
+/* ================================================================
+   Sortable Table — click column headers to sort
+   ================================================================ */
+class SortableTable {
+  constructor(table) {
+    this.table = table;
+    this.isServer = table.hasAttribute('data-sort-server');
+    this.tbody = table.querySelector('tbody');
+    this.headers = Array.from(table.querySelectorAll('th[data-sort-key]'));
+    this.sortCol = null;
+    this.sortDir = 'asc';
+
+    if (this.isServer) {
+      const p = new URLSearchParams(window.location.search);
+      this.sortCol = p.get('sort') || null;
+      this.sortDir = p.get('dir') || 'desc';
+    }
+    this._init();
+  }
+
+  _init() {
+    this.headers.forEach(th => {
+      th.style.cursor = 'pointer';
+      th.style.userSelect = 'none';
+      const arrow = document.createElement('span');
+      arrow.className = 'sort-arrow';
+      arrow.textContent = this._arrow(th);
+      th.appendChild(arrow);
+      th.addEventListener('click', () => this._sort(th));
+    });
+  }
+
+  _arrow(th) {
+    const k = th.dataset.sortKey;
+    if (k === this.sortCol) return this.sortDir === 'asc' ? ' ↑' : ' ↓';
+    return ' ↕';
+  }
+
+  _sort(th) {
+    const key = th.dataset.sortKey;
+    if (this.sortCol === key) {
+      this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.sortCol = key;
+      this.sortDir = th.dataset.sortDefault || 'asc';
+    }
+    this.headers.forEach(h => {
+      h.querySelector('.sort-arrow').textContent = this._arrow(h);
+    });
+    if (this.isServer) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('sort', this.sortCol);
+      url.searchParams.set('dir', this.sortDir);
+      url.searchParams.set('page', '1');
+      window.location.href = url.toString();
+    } else {
+      this._clientSort();
+    }
+  }
+
+  _clientSort() {
+    const rows = Array.from(this.tbody.querySelectorAll('tr:not(.tbl-log-row)'));
+    const allTh = Array.from(this.table.querySelectorAll('thead th'));
+    const th = this.headers.find(h => h.dataset.sortKey === this.sortCol);
+    const colIdx = allTh.indexOf(th);
+    const type = th.dataset.sortType || 'string';
+
+    rows.sort((a, b) => {
+      let va = (a.cells[colIdx]?.textContent || '').trim();
+      let vb = (b.cells[colIdx]?.textContent || '').trim();
+      if (type === 'number') {
+        va = parseFloat(va.replace(/[^0-9.\-]/g, '')) || 0;
+        vb = parseFloat(vb.replace(/[^0-9.\-]/g, '')) || 0;
+      } else if (type === 'date') {
+        va = new Date(va.replace(/\s/, 'T')).getTime() || 0;
+        vb = new Date(vb.replace(/\s/, 'T')).getTime() || 0;
+      } else {
+        va = va.toLowerCase(); vb = vb.toLowerCase();
+      }
+      const c = va < vb ? -1 : va > vb ? 1 : 0;
+      return this.sortDir === 'asc' ? c : -c;
+    });
+    rows.forEach(r => this.tbody.appendChild(r));
+  }
+}
+
+/* ================================================================
+   Date Range Filter — server-side and client-side
+   ================================================================ */
+function initDateFilter(containerId, opts) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const ss = opts && opts.serverSide !== false;
+  const p = new URLSearchParams(window.location.search);
+  const df = p.get('date_from') || '';
+  const dt = p.get('date_to') || '';
+
+  el.innerHTML =
+    '<div class="date-filter-row">' +
+    '<label>时间范围</label>' +
+    '<input type="date" class="date-input" id="' + containerId + '-from" value="' + df + '">' +
+    '<span style="color:var(--text-muted)">至</span>' +
+    '<input type="date" class="date-input" id="' + containerId + '-to" value="' + dt + '">' +
+    '<button class="btn-secondary" style="padding:6px 12px;font-size:12px;box-shadow:none" ' +
+      'onclick="applyDateFilter(\'' + containerId + '\',' + ss + ')">筛选</button>' +
+    (df || dt
+      ? '<button class="btn-secondary" style="padding:6px 12px;font-size:12px;box-shadow:none" ' +
+        'onclick="clearDateFilter(\'' + containerId + '\',' + ss + ')">清除</button>'
+      : '') +
+    '</div>';
+}
+
+function applyDateFilter(cid, server) {
+  var from = document.getElementById(cid + '-from').value;
+  var to   = document.getElementById(cid + '-to').value;
+  if (server) {
+    var url = new URL(window.location.href);
+    if (from) url.searchParams.set('date_from', from); else url.searchParams.delete('date_from');
+    if (to) url.searchParams.set('date_to', to); else url.searchParams.delete('date_to');
+    url.searchParams.set('page', '1');
+    window.location.href = url.toString();
+  } else {
+    var tables = document.querySelectorAll('table[data-sortable]');
+    tables.forEach(function(t) {
+      var dateColIdx = parseInt(t.dataset.dateCol || '0', 10);
+      var rows = t.querySelectorAll('tbody tr');
+      rows.forEach(function(r) {
+        var cell = r.cells[dateColIdx];
+        if (!cell) return;
+        var txt = cell.textContent.trim().replace(/\s/, 'T');
+        var ts = new Date(txt).getTime();
+        var show = true;
+        if (from && ts < new Date(from).getTime()) show = false;
+        if (to && ts > new Date(to + 'T23:59:59').getTime()) show = false;
+        r.style.display = show ? '' : 'none';
+      });
+    });
+  }
+}
+
+function clearDateFilter(cid, server) {
+  if (server) {
+    var url = new URL(window.location.href);
+    url.searchParams.delete('date_from');
+    url.searchParams.delete('date_to');
+    url.searchParams.set('page', '1');
+    window.location.href = url.toString();
+  } else {
+    document.getElementById(cid + '-from').value = '';
+    document.getElementById(cid + '-to').value = '';
+    document.querySelectorAll('table[data-sortable] tbody tr').forEach(function(r) { r.style.display = ''; });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('table[data-sortable]').forEach(function(t) { new SortableTable(t); });
+});

@@ -275,16 +275,21 @@ class OpsDatabase:
                 heat_score=excluded.heat_score,
                 fit_level=excluded.fit_level,
                 pack_archetype=excluded.pack_archetype,
-                review_status=excluded.review_status,
-                queue_status=excluded.queue_status,
-                decision=excluded.decision,
+                review_status=CASE
+                    WHEN trend_items.reviewed_by IS NOT NULL AND trend_items.reviewed_by != ''
+                    THEN trend_items.review_status ELSE excluded.review_status END,
+                queue_status=CASE
+                    WHEN trend_items.reviewed_by IS NOT NULL AND trend_items.reviewed_by != ''
+                    THEN trend_items.queue_status ELSE excluded.queue_status END,
+                decision=CASE
+                    WHEN trend_items.reviewed_by IS NOT NULL AND trend_items.reviewed_by != ''
+                    THEN trend_items.decision ELSE excluded.decision END,
                 platform_json=excluded.platform_json,
                 risk_flags_json=excluded.risk_flags_json,
                 visual_symbols_json=excluded.visual_symbols_json,
                 emotional_core_json=excluded.emotional_core_json,
                 raw_payload_json=excluded.raw_payload_json,
                 source_url=excluded.source_url,
-                batch_date=excluded.batch_date,
                 updated_at=excluded.updated_at
             """,
             (
@@ -412,7 +417,7 @@ class OpsDatabase:
             )
         self.conn.commit()
 
-    def list_trends(self, source_type: str | None = None, only_latest: bool = True, status: str = 'pending') -> list[dict[str, Any]]:
+    def list_trends(self, source_type: str | None = None, only_latest: bool = True, status: str | None = 'pending') -> list[dict[str, Any]]:
         sql = "SELECT * FROM trend_items WHERE 1=1"
         params: list[Any] = []
         
@@ -455,7 +460,11 @@ class OpsDatabase:
         cols = [col[0] for col in c.description]
         return [self._decode_trend_row(dict(zip(cols, row))) for row in c.fetchall()]
 
-    def list_archive_trends(self, search_text: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    _ARCHIVE_SORT_COLS = {'created_at', 'updated_at', 'score', 'heat_score', 'trend_name', 'title', 'source_type', 'review_status', 'batch_date'}
+
+    def list_archive_trends(self, search_text: str | None = None, limit: int = 50, offset: int = 0,
+                            sort_by: str = 'created_at', sort_dir: str = 'desc',
+                            date_from: str = '', date_to: str = '') -> tuple[list[dict[str, Any]], int]:
         count_sql = "SELECT COUNT(*) FROM trend_items WHERE 1=1"
         sql = "SELECT * FROM trend_items WHERE 1=1"
         params: list[Any] = []
@@ -466,10 +475,23 @@ class OpsDatabase:
             sql += condition
             count_sql += condition
             params.extend([like_term, like_term, like_term])
+
+        if date_from:
+            cond = " AND created_at >= ?"
+            sql += cond
+            count_sql += cond
+            params.append(date_from)
+        if date_to:
+            cond = " AND created_at <= ?"
+            sql += cond
+            count_sql += cond
+            params.append(date_to + "T23:59:59")
             
         total = self.conn.execute(count_sql, params).fetchone()[0]
-        
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+
+        col = sort_by if sort_by in self._ARCHIVE_SORT_COLS else 'created_at'
+        direction = 'ASC' if sort_dir.lower() == 'asc' else 'DESC'
+        sql += f" ORDER BY {col} {direction} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         
         c = self.conn.execute(sql, params)
@@ -640,12 +662,27 @@ class OpsDatabase:
         cols = [col[0] for col in c.description]
         return [dict(zip(cols, row)) for row in c.fetchall()]
 
-    def list_tk_hashtags_paged(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
-        total = self.conn.execute("SELECT COUNT(*) FROM tk_hashtags").fetchone()[0]
-        c = self.conn.execute(
-            "SELECT * FROM tk_hashtags ORDER BY video_views DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        )
+    _TK_SORT_COLS = {'video_views', 'publish_cnt', 'hashtag_name', 'crawled_at', 'first_seen_at', 'last_seen_at', 'review_status', 'brief_status'}
+
+    def list_tk_hashtags_paged(self, limit: int = 50, offset: int = 0,
+                               sort_by: str = 'video_views', sort_dir: str = 'desc',
+                               date_from: str = '', date_to: str = '') -> tuple[list[dict], int]:
+        where = " WHERE 1=1"
+        params: list[Any] = []
+        if date_from:
+            where += " AND crawled_at >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND crawled_at <= ?"
+            params.append(date_to + "T23:59:59")
+
+        total = self.conn.execute("SELECT COUNT(*) FROM tk_hashtags" + where, params).fetchone()[0]
+
+        col = sort_by if sort_by in self._TK_SORT_COLS else 'video_views'
+        direction = 'ASC' if sort_dir.lower() == 'asc' else 'DESC'
+        sql = f"SELECT * FROM tk_hashtags{where} ORDER BY {col} {direction} LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c = self.conn.execute(sql, params)
         cols = [col[0] for col in c.description]
         return [dict(zip(cols, row)) for row in c.fetchall()], total
 
@@ -675,9 +712,27 @@ class OpsDatabase:
             )
         c.commit()
 
-    def list_raw_news(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
-        total = self.conn.execute("SELECT COUNT(*) FROM raw_news_items").fetchone()[0]
-        c = self.conn.execute("SELECT * FROM raw_news_items ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset))
+    _RAW_NEWS_SORT_COLS = {'created_at', 'title', 'source', 'published_at', 'batch_date'}
+
+    def list_raw_news(self, limit: int = 50, offset: int = 0,
+                      sort_by: str = 'created_at', sort_dir: str = 'desc',
+                      date_from: str = '', date_to: str = '') -> tuple[list[dict], int]:
+        where = " WHERE 1=1"
+        params: list[Any] = []
+        if date_from:
+            where += " AND created_at >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND created_at <= ?"
+            params.append(date_to + "T23:59:59")
+
+        total = self.conn.execute("SELECT COUNT(*) FROM raw_news_items" + where, params).fetchone()[0]
+
+        col = sort_by if sort_by in self._RAW_NEWS_SORT_COLS else 'created_at'
+        direction = 'ASC' if sort_dir.lower() == 'asc' else 'DESC'
+        sql = f"SELECT * FROM raw_news_items{where} ORDER BY {col} {direction} LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c = self.conn.execute(sql, params)
         cols = [col[0] for col in c.description]
         return [dict(zip(cols, row)) for row in c.fetchall()], total
 

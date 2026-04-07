@@ -53,10 +53,10 @@
   <div style="padding:16px 24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;">
     {% for img in job.images %}
     <div class="sticker-thumb" style="position:relative;border-radius:var(--radius-md);overflow:hidden;background:var(--surface-hover);aspect-ratio:1;cursor:pointer;" onclick="openLightbox('{{ to_output_url(img.file_path) }}')">
-      <img src="{{ to_output_url(img.file_path) }}"
+      <img data-src="{{ to_output_url(img.file_path) }}"
            alt="{{ img.metadata_json.name if img.metadata_json is mapping else '' }}"
-           loading="lazy"
-           style="width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.2s;"
+           style="width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.2s;opacity:0;"
+           onload="this.style.opacity='1'"
            onerror="this.parentElement.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;\'>加载失败</div>'">
       <div style="position:absolute;bottom:0;left:0;right:0;padding:5px 8px;background:linear-gradient(transparent,rgba(0,0,0,0.6));color:#fff;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
         {{ img.metadata_json.name if img.metadata_json is mapping else img.file_path.split('/')[-1] }}
@@ -107,12 +107,31 @@
   let page = 0;
   let pageSize = parseInt(document.getElementById('galPageSize').value) || 10;
 
+  function loadImages(card) {
+    card.querySelectorAll('img[data-src]').forEach(function(img) {
+      if (!img.src || img.src === window.location.href) {
+        img.src = img.dataset.src;
+      }
+    });
+  }
+
+  function unloadImages(card) {
+    card.querySelectorAll('img[data-src]').forEach(function(img) {
+      img.removeAttribute('src');
+      img.style.opacity = '0';
+    });
+  }
+
   function render(){
     const pages = Math.ceil(total / pageSize) || 1;
     if(page >= pages) page = pages - 1;
     const start = page * pageSize;
     const end = start + pageSize;
-    cards.forEach((c,i) => { c.style.display = (i >= start && i < end) ? '' : 'none'; });
+    cards.forEach(function(c, i) {
+      var visible = i >= start && i < end;
+      c.style.display = visible ? '' : 'none';
+      if (visible) loadImages(c); else unloadImages(c);
+    });
     document.getElementById('galPageInfo').textContent = '第 '+(page+1)+' / '+pages+' 页（共 '+total+' 个卡贴包）';
     document.getElementById('galPrev').disabled = page === 0;
     document.getElementById('galNext').disabled = page >= pages - 1;

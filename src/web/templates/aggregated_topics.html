@@ -28,17 +28,19 @@
       当前显示第 {{ (page - 1) * per_page + 1 }} - {{ page * per_page if page * per_page < total else total }} 条
     </span>
   </div>
+  <div id="agg-date-filter" style="padding:0 16px;"></div>
+  <script>document.addEventListener('DOMContentLoaded',function(){initDateFilter('agg-date-filter',{serverSide:true})});</script>
   <div class="table-wrap" style="overflow-x: auto;">
     {% if items %}
-    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 900px;">
+    <table class="data-table" data-sortable data-sort-server style="width: 100%; border-collapse: collapse; text-align: left; min-width: 900px;">
       <thead>
         <tr>
-          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">聚合日期</th>
-          <th style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">提炼主词表</th>
+          <th data-sort-key="created_at" data-sort-default="desc" style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">聚合日期</th>
+          <th data-sort-key="trend_name" style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">提炼主词表</th>
           <th style="width: 38%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">合成摘要 / 主线论点</th>
-          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">打分</th>
+          <th data-sort-key="score" data-sort-default="desc" style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">打分</th>
           <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">AI 推荐结论</th>
-          <th style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">流转状态</th>
+          <th data-sort-key="review_status" style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">流转状态</th>
         </tr>
       </thead>
       <tbody>
@@ -96,13 +98,13 @@
     <span class="muted" style="font-size: 13px;">第 {{ page }} / {{ total_pages }} 页</span>
     <div style="display: flex; gap: 8px;">
       {% if page > 1 %}
-      <a href="/aggregated-topics?page={{ page - 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
+      <a href="/aggregated-topics?page={{ page - 1 }}{% if search_query %}&q={{ search_query }}{% endif %}&sort={{ sort }}&dir={{ dir }}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
       {% else %}
       <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>上一页</button>
       {% endif %}
       
       {% if page < total_pages %}
-      <a href="/aggregated-topics?page={{ page + 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
+      <a href="/aggregated-topics?page={{ page + 1 }}{% if search_query %}&q={{ search_query }}{% endif %}&sort={{ sort }}&dir={{ dir }}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
       {% else %}
       <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>下一页</button>
       {% endif %}

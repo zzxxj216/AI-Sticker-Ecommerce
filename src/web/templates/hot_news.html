@@ -16,14 +16,16 @@
       当前显示第 {{ (page - 1) * per_page + 1 }} - {{ page * per_page if page * per_page < total else total }} 条
     </span>
   </div>
+  <div id="news-date-filter" style="padding:0 16px;"></div>
+  <script>document.addEventListener('DOMContentLoaded',function(){initDateFilter('news-date-filter',{serverSide:true})});</script>
   <div class="table-wrap" style="overflow-x: auto;">
     {% if items %}
-    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 800px;">
+    <table class="data-table" data-sortable data-sort-server style="width: 100%; border-collapse: collapse; text-align: left; min-width: 800px;">
       <thead>
         <tr>
-          <th style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">产生批次 / 时间</th>
-          <th style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">站点来源</th>
-          <th style="width: 65%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">原始新闻头条与链接</th>
+          <th data-sort-key="created_at" data-sort-default="desc" style="width: 15%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">产生批次 / 时间</th>
+          <th data-sort-key="source" style="width: 10%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">站点来源</th>
+          <th data-sort-key="title" style="width: 65%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">原始新闻头条与链接</th>
         </tr>
       </thead>
       <tbody>
@@ -74,13 +76,13 @@
     <span class="muted" style="font-size: 13px;">第 {{ page }} / {{ total_pages }} 页</span>
     <div style="display: flex; gap: 8px;">
       {% if page > 1 %}
-      <a href="/hot-news?page={{ page - 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
+      <a href="/hot-news?page={{ page - 1 }}&sort={{ sort }}&dir={{ dir }}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
       {% else %}
       <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>上一页</button>
       {% endif %}
       
       {% if page < total_pages %}
-      <a href="/hot-news?page={{ page + 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
+      <a href="/hot-news?page={{ page + 1 }}&sort={{ sort }}&dir={{ dir }}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
       {% else %}
       <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>下一页</button>
       {% endif %}

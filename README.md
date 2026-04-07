@@ -1,385 +1,276 @@
-# 🎨 AI 贴纸生成器
+# AI Sticker Workbench
 
-> 使用 AI 技术生成高质量贴纸，支持主题生成、风格分析和变种创作
->独立站用户使用多种内容格式支持
-> 内部使用需要先根据具体风格生成相关卡包内容，一次可以生成多个卡包，每个卡包包含50张左右的图片，需要先生成预览版本，预览版把，保留相关prompt，确定相关没有问题后，再去生成相关详细版本。
+一站式 AI 贴纸电商内容工作台 —— 从热点发现、选题审核、贴纸生成到 Blog 发布的全链路自动化平台。
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Ready-brightgreen.svg)]()
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
-## ✨ 功能特性
+## 核心功能
 
-### 📦 贴纸包生成
-- 输入主题，批量生成 1-100 张贴纸
-- 支持三种类型：纯文字、纯元素、组合
-- 并发生成，2-3 分钟完成 40 张
-- Claude 创意 + Gemini 图片生成
+### 热点发现与数据引擎
+- 多源热点抓取：NewsAPI、Google Trends、Reddit、RSS、TikTok Creative Center
+- AI 驱动的贴纸机会评估管线（7 维打分 + 硬过滤 + 母型映射）
+- TikTok 话题 Playwright 自动爬取与 AI 批量审核
 
-### 🔍 风格分析
-- 上传贴纸，AI 深度分析风格特征
-- 7 个维度：视觉风格、色彩、元素、情感等
-- 详细分析报告和设计建议
-- Claude Vision 视觉理解
+### 选题审核与 Brief 生成
+- 人工审核看板（采纳 / 拒绝 / 归档）
+- AI 自动生成 Trend Brief（主题、风格、配色、目标受众）
+- 审核通过后自动进入待生产队列
 
-### 🎭 变种生成
-- 基于现有贴纸生成相似变种
-- 可调变化程度：轻微、中等、较大
-- 保持风格一致性
-- 快速扩展贴纸库
+### AI 贴纸包生成
+- 多 Agent 管线：Planner → Designer → Prompt Builder → Image Generation → QC
+- 支持 OpenAI GPT / Claude / Gemini 多模型协作
+- Gemini 图片生成，支持并发控制（信号量限流）
+- 每个卡包约 6-8 张贴纸，批量生成多个卡包
 
----
+### AI 对话创作
+- **AI 卡贴创作**：基于 OpenAI Function Calling 的对话式贴纸生成，支持工具调用
+- **AI Blog 创作**：ReAct Agent 架构，规划 → 写作 → 审稿 → 配图全流程
+- 对话历史持久化，支持会话恢复继续创作
 
-## 🚀 快速开始
+### Blog 管理与发布
+- Markdown 编辑与预览
+- AI 自动生成博客配图（Gemini）
+- 一键发布到 Shopify（草稿 / 正式）
+- Shopify HTML 转换与图片上传
 
-### 1. 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. 配置环境
-
-创建 `.env` 文件：
-
-```bash
-# Claude API
-ANTHROPIC_API_KEY=your_claude_api_key
-
-# Gemini API
-GOOGLE_API_KEY=your_gemini_api_key
-
-# 可选配置
-OUTPUT_DIR=./output
-LOG_LEVEL=INFO
-```
-
-### 3. 启动应用
-
-#### 方式 1：Web UI（推荐）
-
-```bash
-python app.py
-```
-
-访问：http://localhost:7860
-
-#### 方式 2：命令行
-
-```bash
-# 生成贴纸包
-python cli.py generate -t "AI人工智能" -c 40
-
-# 分析风格
-python cli.py analyze sticker.png
-
-# 生成变种
-python cli.py variants sticker.png -c 5
-```
+### 运维工作台
+- 首页仪表盘：待审核、待生产、运行中任务等关键指标
+- 生产任务监控：实时日志、进度追踪
+- 卡贴画廊 & 卡包管理：分页浏览、打包下载
+- 飞书 OIDC 登录 / 本地开发模式自动切换
 
 ---
 
-## 📖 使用指南
+## 技术栈
 
-### Web UI 使用
-
-#### 贴纸包生成
-1. 打开"贴纸包生成"标签页
-2. 输入主题（如：AI人工智能、可爱猫咪）
-3. 设置生成数量（1-100）
-4. 调整高级选项（可选）
-5. 点击"开始生成"
-6. 等待完成，查看结果
-
-#### 风格分析
-1. 打开"风格分析"标签页
-2. 上传贴纸图片
-3. 点击"开始分析"
-4. 查看详细分析结果
-
-#### 变种生成
-1. 打开"变种生成"标签页
-2. 上传原始贴纸
-3. 设置变种数量和变化程度
-4. 点击"生成变种"
-5. 查看生成的变种
-
-### CLI 使用
-
-#### 生成贴纸包
-
-```bash
-# 基础用法
-python cli.py generate -t "AI人工智能" -c 40
-
-# 完整参数
-python cli.py generate \
-  --theme "可爱猫咪" \
-  --count 20 \
-  --text-ratio 0.3 \
-  --element-ratio 0.4 \
-  --combined-ratio 0.3 \
-  --workers 3
-```
-
-#### 分析风格
-
-```bash
-# 基础用法
-python cli.py analyze sticker.png
-
-# 保存结果
-python cli.py analyze sticker.png --output analysis.json
-```
-
-#### 生成变种
-
-```bash
-# 基础用法
-python cli.py variants sticker.png -c 5
-
-# 完整参数
-python cli.py variants sticker.png \
-  --count 10 \
-  --degree significant \
-  --workers 3
-```
+| 层级 | 技术 |
+|------|------|
+| Web 框架 | FastAPI + Jinja2 + Starlette |
+| AI 模型 | OpenAI GPT-4o / Claude Sonnet / Gemini Pro & Flash |
+| 图片生成 | Google Gemini Imagen |
+| 数据库 | SQLite（零依赖部署） |
+| 任务调度 | APScheduler（每日管线） |
+| 浏览器自动化 | Playwright（TikTok 爬取） |
+| 认证 | 飞书 OIDC / 本地 Auto-Dev |
+| 电商集成 | Shopify Admin API |
+| 部署 | Cloudflare Tunnel 内网穿透 |
 
 ---
 
-## 🏗️ 项目架构
+## 项目结构
 
 ```
 AI-Sticker-Ecommerce/
+├── web_app.py                  # 启动入口
+├── requirements.txt            # Python 依赖
+├── config/                     # YAML 配置文件
+│   ├── default.yaml
+│   ├── development.yaml
+│   ├── production.yaml
+│   └── store_profile.yaml      # Shopify 店铺画像
+│
 ├── src/
-│   ├── core/              # 核心模块
-│   │   ├── config.py      # 配置管理
-│   │   ├── constants.py   # 常量定义
-│   │   ├── logger.py      # 日志系统
-│   │   └── exceptions.py  # 异常定义
-│   ├── models/            # 数据模型
-│   │   ├── sticker.py     # 贴纸模型
-│   │   ├── style.py       # 风格模型
-│   │   └── session.py     # 会话模型
-│   ├── services/          # 服务层
-│   │   ├── ai/            # AI 服务
+│   ├── core/                   # 核心模块
+│   │   ├── config.py           # 配置加载（YAML + .env）
+│   │   ├── constants.py        # 全局常量与枚举
+│   │   ├── logger.py           # 日志封装
+│   │   └── exceptions.py       # 自定义异常
+│   │
+│   ├── models/                 # Pydantic 数据模型
+│   │   ├── ops.py              # 趋势、Brief、任务、输出
+│   │   ├── blog.py             # 博客草稿与配置
+│   │   ├── sticker_pack.py     # 贴纸包管线数据结构
+│   │   └── ...
+│   │
+│   ├── services/
+│   │   ├── ai/                 # AI 服务封装
 │   │   │   ├── claude_service.py
 │   │   │   ├── gemini_service.py
+│   │   │   ├── openai_service.py
 │   │   │   └── prompt_builder.py
-│   │   └── sticker/       # 贴纸服务
+│   │   │
+│   │   ├── batch/              # 批量生成管线
+│   │   │   ├── sticker_pipeline.py   # Planner→Designer→Builder→QC
+│   │   │   ├── sticker_prompts.py    # 多 Agent Prompt 模板
+│   │   │   ├── image_generation.py   # 图片生成与质检
+│   │   │   └── ...
+│   │   │
+│   │   ├── blog/               # Blog 多 Agent 服务
+│   │   │   ├── orchestrator.py       # 全流程编排
+│   │   │   ├── planner_agent.py      # 大纲规划
+│   │   │   ├── writer_agent.py       # 写作 Agent
+│   │   │   ├── reviewer_agent.py     # 审稿 Agent
+│   │   │   ├── blog_image_generator.py
+│   │   │   ├── shopify_converter.py  # Markdown → Shopify HTML
+│   │   │   └── shopify_publisher.py  # Shopify API 发布
+│   │   │
+│   │   ├── ops/                # 运维数据层
+│   │   │   ├── db.py                 # SQLite 数据库操作
+│   │   │   ├── trend_service.py      # 趋势管线编排
+│   │   │   ├── job_service.py        # 生成任务管理
+│   │   │   └── sync_service.py       # 数据同步
+│   │   │
+│   │   ├── tools/              # 对话 Agent（Function Calling）
+│   │   │   ├── sticker_agent.py      # 贴纸对话 Agent
+│   │   │   └── blog_agent.py         # Blog 对话 Agent
+│   │   │
+│   │   └── sticker/            # 贴纸核心服务
 │   │       ├── pack_generator.py
-│   │       └── style_analyzer.py
-│   ├── ui/                # UI 层
-│   │   ├── gradio_app.py  # Gradio 应用
-│   │   └── components.py  # UI 组件
-│   ├── cli/               # CLI 层
-│   │   └── sticker_cli.py # 命令行工具
-│   └── utils/             # 工具模块
-│       ├── file_utils.py
-│       ├── image_utils.py
-│       └── validators.py
-├── app.py                 # Web UI 启动脚本
-├── cli.py                 # CLI 启动脚本
-├── requirements.txt       # 依赖列表
-├── .env                   # 环境配置
-└── README.md             # 项目说明
+│   │       ├── style_analyzer.py
+│   │       └── theme_generator.py
+│   │
+│   ├── web/                    # Web 应用层
+│   │   ├── app.py              # FastAPI 路由与中间件
+│   │   ├── auth_middleware.py   # 认证中间件
+│   │   ├── feishu_auth.py      # 飞书 OIDC 登录
+│   │   ├── static/             # CSS / JS 静态资源
+│   │   └── templates/          # Jinja2 页面模板（19 个）
+│   │
+│   └── utils/                  # 工具函数
+│
+├── trend_fetcher/              # 热点数据抓取子模块
+│   ├── main.py                 # 抓取入口
+│   ├── topic_pipeline.py       # TikTok AI 审核管线
+│   ├── trend_db.py             # TikTok 数据表
+│   ├── fetchers/               # 各数据源爬虫
+│   │   ├── news_api.py
+│   │   ├── google_trends.py
+│   │   ├── reddit.py
+│   │   ├── rss_feeds.py
+│   │   └── tiktok.py           # Playwright 爬取
+│   └── sticker_pipeline/       # 贴纸机会评估管线
+│       ├── pipeline.py         # 总编排
+│       ├── hard_filter.py      # 硬过滤
+│       ├── opportunity_scorer.py
+│       └── brief_builder.py    # Trend Brief 生成
+│
+├── deploy/
+│   └── setup_macmini.sh        # Mac Mini 一键部署（含内网穿透）
+│
+├── data/                       # 运行时数据（SQLite 等）
+├── output/                     # 生成产物（贴纸、博客、HTML）
+└── logs/                       # 日志文件
 ```
 
 ---
 
-## 💻 Python API
+## 快速开始
 
-### 贴纸包生成
+### 环境要求
 
-```python
-from src.services.sticker import PackGenerator
+- Python 3.10+
+- 至少一个 AI API Key（OpenAI / Gemini）
 
-# 初始化
-generator = PackGenerator()
+### 本地开发
 
-# 生成贴纸包
-pack = generator.generate(
-    theme="AI人工智能",
-    count=40,
-    text_ratio=0.3,
-    element_ratio=0.4,
-    combined_ratio=0.3,
-    max_workers=3
-)
+```bash
+# 1. 克隆项目
+git clone https://github.com/zzxxj216/AI-Sticker-Ecommerce.git
+cd AI-Sticker-Ecommerce
 
-print(f"成功: {pack.success_count}/{pack.total_count}")
-print(f"输出: {pack.output_dir}")
+# 2. 创建虚拟环境
+python -m venv venv
+source venv/bin/activate  # macOS/Linux
+# venv\Scripts\activate   # Windows
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 配置环境变量
+cp .env.example .env
+# 编辑 .env 填入 API Key
+
+# 5. 启动
+python web_app.py
 ```
 
-### 风格分析
+访问 http://localhost:8888
 
-```python
-from src.services.sticker import StyleAnalyzer
+### Mac Mini 部署（含内网穿透）
 
-# 初始化
-analyzer = StyleAnalyzer()
-
-# 分析风格
-analysis = analyzer.analyze("sticker.png")
-
-print(f"视觉风格: {analysis.visual_style.value}")
-print(f"色彩方案: {analysis.color_palette.value}")
-print(f"主要颜色: {analysis.dominant_colors}")
+```bash
+chmod +x deploy/setup_macmini.sh
+./deploy/setup_macmini.sh
+./start.sh
 ```
 
-### 变种生成
+启动后自动：
+1. 创建虚拟环境并安装依赖
+2. 生成 `.env` 配置文件
+3. 启动 Cloudflare Tunnel 内网穿透
+4. 自动更新飞书回调地址
+5. 启动 Web 服务
 
-```python
-from src.services.sticker import StyleAnalyzer
-from src.core.constants import VariationDegree
+管理命令：
 
-analyzer = StyleAnalyzer()
-
-# 一站式处理：分析 + 生成
-result = analyzer.analyze_and_generate(
-    image_path="sticker.png",
-    variant_count=5,
-    variation_degree=VariationDegree.MEDIUM
-)
-
-print(f"成功: {result['success_count']}/{result['total_count']}")
-print(f"变种: {result['variant_paths']}")
-```
+| 命令 | 说明 |
+|------|------|
+| `./start.sh` | 启动服务 + 穿透 |
+| `./stop.sh` | 停止所有 |
+| `./restart.sh` | 重启所有 |
+| `./status.sh` | 查看状态和地址 |
 
 ---
 
-## 📊 性能指标
-
-| 功能 | 耗时 | 成功率 |
-|------|------|--------|
-| 贴纸包生成（40张） | 2-3 分钟 | 90-95% |
-| 风格分析 | 10-15 秒 | 95%+ |
-| 变种生成（5张） | 30-40 秒 | 90-95% |
-
----
-
-## 🎯 使用场景
-
-### 场景 1：新建贴纸包
-```
-输入主题 → 生成 40 张 → 挑选最佳 → 完成
-```
-
-### 场景 2：扩展现有贴纸
-```
-上传贴纸 → 分析风格 → 生成变种 → 扩展库
-```
-
-### 场景 3：完整工作流
-```
-生成初始包 → 挑选最佳 → 生成变种 → 获得 50+ 张
-```
-
----
-
-## ⚙️ 配置说明
-
-### 环境变量
+## 环境变量
 
 | 变量 | 说明 | 必填 |
+|------|------|:----:|
+| `OPENAI_API_KEY` | OpenAI API 密钥 | 是 |
+| `OPENAI_BASE_URL` | OpenAI 代理地址 | 否 |
+| `IMAGE_API_KEY` | Google Gemini API 密钥（图片生成） | 是 |
+| `ANTHROPIC_API_KEY` | Claude API 密钥 | 否 |
+| `SHOPIFY_STORE_DOMAIN` | Shopify 店铺域名 | 否 |
+| `SHOPIFY_CLIENT_SECRET` | Shopify API 密钥 | 否 |
+| `FEISHU_H5_APP_ID` | 飞书应用 ID（留空则自动开发模式） | 否 |
+| `FEISHU_H5_APP_SECRET` | 飞书应用密钥 | 否 |
+| `NEWS_API_KEY` | NewsAPI 密钥（热点抓取） | 否 |
+| `SESSION_SECRET` | Session 签名密钥 | 是 |
+
+完整变量列表参见 `.env.example`。
+
+---
+
+## 页面导航
+
+| 分组 | 页面 | 说明 |
 |------|------|------|
-| ANTHROPIC_API_KEY | Claude API 密钥 | ✅ |
-| GOOGLE_API_KEY | Gemini API 密钥 | ✅ |
-| OUTPUT_DIR | 输出目录 | ❌ |
-| LOG_LEVEL | 日志级别 | ❌ |
-
-### 参数说明
-
-**贴纸包生成**：
-- `theme`: 主题（必填）
-- `count`: 数量（1-100，默认 40）
-- `text_ratio`: 纯文字比例（0-1，默认 0.3）
-- `element_ratio`: 纯元素比例（0-1，默认 0.4）
-- `combined_ratio`: 组合比例（0-1，默认 0.3）
-- `workers`: 并发数（1-5，默认 3）
-
-**变种生成**：
-- `variant_count`: 变种数量（1-20，默认 5）
-- `variation_degree`: 变化程度（slight/medium/significant）
-- `workers`: 并发数（1-5，默认 3）
+| 工作台 | 首页仪表盘 | 关键指标、快捷入口、最近动态 |
+| 热点发现 | 新闻动态 | NewsAPI / RSS 热点新闻 |
+| | TikTok 动态 | TikTok 话题爬取结果 |
+| | 话题总览 | 聚合所有数据源的话题 |
+| 选题审核 | 审核看板 | 待审核趋势一览 |
+| | 待生产素材 | 已采纳、待生成的素材 |
+| | 归档记录 | 历史审核归档 |
+| 创作中心 | AI 卡贴创作 | 对话式贴纸生成 |
+| | AI Blog 创作 | 对话式博客生成 |
+| | 生产任务 | 任务监控与日志 |
+| 资产管理 | 卡贴画廊 | 已生成贴纸浏览 |
+| | 卡包管理 | 贴纸包下载与管理 |
+| | Blog 管理 | 博客查看、编辑、发布 |
 
 ---
 
-## 🔧 技术栈
+## 飞书集成
 
-- **Python** 3.8+
-- **AI 模型**
-  - Claude Opus 4.6（创意生成）
-  - Claude Vision（风格分析）
-  - Gemini Imagen 3（图片生成）
-- **Web 框架** Gradio 4.0+
-- **CLI 工具** Click + Rich
-- **并发** ThreadPoolExecutor
+### 配置步骤
 
----
+1. 在 [飞书开放平台](https://open.feishu.cn) 创建企业自建应用
+2. 添加「网页应用」能力
+3. 权限管理 → 开通 `contact:user.base:readonly`
+4. 安全设置 → 重定向 URL：`https://你的域名/auth/feishu/callback`
+5. 创建版本 → 提交审核 → 发布
 
-## 📝 开发文档
+### 开发模式
 
-- [快速开始指南](QUICKSTART.md) - 详细使用说明
-- [项目重构文档](PROJECT_RESTRUCTURE.md) - 架构设计
-- [服务迁移总结](SERVICE_MIGRATION_SUMMARY.md) - 开发历程
+不填 `FEISHU_H5_APP_ID` 或设置 `FEISHU_H5_AUTO_DEV=true`，系统自动以 "Local Dev" 身份登录，无需飞书配置。
 
 ---
 
-## 🐛 故障排除
-
-### 常见问题
-
-**Q: API 错误？**
-- 检查 API Key 是否正确
-- 检查 API 配额是否充足
-- 查看日志文件：`logs/app.log`
-
-**Q: 生成速度慢？**
-- 减少并发数（workers）
-- 分批生成
-- 检查网络连接
-
-**Q: 生成失败？**
-- 查看错误信息
-- 检查主题是否合适
-- 尝试重新生成
-
----
-
-## 📈 项目进度
-
-- ✅ 基础架构（100%）
-- ✅ AI 服务层（100%）
-- ✅ 贴纸服务层（100%）
-- ✅ UI 层（100%）
-- ⏳ 测试（进行中）
-
-**当前版本**: v1.0.0  
-**状态**: 可用
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
----
-
-## 📄 许可证
+## 许可证
 
 MIT License
-
----
-
-## 🔗 相关链接
-
-- [Claude API](https://console.anthropic.com)
-- [Gemini API](https://aistudio.google.com/apikey)
-- [Gradio 文档](https://gradio.app)
-
----
-
-**开始你的贴纸创作之旅！** 🎨✨

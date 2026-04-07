@@ -311,6 +311,16 @@ def api_sys_job_logs(job_id: str) -> dict:
     return {"logs": logs}
 
 
+@app.get("/api/sys_jobs/{job_id}/status")
+def api_sys_job_status(job_id: str) -> dict:
+    row = trend_service.db.conn.execute(
+        "SELECT id, status, completed_at FROM sys_task_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, "Job not found")
+    return dict(row)
+
+
 @app.post("/api/jobs/{job_id}/retry")
 def api_retry_job(job_id: str) -> dict:
     try:
@@ -365,8 +375,8 @@ def home(request: Request):
 
 @app.get("/trends", response_class=HTMLResponse)
 def trends_page(request: Request):
-    news_items = trend_service.list_trends("news")
-    tiktok_items = trend_service.list_trends("tiktok")
+    news_items = trend_service.list_trends("news", status=None)
+    tiktok_items = trend_service.list_trends("tiktok", status=None)
     return templates.TemplateResponse(
         request,
         "trends.html",
@@ -380,10 +390,16 @@ def trends_page(request: Request):
 
 
 @app.get("/hot-news", response_class=HTMLResponse)
-def hot_news_page(request: Request, page: int = 1):
+def hot_news_page(request: Request, page: int = 1,
+                  sort: str = 'created_at', dir: str = 'desc',
+                  date_from: str = '', date_to: str = ''):
     per_page = 10
     offset = (page - 1) * per_page
-    items, total = trend_service.db.list_raw_news(limit=per_page, offset=offset)
+    items, total = trend_service.db.list_raw_news(
+        limit=per_page, offset=offset,
+        sort_by=sort, sort_dir=dir,
+        date_from=date_from, date_to=date_to,
+    )
     total_pages = (total + per_page - 1) // per_page
     
     # Format timestamps for clean display
@@ -407,15 +423,23 @@ def hot_news_page(request: Request, page: int = 1):
             total_pages=total_pages,
             total=total,
             per_page=per_page,
+            sort=sort, dir=dir,
+            date_from=date_from, date_to=date_to,
             page_title="热点新闻",
         ),
     )
 
 @app.get("/tk-topics", response_class=HTMLResponse)
-def tk_topics_page(request: Request, page: int = 1):
+def tk_topics_page(request: Request, page: int = 1,
+                   sort: str = 'video_views', dir: str = 'desc',
+                   date_from: str = '', date_to: str = ''):
     per_page = 20
     offset = (page - 1) * per_page
-    items, total = trend_service.db.list_tk_hashtags_paged(limit=per_page, offset=offset)
+    items, total = trend_service.db.list_tk_hashtags_paged(
+        limit=per_page, offset=offset,
+        sort_by=sort, sort_dir=dir,
+        date_from=date_from, date_to=date_to,
+    )
     total_pages = (total + per_page - 1) // per_page
 
     for item in items:
@@ -433,6 +457,8 @@ def tk_topics_page(request: Request, page: int = 1):
             total_pages=total_pages,
             total=total,
             per_page=per_page,
+            sort=sort, dir=dir,
+            date_from=date_from, date_to=date_to,
             page_title="TK话题",
         ),
     )
@@ -451,9 +477,14 @@ def _fmt_items_ts(items: list) -> list:
 
 
 @app.get("/aggregated-topics", response_class=HTMLResponse)
-def aggregated_topics_page(request: Request, q: str | None = None, page: int = 1):
+def aggregated_topics_page(request: Request, q: str | None = None, page: int = 1,
+                           sort: str = 'created_at', dir: str = 'desc',
+                           date_from: str = '', date_to: str = ''):
     per_page = 10
-    items, total = trend_service.list_archive_trends(search_text=q, page=page, per_page=per_page)
+    items, total = trend_service.list_archive_trends(
+        search_text=q, page=page, per_page=per_page,
+        sort_by=sort, sort_dir=dir, date_from=date_from, date_to=date_to,
+    )
     total_pages = (total + per_page - 1) // per_page
     _fmt_items_ts(items)
     return templates.TemplateResponse(
@@ -467,6 +498,8 @@ def aggregated_topics_page(request: Request, q: str | None = None, page: int = 1
             total_pages=total_pages,
             total=total,
             per_page=per_page,
+            sort=sort, dir=dir,
+            date_from=date_from, date_to=date_to,
             page_title="聚合话题",
         ),
     )
@@ -487,9 +520,14 @@ def approved_page(request: Request):
     )
 
 @app.get("/archive", response_class=HTMLResponse)
-def archive_page(request: Request, q: str | None = None, page: int = 1):
+def archive_page(request: Request, q: str | None = None, page: int = 1,
+                 sort: str = 'created_at', dir: str = 'desc',
+                 date_from: str = '', date_to: str = ''):
     per_page = 20
-    items, total = trend_service.list_archive_trends(search_text=q, page=page, per_page=per_page)
+    items, total = trend_service.list_archive_trends(
+        search_text=q, page=page, per_page=per_page,
+        sort_by=sort, sort_dir=dir, date_from=date_from, date_to=date_to,
+    )
     total_pages = (total + per_page - 1) // per_page
     _fmt_items_ts(items)
     return templates.TemplateResponse(
@@ -502,6 +540,8 @@ def archive_page(request: Request, q: str | None = None, page: int = 1):
             page=page,
             total_pages=total_pages,
             total=total,
+            sort=sort, dir=dir,
+            date_from=date_from, date_to=date_to,
             page_title="数据全档案",
         ),
     )

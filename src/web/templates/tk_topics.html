@@ -16,17 +16,19 @@
       当前显示第 {{ (page - 1) * per_page + 1 }} - {{ [page * per_page, total] | min }} 条
     </span>
   </div>
+  <div id="tk-date-filter" style="padding:0 16px;"></div>
+  <script>document.addEventListener('DOMContentLoaded',function(){initDateFilter('tk-date-filter',{serverSide:true})});</script>
   <div class="table-wrap" style="overflow-x: auto;">
     {% if items %}
-    <table class="data-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width: 900px;">
+    <table class="data-table" data-sortable data-sort-server style="width: 100%; border-collapse: collapse; text-align: left; min-width: 900px;">
       <thead>
         <tr>
-          <th style="width: 30%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">话题名称</th>
-          <th style="width: 14%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted); text-align: right;">播放量</th>
-          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted); text-align: right;">发布数</th>
-          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">审核状态</th>
-          <th style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">Brief</th>
-          <th style="width: 20%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">抓取 / 首次发现</th>
+          <th data-sort-key="hashtag_name" style="width: 30%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">话题名称</th>
+          <th data-sort-key="video_views" data-sort-default="desc" style="width: 14%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted); text-align: right;">播放量</th>
+          <th data-sort-key="publish_cnt" data-sort-default="desc" style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted); text-align: right;">发布数</th>
+          <th data-sort-key="review_status" style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">审核状态</th>
+          <th data-sort-key="brief_status" style="width: 12%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">Brief</th>
+          <th data-sort-key="crawled_at" data-sort-default="desc" style="width: 20%; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); background: rgba(0,0,0,0.02); color: var(--text-muted);">抓取 / 首次发现</th>
         </tr>
       </thead>
       <tbody>
@@ -83,13 +85,13 @@
     <span class="muted" style="font-size: 13px;">第 {{ page }} / {{ total_pages }} 页</span>
     <div style="display: flex; gap: 8px;">
       {% if page > 1 %}
-      <a href="/tk-topics?page={{ page - 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
+      <a href="/tk-topics?page={{ page - 1 }}&sort={{ sort }}&dir={{ dir }}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">上一页</a>
       {% else %}
       <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>上一页</button>
       {% endif %}
 
       {% if page < total_pages %}
-      <a href="/tk-topics?page={{ page + 1 }}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
+      <a href="/tk-topics?page={{ page + 1 }}&sort={{ sort }}&dir={{ dir }}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn-secondary" style="padding: 6px 12px; font-size: 13px;">下一页</a>
       {% else %}
       <button class="btn-secondary" style="padding: 6px 12px; font-size: 13px; opacity: 0.5; cursor: not-allowed;" disabled>下一页</button>
       {% endif %}

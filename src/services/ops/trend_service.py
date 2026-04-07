@@ -168,15 +168,19 @@ class TrendService:
             "synced": sync_count,
         }
 
-    def list_trends(self, source_type: str | None = None) -> list[dict]:
-        return self.db.list_trends(source_type)
+    def list_trends(self, source_type: str | None = None, status: str | None = 'pending') -> list[dict]:
+        return self.db.list_trends(source_type, status=status)
         
     def list_approved_trends(self) -> list[dict]:
         return self.db.list_approved_trends()
 
-    def list_archive_trends(self, search_text: str | None = None, page: int = 1, per_page: int = 50) -> tuple[list[dict], int]:
+    def list_archive_trends(self, search_text: str | None = None, page: int = 1, per_page: int = 50,
+                            sort_by: str = 'created_at', sort_dir: str = 'desc',
+                            date_from: str = '', date_to: str = '') -> tuple[list[dict], int]:
         offset = (page - 1) * per_page
-        return self.db.list_archive_trends(search_text=search_text, limit=per_page, offset=offset)
+        return self.db.list_archive_trends(search_text=search_text, limit=per_page, offset=offset,
+                                           sort_by=sort_by, sort_dir=sort_dir,
+                                           date_from=date_from, date_to=date_to)
 
     def get_trend(self, trend_id: str) -> dict | None:
         trend = self.db.get_trend(trend_id)

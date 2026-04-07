@@ -370,14 +370,51 @@ async function syncData() {
   try {
     const resp = await fetch('/api/jobs/trigger', { method: 'POST' });
     const data = await resp.json();
-    alert(`热点挖掘任务已下发后台 (Job ID: ${data.job_id})。由于分析耗时较长，请稍后前往「任务监控」或刷新本页查看结果。`);
+    if (data.job_id) {
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 引擎运行中…';
+      pollJobStatus(data.job_id);
+    }
   } catch (e) {
     alert('启动失败: ' + e.message);
-  } finally {
     btn.disabled = false;
     btn.classList.remove('loading');
     btn.innerHTML = orig;
   }
+}
+
+function pollJobStatus(jobId) {
+  const btn = document.getElementById('btn-sync');
+  const orig = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 运行热点挖掘引擎';
+  let elapsed = 0;
+
+  const timer = setInterval(async () => {
+    elapsed += 5;
+    try {
+      const resp = await fetch('/api/sys_jobs/' + encodeURIComponent(jobId) + '/status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      if (data.status === 'completed') {
+        clearInterval(timer);
+        btn.innerHTML = '✓ 引擎完成，刷新中…';
+        setTimeout(() => window.location.reload(), 800);
+        return;
+      }
+      if (data.status === 'failed') {
+        clearInterval(timer);
+        btn.disabled = false;
+        btn.classList.remove('loading');
+        btn.innerHTML = orig;
+        alert('热点挖掘任务失败，请前往「任务监控」查看日志。');
+        return;
+      }
+
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      const timeStr = mins > 0 ? mins + '分' + secs + '秒' : secs + '秒';
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 引擎运行中 (' + timeStr + ')';
+    } catch (_) {}
+  }, 5000);
 }
 
 async function crawlTikTok() {

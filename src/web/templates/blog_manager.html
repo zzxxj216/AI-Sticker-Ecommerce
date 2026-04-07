@@ -50,17 +50,17 @@
 
 {% if drafts %}
 <div class="table-wrap">
-  <table class="data-table">
+  <table class="data-table" data-sortable>
     <thead>
       <tr>
         <th style="width:36px;"><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
-        <th>标题</th>
-        <th>话题</th>
+        <th data-sort-key="title">标题</th>
+        <th data-sort-key="topic">话题</th>
         <th>关键词</th>
-        <th>语言</th>
-        <th>状态</th>
-        <th>创建时间</th>
-        <th>操作人</th>
+        <th data-sort-key="lang">语言</th>
+        <th data-sort-key="status">状态</th>
+        <th data-sort-key="created" data-sort-type="date" data-sort-default="desc">创建时间</th>
+        <th data-sort-key="creator">操作人</th>
         <th style="min-width:200px;">操作</th>
       </tr>
     </thead>
