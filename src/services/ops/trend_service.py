@@ -41,6 +41,10 @@ class TrendService:
         self.job_service = JobService(self.db)
         self.brief_service = BriefService(self.db)
 
+    def sync(self) -> dict[str, int]:
+        """TikTok 等数据同步到 trend_items，供 FastAPI startup 调用。"""
+        return self.sync_service.sync_all()
+
     def trigger_background_pipeline(self, background_tasks) -> str:
         job_id = f"job_crawl_{int(__import__('time').time())}"
         self.db.create_sys_task(job_id, "daily_pipeline")
