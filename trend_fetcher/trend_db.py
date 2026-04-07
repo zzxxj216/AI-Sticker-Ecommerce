@@ -152,14 +152,77 @@ class TrendDB:
             ).fetchone()
 
             if existing:
-                old_filters = json.loads(existing["found_in_filters"])
+                old_filters = json.loads(existing["found_in_filters"] or "[]")
                 new_filters = data.get("found_in_filters", [])
                 merged = sorted(set(old_filters) | set(new_filters))
-                c.execute(
-                    "UPDATE tk_hashtags SET last_seen_at = ?, found_in_filters = ? "
-                    "WHERE hashtag_id = ?",
-                    (crawl_ts, json.dumps(merged), hid)
-                )
+                ld = data.get("list_data") or {}
+                detail = data.get("detail_data")
+                list_json = json.dumps(ld, ensure_ascii=False)
+                name = (ld.get("hashtag_name") or "").strip()
+                v_views = int(ld.get("video_views") or 0)
+                v_pub = int(ld.get("publish_cnt") or 0)
+                at = data.get("crawled_at", crawl_ts)
+
+                if detail:
+                    detail_json = json.dumps(detail, ensure_ascii=False)
+                    creators_json = json.dumps(
+                        data.get("creators_raw", []), ensure_ascii=False
+                    )
+                    c.execute(
+                        """
+                        UPDATE tk_hashtags SET
+                            last_seen_at = ?,
+                            found_in_filters = ?,
+                            hashtag_name = CASE WHEN ? != '' THEN ? ELSE hashtag_name END,
+                            video_views = ?,
+                            publish_cnt = ?,
+                            list_data_json = ?,
+                            detail_data_json = ?,
+                            creators_raw_json = ?,
+                            crawled_at = ?,
+                            review_status = 'pending',
+                            brief_status = 'pending'
+                        WHERE hashtag_id = ?
+                        """,
+                        (
+                            crawl_ts,
+                            json.dumps(merged),
+                            name,
+                            name,
+                            v_views,
+                            v_pub,
+                            list_json,
+                            detail_json,
+                            creators_json,
+                            at,
+                            hid,
+                        ),
+                    )
+                else:
+                    c.execute(
+                        """
+                        UPDATE tk_hashtags SET
+                            last_seen_at = ?,
+                            found_in_filters = ?,
+                            hashtag_name = CASE WHEN ? != '' THEN ? ELSE hashtag_name END,
+                            video_views = ?,
+                            publish_cnt = ?,
+                            list_data_json = ?,
+                            crawled_at = ?
+                        WHERE hashtag_id = ?
+                        """,
+                        (
+                            crawl_ts,
+                            json.dumps(merged),
+                            name,
+                            name,
+                            v_views,
+                            v_pub,
+                            list_json,
+                            at,
+                            hid,
+                        ),
+                    )
                 dup_count += 1
             else:
                 ld = data.get("list_data") or {}

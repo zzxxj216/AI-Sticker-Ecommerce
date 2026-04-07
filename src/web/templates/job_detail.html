@@ -113,9 +113,222 @@
   </section>
 </div>
 
+<!-- Video Plans Panel -->
+{% if job.status == 'completed' %}
+<section class="panel" id="video-plans-panel" style="margin-top:24px;">
+  <div class="panel-header">
+    <h2>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      视频方案
+    </h2>
+    <button id="btn-gen-video" class="btn-primary" style="padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      生成视频方案
+    </button>
+  </div>
+
+  <!-- Template selector (hidden until button clicked) -->
+  <div id="vp-template-selector" style="display:none;padding:16px 24px;border-bottom:1px solid var(--line-soft);">
+    <div id="vp-tpl-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+    <div id="vp-gen-status" style="margin-top:12px;font-size:13px;color:var(--text-muted);display:none;"></div>
+    <div style="margin-top:14px;display:flex;gap:8px;">
+      <button id="vp-confirm" class="btn-primary" style="padding:6px 18px;font-size:12px;font-weight:600;cursor:pointer;">开始生成</button>
+      <button id="vp-cancel" class="btn-secondary" style="padding:6px 14px;font-size:12px;cursor:pointer;">取消</button>
+    </div>
+  </div>
+
+  <!-- Existing plans -->
+  <div id="vp-plans-list" style="padding:16px 24px;">
+    <div id="vp-loading" style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px;">加载中...</div>
+  </div>
+</section>
+{% endif %}
+
 <!-- lightbox provided by /static/common.js -->
 
 <style>
 .sticker-thumb:hover img { transform: scale(1.05); }
+.vp-card { border:1px solid var(--line-soft,#e5e7eb); border-radius:var(--radius-md,8px); padding:16px; margin-bottom:12px; }
+.vp-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.vp-segment { display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--line-soft,#e5e7eb); font-size:13px; }
+.vp-segment:last-child { border-bottom:none; }
+.vp-time { font-weight:600; color:var(--primary,#7c5cfc); white-space:nowrap; min-width:60px; }
+.vp-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; font-size:12px; }
+.vp-meta-tag { padding:3px 10px; border-radius:12px; background:var(--surface-hover,#f3f4f6); color:var(--text-muted,#6b7280); }
 </style>
+
+<script>
+(function(){
+  const JOB_ID = '{{ job.id }}';
+  const TARGET_LABELS = {visual_retention:'视觉停留',trend_context:'热点语境',purchase_intent:'购买意图'};
+  const TARGET_COLORS = {visual_retention:'#dcfce7',trend_context:'#fef3c7',purchase_intent:'#dbeafe'};
+  const TARGET_TEXT   = {visual_retention:'#166534',trend_context:'#92400e',purchase_intent:'#1e40af'};
+
+  const btnGen = document.getElementById('btn-gen-video');
+  const selector = document.getElementById('vp-template-selector');
+  const tplList = document.getElementById('vp-tpl-list');
+  const genStatus = document.getElementById('vp-gen-status');
+  const confirmBtn = document.getElementById('vp-confirm');
+  const cancelBtn = document.getElementById('vp-cancel');
+  const plansList = document.getElementById('vp-plans-list');
+
+  if (!btnGen) return;
+
+  // Load and render plans
+  async function loadPlans() {
+    try {
+      const resp = await fetch('/api/video-plans?job_id=' + JOB_ID);
+      const data = await resp.json();
+      renderPlans(data.plans || []);
+    } catch(e) {
+      plansList.innerHTML = '<div style="color:var(--danger);padding:12px;">加载失败</div>';
+    }
+  }
+
+  function renderPlans(plans) {
+    if (plans.length === 0) {
+      plansList.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">暂无视频方案，点击上方按钮生成</div>';
+      return;
+    }
+    let html = '';
+    plans.forEach(p => {
+      const plan = p.plan || {};
+      const target = p.template_target || '';
+      const tBg = TARGET_COLORS[target] || '#f3f4f6';
+      const tColor = TARGET_TEXT[target] || '#374151';
+      const tLabel = TARGET_LABELS[target] || target;
+      const segments = plan.segments || [];
+
+      html += `<div class="vp-card">
+        <div class="vp-card-header">
+          <div>
+            <strong style="font-size:14px;">${plan.title || p.template_name || '视频方案'}</strong>
+            <span style="margin-left:8px;padding:2px 8px;font-size:11px;border-radius:10px;background:${tBg};color:${tColor};">${p.template_name || ''}</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span style="font-size:11px;color:var(--text-muted);">${(p.created_at||'').slice(0,16).replace('T',' ')}</span>
+            <button class="btn-secondary vp-del-btn" data-id="${p.id}" style="padding:3px 8px;font-size:11px;cursor:pointer;">删除</button>
+          </div>
+        </div>`;
+
+      if (plan.hook_line) {
+        html += `<div style="padding:10px 14px;background:linear-gradient(135deg,rgba(124,92,252,0.08),rgba(6,182,212,0.08));border-radius:var(--radius-md,8px);margin-bottom:12px;">
+          <div style="font-size:11px;font-weight:600;color:var(--primary,#7c5cfc);margin-bottom:4px;">HOOK</div>
+          <div style="font-size:14px;font-weight:600;">${plan.hook_line}</div>
+        </div>`;
+      }
+
+      if (plan.cta_text || plan.music_mood || (plan.hashtags && plan.hashtags.length)) {
+        html += '<div class="vp-meta">';
+        if (plan.cta_text) html += `<span class="vp-meta-tag" style="background:#dbeafe;color:#1e40af;">CTA: ${plan.cta_text}</span>`;
+        if (plan.music_mood) html += `<span class="vp-meta-tag">Music: ${plan.music_mood}</span>`;
+        if (plan.hashtags && plan.hashtags.length) html += `<span class="vp-meta-tag">${plan.hashtags.slice(0,5).join(' ')}</span>`;
+        html += '</div>';
+      }
+
+      if (segments.length) {
+        html += '<div style="margin-top:8px;">';
+        segments.forEach(s => {
+          html += `<div class="vp-segment">
+            <div class="vp-time">${s.time_range || ''}</div>
+            <div style="flex:1;">
+              <div style="margin-bottom:4px;">${s.visual_description || ''}</div>
+              ${s.text_overlay ? '<div style="font-size:12px;color:var(--primary,#7c5cfc);"><strong>Text:</strong> ' + s.text_overlay + '</div>' : ''}
+              ${s.voiceover ? '<div style="font-size:12px;color:var(--text-muted);"><strong>VO:</strong> ' + s.voiceover + '</div>' : ''}
+            </div>
+          </div>`;
+        });
+        html += '</div>';
+      }
+
+      if (plan.production_notes) {
+        html += `<div style="margin-top:10px;padding:8px 12px;background:var(--surface-hover,#f9fafb);border-radius:6px;font-size:12px;color:var(--text-muted);">
+          <strong>Notes:</strong> ${plan.production_notes}
+        </div>`;
+      }
+
+      html += '</div>';
+    });
+    plansList.innerHTML = html;
+
+    plansList.querySelectorAll('.vp-del-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('确定删除该方案？')) return;
+        await fetch('/api/video-plans/' + btn.dataset.id, {method:'DELETE'});
+        loadPlans();
+      });
+    });
+  }
+
+  // Template selector
+  let cachedTpls = null;
+  async function loadTpls() {
+    if (cachedTpls) return cachedTpls;
+    const resp = await fetch('/api/video-scripts');
+    cachedTpls = (await resp.json()).templates || [];
+    return cachedTpls;
+  }
+
+  btnGen.addEventListener('click', async () => {
+    selector.style.display = 'block';
+    genStatus.style.display = 'none';
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = '开始生成';
+    const tpls = await loadTpls();
+    tplList.innerHTML = '';
+    tpls.forEach(t => {
+      const target = t.target || '';
+      const bg = TARGET_COLORS[target] || '#f3f4f6';
+      const tc = TARGET_TEXT[target] || '#374151';
+      const label = TARGET_LABELS[target] || target;
+      const el = document.createElement('label');
+      el.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line-soft);border-radius:var(--radius-md);cursor:pointer;';
+      el.innerHTML = `<input type="checkbox" class="vp-tpl-check" value="${t.id}" style="width:15px;height:15px;cursor:pointer;" checked>
+        <span style="font-weight:600;font-size:13px;">${t.name}</span>
+        <span style="padding:2px 8px;font-size:11px;border-radius:10px;background:${bg};color:${tc};">${label}</span>
+        <span style="font-size:12px;color:var(--text-muted);flex:1;">${t.description}</span>`;
+      tplList.appendChild(el);
+    });
+  });
+
+  cancelBtn.addEventListener('click', () => { selector.style.display = 'none'; });
+
+  confirmBtn.addEventListener('click', async () => {
+    const tplIds = Array.from(document.querySelectorAll('.vp-tpl-check:checked')).map(c=>c.value);
+    if (!tplIds.length) {
+      genStatus.textContent = '请至少选择一个脚本模板';
+      genStatus.style.display = 'block';
+      genStatus.style.color = 'var(--danger)';
+      return;
+    }
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '生成中...';
+    genStatus.textContent = '正在生成方案，请稍候...';
+    genStatus.style.display = 'block';
+    genStatus.style.color = 'var(--text-muted)';
+
+    try {
+      const resp = await fetch('/api/video-plans/generate', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({job_ids:[JOB_ID], template_ids:tplIds})
+      });
+      if (!resp.ok) throw new Error((await resp.json().catch(()=>({}))).detail || 'Failed');
+      const data = await resp.json();
+      const ok = (data.plans||[]).filter(p=>p.status==='completed').length;
+      genStatus.style.color = '#166534';
+      genStatus.textContent = `完成！成功生成 ${ok} 个方案`;
+      selector.style.display = 'none';
+      loadPlans();
+    } catch(e) {
+      genStatus.style.color = 'var(--danger)';
+      genStatus.textContent = '生成失败: ' + e.message;
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = '重试';
+    }
+  });
+
+  loadPlans();
+})();
+</script>
 {% endblock %}

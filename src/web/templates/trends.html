@@ -24,15 +24,16 @@
 {% set news_recommend = news_items|selectattr('score', 'ge', 70)|list %}
 {% set news_watchlist = news_items|selectattr('score', 'lt', 70)|list %}
 {% set news_approved = news_items|selectattr('review_status', 'equalto', 'approved')|list %}
-{% set news_batch_date = news_items[0].batch_date if news_items and news_items[0].batch_date else (news_items[0].created_at[:10] if news_items else '未知日期') %}
-{% set tk_recommend = tiktok_items|selectattr('score', 'ge', 70)|list %}
-{% set tk_pending = tiktok_items|selectattr('review_status', 'equalto', 'pending')|list %}
-{% set tk_watchlist = tiktok_items|selectattr('score', 'lt', 70)|selectattr('review_status', 'equalto', 'pending')|list %}
+{% set _bdates = news_items|map(attribute='batch_date')|select|list %}
+{% set news_batch_date = (_bdates|max) if _bdates else (news_items[0].created_at[:10] if news_items else '未知日期') %}
+{# TikTok：第三列只展示管线里 AI 判定 Approve（入库 decision=recommend），不用分数≥70（否则 Watchlist 高分也会进栏，数量会虚高） #}
+{% set tk_recommend = tiktok_items|selectattr('decision', 'equalto', 'recommend')|list %}
+{% set tk_pending_review = tiktok_items|selectattr('review_status', 'equalto', 'pending')|list %}
 {% set tk_approved = tiktok_items|selectattr('review_status', 'equalto', 'approved')|list %}
 {% set all_review = [] %}
-{# Jinja2 list concat workaround #}
+{# Jinja2 list concat workaround：热点低分待看 + TikTok 凡待人工审核（含 Watchlist） #}
 {% for item in news_watchlist %}{% if all_review.append(item) %}{% endif %}{% endfor %}
-{% for item in tk_watchlist %}{% if all_review.append(item) %}{% endif %}{% endfor %}
+{% for item in tk_pending_review %}{% if all_review.append(item) %}{% endif %}{% endfor %}
 
 <section class="stat-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;">
   <article class="stat-card">
@@ -57,7 +58,7 @@
       待人工审核
     </span>
     <strong class="stat-value">{{ all_review|length }}</strong>
-    <small class="stat-sub" style="font-size:11px;color:var(--text-muted);">热点 {{ news_watchlist|length }} + TK {{ tk_watchlist|length }}</small>
+    <small class="stat-sub" style="font-size:11px;color:var(--text-muted);">热点 {{ news_watchlist|length }} + TK {{ tk_pending_review|length }}</small>
   </article>
   <article class="stat-card">
     <span class="stat-label">
@@ -224,7 +225,7 @@
         <div class="leaderboard-icon tiktok">📱</div>
         <span class="leaderboard-title">TikTok AI 推荐</span>
       </div>
-      <span class="leaderboard-count" data-pager="tk-count" title="评分 ≥ 70">{{ tk_recommend|length }} 项</span>
+      <span class="leaderboard-count" data-pager="tk-count" title="管线 AI 判定 Approve（decision=recommend）">{{ tk_recommend|length }} 项</span>
     </div>
     <div class="leaderboard-body pager-body" data-pager="tk" style="max-height:none;">
       {% if tk_recommend %}
@@ -233,7 +234,7 @@
         {% endfor %}
       {% else %}
       <div class="leaderboard-empty pager-empty" style="padding:30px 24px;">
-        <p>暂无 TikTok 高分推荐 (≥70 分)</p>
+        <p>暂无 TikTok AI 强推荐（当前批次无 Approve）</p>
       </div>
       {% endif %}
     </div>

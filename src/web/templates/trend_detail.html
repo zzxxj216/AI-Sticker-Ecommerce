@@ -236,10 +236,29 @@
         </form>
         {% else %}
         <form method="post" action="/trends/{{ trend.id }}/queue">
+          {% if brief_status == 'generating' %}
+          <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+            Brief 生成中…
+          </button>
+          {% elif brief_status == 'failed' %}
+          <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
+            Brief 生成失败
+          </button>
+          <button type="button" onclick="retryBrief()" class="button-secondary" style="margin-left:8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            重新生成 Brief
+          </button>
+          {% elif not brief.brief_json %}
+          <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
+            等待 Brief 生成…
+          </button>
+          {% else %}
           <button type="submit" id="btn-queue">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             生成卡贴
           </button>
+          {% endif %}
         </form>
         {% endif %}
 
@@ -261,12 +280,24 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         Brief
       </h2>
-      {% if brief.brief_json %}
-      <span class="badge" style="background:#dcfce7;color:#166534;">已生成</span>
+      {% set brief_status = brief.get('brief_status', '') if brief else '' %}
+      {% if brief_status == 'generating' %}
+      <span class="badge" id="brief-status-badge" style="background:#fef9c3;color:#854d0e;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+        AI 生成中…
+      </span>
+      {% elif brief_status == 'failed' %}
+      <span class="badge" id="brief-status-badge" style="background:#fef2f2;color:#991b1b;">生成失败</span>
+      {% elif brief.brief_json %}
+      <span class="badge" id="brief-status-badge" style="background:#dcfce7;color:#166534;">已生成</span>
       {% else %}
-      <span class="badge" style="background:#fef2f2;color:#991b1b;">未生成</span>
+      <span class="badge" id="brief-status-badge" style="background:#fef2f2;color:#991b1b;">未生成</span>
       {% endif %}
     </div>
+    <p style="margin:0 24px 12px;font-size:12px;color:var(--text-muted);">
+      <a href="/api/trends/{{ trend.id }}/brief-logs?limit=100" class="text-link" target="_blank" rel="noopener">Brief 生成日志</a>
+      <span>（JSON：排队、LLM 调用、耗时、错误）</span>
+    </p>
 
     {% set bj = brief.brief_json or {} %}
     {% if bj %}
@@ -370,10 +401,26 @@
       </div>
     </form>
     {% else %}
-    <div class="empty-state" style="padding:30px 24px;">
+    <div class="empty-state" id="brief-empty-state" style="padding:30px 24px;">
+      {% if brief_status == 'generating' %}
+      <div style="font-size:24px;margin-bottom:8px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#854d0e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1.2s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+      </div>
+      <p style="font-weight:600;color:var(--text);">AI Brief 生成中…</p>
+      <p style="color:var(--text-muted);font-size:13px;">正在调用 AI 生成 Brief，通常需要 10-30 秒，请稍候。</p>
+      {% elif brief_status == 'failed' %}
+      <div style="font-size:24px;margin-bottom:8px;">⚠️</div>
+      <p style="font-weight:600;color:var(--text);">Brief 生成失败</p>
+      <p style="color:var(--text-muted);font-size:13px;">AI 调用出现错误，可点击下方按钮重试或手动编辑。</p>
+      <button type="button" id="btn-retry-brief" onclick="retryBrief()" style="margin-top:12px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        重新生成
+      </button>
+      {% else %}
       <div style="font-size:24px;margin-bottom:8px;">📋</div>
       <p style="font-weight:600;color:var(--text);">暂无 Brief</p>
-      <p style="color:var(--text-muted);font-size:13px;">点击「采纳」后系统将自动生成 Brief，或手动编辑。</p>
+      <p style="color:var(--text-muted);font-size:13px;">点击「采纳」后系统将自动调用 AI 生成 Brief，请等待生成完成。</p>
+      {% endif %}
     </div>
     {% endif %}
   </section>
@@ -431,4 +478,43 @@
 </section>
 {% endif %}
 {% endif %}
+
+<script>
+const TREND_ID = "{{ trend.id }}";
+let briefPollTimer = null;
+
+function pollBriefStatus() {
+  fetch(`/api/trends/${TREND_ID}/brief-status`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'generating') {
+        if (!briefPollTimer) {
+          briefPollTimer = setInterval(pollBriefStatus, 3000);
+        }
+      } else {
+        if (briefPollTimer) clearInterval(briefPollTimer);
+        briefPollTimer = null;
+        if (data.has_content || data.status === 'generated' || data.status === 'ready' || data.status === 'failed') {
+          location.reload();
+        }
+      }
+    })
+    .catch(() => {});
+}
+
+function retryBrief() {
+  const btn = document.getElementById('btn-retry-brief');
+  if (btn) { btn.disabled = true; btn.textContent = '正在重新生成…'; }
+  fetch(`/api/trends/${TREND_ID}/retry-brief`, { method: 'POST' })
+    .then(r => r.json())
+    .then(() => {
+      location.reload();
+    })
+    .catch(() => { if (btn) { btn.disabled = false; btn.textContent = '重新生成'; } });
+}
+
+{% if brief_status == 'generating' %}
+pollBriefStatus();
+{% endif %}
+</script>
 {% endblock %}

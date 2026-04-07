@@ -284,8 +284,6 @@ class TikTokFetcher:
             pass
 
         for idx, name in enumerate(names, 1):
-            print(f"  [{idx:3d}/{total}] #{name}", end="", flush=True)
-
             creators_data: list[dict] = []
 
             def _cap(resp: Response) -> None:
@@ -312,7 +310,7 @@ class TikTokFetcher:
                           timeout=self.timeout_ms)
                 time.sleep(4)
             except Exception as e:
-                print(f"  ERR timeout, skipping")
+                print(f"  [{idx:3d}/{total}] #{name}  ERR ({e})", flush=True)
                 page.remove_listener("response", _cap)
                 result[name] = (None, [])
                 try:
@@ -342,7 +340,8 @@ class TikTokFetcher:
 
             result[name] = (page_data, creators_data)
             ok = "OK" if page_data else "no data"
-            print(f"  {ok}")
+            # 整行一次输出，避免与 Uvicorn 日志交错粘在同一行
+            print(f"  [{idx:3d}/{total}] #{name}  {ok}", flush=True)
             time.sleep(1)
 
         page.close()

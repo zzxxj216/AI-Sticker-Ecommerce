@@ -74,7 +74,23 @@ class TopicPipeline:
         total = len(unreviewed)
 
         if total == 0:
-            print("[Pipeline] 没有待审核的话题")
+            row = self.db.conn.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM tk_hashtags),
+                    (SELECT COUNT(*) FROM tk_hashtags WHERE review_status = 'pending'),
+                    (SELECT COUNT(*) FROM tk_hashtags
+                     WHERE review_status = 'pending' AND (
+                         detail_data_json IS NULL OR trim(detail_data_json) = ''
+                     )),
+                    (SELECT COUNT(*) FROM tk_hashtags WHERE review_status = 'reviewed')
+                """
+            ).fetchone()
+            print(
+                "[Pipeline] 没有待审核的话题 "
+                f"(库内共 {row[0]} 条；pending {row[1]}；pending 且无详情 {row[2]}；已 reviewed {row[3]})。"
+                "若已 reviewed 需重新评分：请重新抓取并写入详情（本次已修复重复行会更新详情并重置为 pending）。"
+            )
             return {"total": 0, "approve": 0, "watchlist": 0, "reject": 0, "error": 0}
 
         print(f"[Pipeline] 开始批量审核 {total} 个话题 (batch_size={self.batch_size})")
@@ -171,8 +187,6 @@ class TopicPipeline:
             hid = row["hashtag_id"]
             name = row["hashtag_name"]
             review_id = row["review_id"]
-            print(f"  [{i:3d}/{total}] #{name:<30s}", end="", flush=True)
-
             try:
                 card_text = build_reviewed_card(row)
                 response = self._chat(TOPIC_TO_BRIEF_PROMPT, card_text)
@@ -182,11 +196,14 @@ class TopicPipeline:
                 brief_status = parsed.get("brief_status", "not_ready")
                 stats[brief_status] = stats.get(brief_status, 0) + 1
                 trend_name = parsed.get("trend_name", "")
-                print(f"  → {brief_status.upper()}"
-                      f"{f' [{trend_name}]' if trend_name else ''}")
+                extra = f" [{trend_name}]" if trend_name else ""
+                print(
+                    f"  [{i:3d}/{total}] #{name:<30s}  → {brief_status.upper()}{extra}",
+                    flush=True,
+                )
 
             except Exception as e:
-                print(f"  → ERROR: {e}")
+                print(f"  [{i:3d}/{total}] #{name:<30s}  → ERROR: {e}", flush=True)
                 stats["error"] += 1
 
             if i % self.batch_size == 0 and i < total:
