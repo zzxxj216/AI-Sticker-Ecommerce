@@ -213,7 +213,44 @@ class TrendService:
                 self._generate_news_brief(trend_id, trend)
             logger.info("Brief generated on approve for %s", trend_id)
         except Exception as e:
-            logger.warning("Brief generation failed for %s: %s", trend_id, e)
+            logger.warning("Brief generation (LLM) failed for %s: %s — falling back to local builder", trend_id, e)
+            try:
+                self._generate_fallback_brief(trend_id, trend)
+                logger.info("Fallback brief generated for %s", trend_id)
+            except Exception as e2:
+                logger.warning("Fallback brief also failed for %s: %s", trend_id, e2)
+
+    def _generate_fallback_brief(self, trend_id: str, trend: dict) -> None:
+        """不依赖 LLM，直接用 trend 已有字段构造最小可用 Brief。"""
+        raw = trend.get("raw_payload", {})
+        review = raw.get("review", {})
+
+        def _to_list(v):
+            if isinstance(v, list): return v
+            if not v: return []
+            return [s.strip() for s in str(v).split(",") if s.strip()]
+
+        brief_data = {
+            "trend_name": trend.get("trend_name") or trend.get("title", ""),
+            "trend_type": trend.get("trend_type") or review.get("theme_type", ""),
+            "one_line_explanation": trend.get("summary") or review.get("one_line_interpretation", ""),
+            "why_now": trend.get("summary", ""),
+            "lifecycle": review.get("lifecycle", "growth"),
+            "platform": _to_list(trend.get("platform")) or _to_list(review.get("best_platform", "")),
+            "product_goal": ["sticker_pack"],
+            "target_audience": {"profile": "Gen-Z & Millennials", "usage_scenarios": ["messaging", "social_media"]},
+            "emotional_core": _to_list(trend.get("emotional_core")) or _to_list(review.get("emotional_hooks", "")),
+            "visual_symbols": _to_list(trend.get("visual_symbols")) or _to_list(review.get("visual_symbols", "")),
+            "must_avoid": _to_list(trend.get("risk_flags")),
+            "pack_size_goal": {"min": 12, "max": 24},
+            "risk_notes": _to_list(trend.get("risk_flags")),
+        }
+        self.db.upsert_brief(TrendBriefRecord(
+            trend_id=trend_id,
+            brief_status="generated",
+            brief_json=brief_data,
+            source_ref="local_fallback",
+        ))
 
     def _generate_news_brief(self, trend_id: str, trend: dict) -> None:
         """用规则引擎为 News 类 trend 生成 Brief（和批量管线同一套逻辑）。"""
