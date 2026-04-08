@@ -1,0 +1,196 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Video Types</p>
+    <h1>视频类型管理</h1>
+    <p class="page-subtitle">定义单个视频类型的能力和边界，包括所需输入、文字风格规则、可搭配类型等。</p>
+  </div>
+  <div class="header-actions">
+    <span class="muted">共 {{ types|length }} 个类型</span>
+    <button class="btn-primary" onclick="showAddModal()" style="padding:8px 16px;font-size:13px;">+ 新建类型</button>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><h2>类型列表</h2></div>
+
+  {% if types %}
+  <div style="padding:16px 24px;" id="types-container">
+    {% for t in types %}
+    <div class="vt-card {% if not t.is_active %}vt-inactive{% endif %}" data-type-id="{{ t.type_id }}">
+      <div class="vt-card-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="vt-id-badge">{{ t.type_id }}</span>
+          <strong style="font-size:14px;">{{ t.name }}</strong>
+          {% if not t.is_active %}<span class="badge-inactive">已停用</span>{% endif %}
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="btn-secondary vt-toggle-detail" style="padding:3px 10px;font-size:11px;cursor:pointer;">展开</button>
+          <button class="btn-secondary" onclick="toggleType('{{ t.type_id }}', {{ 'false' if t.is_active else 'true' }})"
+                  style="padding:3px 10px;font-size:11px;cursor:pointer;">
+            {{ '停用' if t.is_active else '启用' }}
+          </button>
+        </div>
+      </div>
+
+      <div style="margin-top:6px;font-size:13px;color:var(--text-muted);">{{ t.goal }}</div>
+
+      <div class="vt-detail" style="display:none;margin-top:12px;">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">{{ t.description }}</div>
+
+        <div class="vt-tags-row">
+          <span class="vt-label">所需输入:</span>
+          {% for inp in t.required_inputs %}<span class="vt-tag vt-tag-input">{{ inp }}</span>{% endfor %}
+        </div>
+        <div class="vt-tags-row">
+          <span class="vt-label">允许位置:</span>
+          {% for pos in t.allowed_positions %}<span class="vt-tag vt-tag-pos">{{ pos }}</span>{% endfor %}
+        </div>
+        <div class="vt-tags-row">
+          <span class="vt-label">文字规则:</span>
+          {% for r in t.text_style_rules %}<span class="vt-tag">{{ r }}</span>{% endfor %}
+        </div>
+        <div class="vt-tags-row">
+          <span class="vt-label">可搭配:</span>
+          {% for p in t.can_pair_with %}<span class="vt-tag vt-tag-pair">{{ p }}</span>{% endfor %}
+        </div>
+        <div class="vt-tags-row">
+          <span class="vt-label">输出元素:</span>
+          {% for el in t.output_elements %}<span class="vt-tag vt-tag-output">{{ el }}</span>{% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:60px 24px;">
+    <p style="font-weight:600;">暂无视频类型</p>
+    <p style="color:var(--text-muted);font-size:13px;">点击「新建类型」添加第一个视频类型。</p>
+  </div>
+  {% endif %}
+</section>
+
+<!-- Add / Edit Modal -->
+<div id="typeModal" class="modal-overlay" style="display:none;">
+  <div class="modal-card" style="max-width:600px;">
+    <div class="modal-header">
+      <h3 id="modalTitle">新建视频类型</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <form id="typeForm" onsubmit="saveType(event)">
+      <div class="form-group">
+        <label>Type ID (英文标识)</label>
+        <input name="type_id" id="f_type_id" required placeholder="e.g. resonance" />
+      </div>
+      <div class="form-group">
+        <label>名称</label>
+        <input name="name" id="f_name" required placeholder="e.g. 热点共鸣" />
+      </div>
+      <div class="form-group">
+        <label>目标 (Goal)</label>
+        <input name="goal" id="f_goal" placeholder="这个类型想达成什么效果" />
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea name="description" id="f_description" rows="2" placeholder="English description for AI"></textarea>
+      </div>
+      <div class="form-group">
+        <label>所需输入 (逗号分隔)</label>
+        <input name="required_inputs" id="f_required_inputs" placeholder="trend_topic, emotional_hooks" />
+      </div>
+      <div class="form-group">
+        <label>允许位置 (逗号分隔)</label>
+        <input name="allowed_positions" id="f_allowed_positions" placeholder="opening, middle, closing, any" value="any" />
+      </div>
+      <div class="form-group">
+        <label>文字风格规则 (每行一条)</label>
+        <textarea name="text_style_rules" id="f_text_style_rules" rows="2" placeholder="max 8 words per line&#10;use internet slang"></textarea>
+      </div>
+      <div class="form-group">
+        <label>可搭配类型 (逗号分隔)</label>
+        <input name="can_pair_with" id="f_can_pair_with" placeholder="visual_showcase, commerce_scene" />
+      </div>
+      <div class="form-group">
+        <label>输出元素 (逗号分隔)</label>
+        <input name="output_elements" id="f_output_elements" placeholder="hook_text, emotional_caption" />
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+        <button type="button" class="btn-secondary" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+.vt-card{border:1px solid var(--line-soft,#e5e7eb);border-radius:var(--radius-md,8px);padding:16px;margin-bottom:12px;transition:border-color .15s;}
+.vt-card:hover{border-color:var(--primary,#7c5cfc);}
+.vt-card-header{display:flex;justify-content:space-between;align-items:center;}
+.vt-inactive{opacity:.55;}
+.vt-id-badge{background:linear-gradient(135deg,#7c5cfc,#06b6d4);color:#fff;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;letter-spacing:.5px;}
+.badge-inactive{background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:10px;font-size:11px;}
+.vt-tags-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:12px;}
+.vt-label{font-weight:600;color:var(--text-muted);min-width:72px;}
+.vt-tag{padding:2px 8px;border-radius:8px;background:var(--surface-hover,#f3f4f6);color:var(--text-muted);}
+.vt-tag-input{background:#dbeafe;color:#1e40af;}
+.vt-tag-pos{background:#dcfce7;color:#166534;}
+.vt-tag-pair{background:#fef3c7;color:#92400e;}
+.vt-tag-output{background:#f3e8ff;color:#7c3aed;}
+
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:1000;display:flex;align-items:center;justify-content:center;}
+.modal-card{background:#fff;border-radius:12px;padding:24px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.15);}
+.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+.modal-header h3{margin:0;font-size:16px;}
+.modal-close{border:none;background:none;font-size:24px;cursor:pointer;color:var(--text-muted);}
+.form-group{margin-bottom:12px;}
+.form-group label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px;}
+.form-group input,.form-group textarea{width:100%;padding:8px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:6px;font-size:13px;box-sizing:border-box;}
+.form-group input:focus,.form-group textarea:focus{outline:none;border-color:var(--primary,#7c5cfc);}
+</style>
+
+<script>
+function showAddModal(){
+  document.getElementById('modalTitle').textContent='新建视频类型';
+  document.getElementById('typeForm').reset();
+  document.getElementById('f_allowed_positions').value='any';
+  document.getElementById('typeModal').style.display='flex';
+}
+function closeModal(){document.getElementById('typeModal').style.display='none';}
+
+async function saveType(e){
+  e.preventDefault();
+  const f=document.getElementById('typeForm');
+  const split=v=>(v||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const body={
+    type_id:f.f_type_id.value.trim(),
+    name:f.f_name.value.trim(),
+    goal:f.f_goal.value.trim(),
+    description:f.f_description.value.trim(),
+    required_inputs:split(f.f_required_inputs.value),
+    allowed_positions:split(f.f_allowed_positions.value),
+    text_style_rules:f.f_text_style_rules.value.split('\n').map(s=>s.trim()).filter(Boolean),
+    can_pair_with:split(f.f_can_pair_with.value),
+    output_elements:split(f.f_output_elements.value),
+    is_active:true,
+  };
+  const r=await fetch('/api/v2/video-types',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){closeModal();location.reload();}
+  else{const d=await r.json();alert(d.detail||'保存失败');}
+}
+
+async function toggleType(typeId,active){
+  await fetch('/api/v2/video-types/'+typeId+'/toggle',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_active:active==='true'||active===true})});
+  location.reload();
+}
+
+document.querySelectorAll('.vt-toggle-detail').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const card=btn.closest('.vt-card');
+    const detail=card.querySelector('.vt-detail');
+    if(detail.style.display==='none'){detail.style.display='block';btn.textContent='收起';}
+    else{detail.style.display='none';btn.textContent='展开';}
+  });
+});
+</script>
+{% endblock %}

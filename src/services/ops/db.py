@@ -230,33 +230,79 @@ class OpsDatabase:
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_chat_sessions_agent ON chat_sessions(agent_type);
 
-            -- Video Script Templates & Plans --
-            CREATE TABLE IF NOT EXISTS video_script_templates (
-                id TEXT PRIMARY KEY,
+            -- Video Type + Combo Script Generation System --
+            CREATE TABLE IF NOT EXISTS video_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type_id TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
+                goal TEXT DEFAULT '',
                 description TEXT DEFAULT '',
-                target TEXT DEFAULT '',
-                structure_json TEXT NOT NULL DEFAULT '{}',
+                required_inputs_json TEXT DEFAULT '[]',
+                allowed_positions_json TEXT DEFAULT '["any"]',
+                text_style_rules_json TEXT DEFAULT '[]',
+                can_pair_with_json TEXT DEFAULT '[]',
+                output_elements_json TEXT DEFAULT '[]',
                 is_active INTEGER DEFAULT 1,
-                sort_order INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS video_plans (
+            CREATE TABLE IF NOT EXISTS video_type_combos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                combo_id TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                selected_types_json TEXT DEFAULT '[]',
+                primary_type TEXT DEFAULT '',
+                secondary_types_json TEXT DEFAULT '[]',
+                support_types_json TEXT DEFAULT '[]',
+                duration_range_json TEXT DEFAULT '{"min":7,"max":12}',
+                shot_count_range_json TEXT DEFAULT '{"min":3,"max":5}',
+                constraints_json TEXT DEFAULT '[]',
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS video_script_plans_v2 (
                 id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
-                template_id TEXT NOT NULL,
-                plan_json TEXT NOT NULL DEFAULT '{}',
-                status TEXT DEFAULT 'completed',
+                design_id TEXT DEFAULT '',
+                pack_id TEXT DEFAULT '',
+                job_id TEXT DEFAULT '',
+                combo_id TEXT NOT NULL,
+                selected_types_json TEXT DEFAULT '[]',
+                input_json TEXT DEFAULT '{}',
+                plan_json TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'pending',
                 created_by TEXT DEFAULT 'system',
                 created_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_video_plans_job ON video_plans(job_id);
-            CREATE INDEX IF NOT EXISTS idx_video_plans_template ON video_plans(template_id);
+            CREATE INDEX IF NOT EXISTS idx_vsp2_combo ON video_script_plans_v2(combo_id);
+            CREATE INDEX IF NOT EXISTS idx_vsp2_job ON video_script_plans_v2(job_id);
+
+            CREATE TABLE IF NOT EXISTS video_scripts (
+                id TEXT PRIMARY KEY,
+                design_id TEXT DEFAULT '',
+                pack_id TEXT DEFAULT '',
+                job_id TEXT DEFAULT '',
+                combo_id TEXT NOT NULL,
+                plan_id TEXT DEFAULT '',
+                hook_text TEXT DEFAULT '',
+                cta_text TEXT DEFAULT '',
+                caption_text TEXT DEFAULT '',
+                title_options_json TEXT DEFAULT '[]',
+                script_json TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'pending',
+                created_by TEXT DEFAULT 'system',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vs_combo ON video_scripts(combo_id);
+            CREATE INDEX IF NOT EXISTS idx_vs_plan ON video_scripts(plan_id);
+            CREATE INDEX IF NOT EXISTS idx_vs_job ON video_scripts(job_id);
             """
         )
         c.commit()
-        self._seed_video_script_templates(c)
+        self._seed_video_types(c)
+        self._seed_video_type_combos(c)
         self._migrate_columns(c)
 
     def _migrate_columns(self, c: sqlite3.Connection) -> None:
@@ -1124,122 +1170,383 @@ class OpsDatabase:
         self.conn.commit()
         return cur.rowcount
 
-    # --- Video Script Templates & Plans ---
+    # --- Video Type + Combo seed & CRUD ---
 
-    def _seed_video_script_templates(self, c: sqlite3.Connection) -> None:
-        """Seed default A/B/C video script templates if the table is empty."""
-        count = c.execute("SELECT COUNT(*) FROM video_script_templates").fetchone()[0]
+    def _seed_video_types(self, c: sqlite3.Connection) -> None:
+        count = c.execute("SELECT COUNT(*) FROM video_types").fetchone()[0]
         if count > 0:
             return
 
         now = _now()
-        seeds = [
-            (
-                "template_a",
-                "纯视觉停留测试",
-                "测试贴纸设计的第一眼吸引力：图案是否抓眼、颜色是否吸睛、轮廓是否适合贴纸",
-                "visual_retention",
-                json.dumps({
-                    "test_goal": "visual_retention",
-                    "total_duration": "6-8s",
-                    "segments": [
-                        {"time_range": "0-1s", "purpose": "hero_shot", "guidance": "直接展示贴纸成品大图，占满画面，白底或简洁背景"},
-                        {"time_range": "1-3s", "purpose": "application_scene", "guidance": "贴纸应用场景（电脑/水杯/行李箱/车窗），展示真实使用感"},
-                        {"time_range": "3-6s", "purpose": "multi_angle", "guidance": "快速切换3个不同角度或不同贴纸款式"},
-                        {"time_range": "6-8s", "purpose": "cta", "guidance": "轻CTA提问，如 Would you put this on your laptop?"},
-                    ],
-                    "cta_style": "question",
-                    "suitable_for": "偏纯视觉审美的设计，适合测试第一眼吸引力",
-                }, ensure_ascii=False),
-                1,
-                1,
-                now,
-            ),
-            (
-                "template_b",
-                "热点语境测试",
-                "测试用户是否懂梗、愿意互动：meme理解成本、文案与视觉匹配度、美区语感",
-                "trend_context",
-                json.dumps({
-                    "test_goal": "trend_context",
-                    "total_duration": "7-10s",
-                    "segments": [
-                        {"time_range": "0-2s", "purpose": "hook_text", "guidance": "热点句子/梗先出现，用文字叠加或旁白，立刻抓住注意力"},
-                        {"time_range": "2-4s", "purpose": "sticker_reveal", "guidance": "贴纸视觉出现，展示设计如何呼应这个梗/话题"},
-                        {"time_range": "4-7s", "purpose": "real_use", "guidance": "展示贴在具体物体上的效果，强调实物感"},
-                        {"time_range": "7-10s", "purpose": "engagement_cta", "guidance": "引导评论，如 Too much or actually funny? / Need this or pass?"},
-                    ],
-                    "cta_style": "engagement",
-                    "suitable_for": "热点性强、带梗/meme的设计，适合测试语境共鸣",
-                }, ensure_ascii=False),
-                1,
-                2,
-                now,
-            ),
-            (
-                "template_c",
-                "购买意图测试",
-                "测试是否有下单冲动：从有趣转化为想买，哪种设计更适合商业化",
-                "purchase_intent",
-                json.dumps({
-                    "test_goal": "purchase_intent",
-                    "total_duration": "8-12s",
-                    "segments": [
-                        {"time_range": "0-2s", "purpose": "scene_hook", "guidance": "场景化开头，如 I'd actually buy this for my water bottle"},
-                        {"time_range": "2-5s", "purpose": "product_showcase", "guidance": "贴纸成品展示：尺寸、防水感、材质质感"},
-                        {"time_range": "5-8s", "purpose": "lifestyle_context", "guidance": "上身场景：展示贴在日常物品上的生活方式感"},
-                        {"time_range": "8-12s", "purpose": "conversion_cta", "guidance": "轻转化CTA，如 Comment sticker if you want this one / 挂购物车引导"},
-                    ],
-                    "cta_style": "conversion",
-                    "suitable_for": "产品感强的设计，适合测试购买转化意图",
-                }, ensure_ascii=False),
-                1,
-                3,
-                now,
-            ),
+        types = [
+            {
+                "type_id": "resonance",
+                "name": "热点共鸣 / 情绪代入",
+                "goal": "让用户觉得「这说的就是我」，适合热点卡贴的表达起点",
+                "description": "Relatable opening, emotional captions, meme-style expression",
+                "required_inputs": ["trend_topic", "emotional_hooks", "audience_persona"],
+                "allowed_positions": ["opening", "any"],
+                "text_style_rules": ["max 8 words per line", "use internet slang", "relatable first-person"],
+                "can_pair_with": ["visual_showcase", "commerce_scene", "collection_flex", "comment_driver", "soft_sell"],
+                "output_elements": ["hook_text", "emotional_caption", "relatable_opener"],
+            },
+            {
+                "type_id": "visual_showcase",
+                "name": "视觉展示",
+                "goal": "让贴纸本身更抓眼，强化首屏停留",
+                "description": "Hero sticker reveal, quick pack cuts, strong visual short captions",
+                "required_inputs": ["hero_sticker", "collection_sheet", "sticker_descriptions"],
+                "allowed_positions": ["opening", "middle", "any"],
+                "text_style_rules": ["max 6 words", "punchy adjectives", "no long sentences"],
+                "can_pair_with": ["resonance", "collection_flex", "soft_sell", "comment_driver"],
+                "output_elements": ["hero_reveal", "pack_cut_sequence", "visual_caption"],
+            },
+            {
+                "type_id": "commerce_scene",
+                "name": "商品场景",
+                "goal": "让用户把贴纸想象成能买、能贴、能用的商品",
+                "description": "Use-case placement (laptop, bottle, journal), material feel, product framing",
+                "required_inputs": ["use_cases", "materials", "audience_persona"],
+                "allowed_positions": ["middle", "any"],
+                "text_style_rules": ["show don't tell", "lifestyle language", "no hard-sell"],
+                "can_pair_with": ["resonance", "collection_flex", "soft_sell", "comment_driver"],
+                "output_elements": ["use_case_shot", "material_callout", "lifestyle_caption"],
+            },
+            {
+                "type_id": "collection_flex",
+                "name": "整包展示",
+                "goal": "展示 pack 丰富度，避免用户只看到单张",
+                "description": "Full pack spread, pick-your-favorite, whole-set energy",
+                "required_inputs": ["collection_sheet", "sticker_descriptions"],
+                "allowed_positions": ["middle", "any"],
+                "text_style_rules": ["use quantity words", "fan-out energy", "which one are you"],
+                "can_pair_with": ["resonance", "visual_showcase", "soft_sell", "comment_driver"],
+                "output_elements": ["collection_spread", "pick_favorite_prompt", "pack_count_callout"],
+            },
+            {
+                "type_id": "comment_driver",
+                "name": "评论驱动",
+                "goal": "增加互动，帮后续观察偏好",
+                "description": "Choice-style ending, comment prompt, light controversy question",
+                "required_inputs": ["audience_persona", "trend_topic", "brand_tone"],
+                "allowed_positions": ["closing"],
+                "text_style_rules": ["question format", "binary choice", "casual tone"],
+                "can_pair_with": ["resonance", "visual_showcase", "commerce_scene", "collection_flex"],
+                "output_elements": ["question_cta", "binary_choice", "comment_prompt"],
+            },
+            {
+                "type_id": "soft_sell",
+                "name": "轻转化",
+                "goal": "带一点购买意图，不要太硬广",
+                "description": "Soft buy intent, comment-to-buy, want-the-set energy",
+                "required_inputs": ["one_line_product_angle", "materials", "use_cases", "brand_tone"],
+                "allowed_positions": ["closing"],
+                "text_style_rules": ["conversational CTA", "no price mention", "desire language"],
+                "can_pair_with": ["resonance", "visual_showcase", "commerce_scene", "collection_flex"],
+                "output_elements": ["soft_cta", "desire_prompt", "buy_intent_text"],
+            },
         ]
-        c.executemany(
-            """INSERT OR IGNORE INTO video_script_templates
-               (id, name, description, target, structure_json, is_active, sort_order, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            seeds,
-        )
-        c.commit()
-        logger.info("Seeded %d video script templates", len(seeds))
 
-    def list_video_script_templates(self, active_only: bool = True) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM video_script_templates"
+        for t in types:
+            c.execute(
+                """INSERT OR IGNORE INTO video_types
+                   (type_id, name, goal, description,
+                    required_inputs_json, allowed_positions_json,
+                    text_style_rules_json, can_pair_with_json,
+                    output_elements_json, is_active, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (
+                    t["type_id"], t["name"], t["goal"], t["description"],
+                    json.dumps(t["required_inputs"]),
+                    json.dumps(t["allowed_positions"]),
+                    json.dumps(t["text_style_rules"]),
+                    json.dumps(t["can_pair_with"]),
+                    json.dumps(t["output_elements"]),
+                    now, now,
+                ),
+            )
+        c.commit()
+        logger.info("Seeded %d video types", len(types))
+
+    def _seed_video_type_combos(self, c: sqlite3.Connection) -> None:
+        count = c.execute("SELECT COUNT(*) FROM video_type_combos").fetchone()[0]
+        if count > 0:
+            return
+
+        now = _now()
+        combos = [
+            {
+                "combo_id": "combo_resonance_visual",
+                "name": "热点共鸣 + 视觉展示",
+                "selected_types": ["resonance", "visual_showcase"],
+                "primary_type": "resonance",
+                "secondary_types": ["visual_showcase"],
+                "support_types": [],
+                "duration_range": {"min": 7, "max": 10},
+                "shot_count_range": {"min": 3, "max": 4},
+                "constraints": ["must_have_hero_sticker", "hook_must_be_relatable"],
+            },
+            {
+                "combo_id": "combo_resonance_commerce",
+                "name": "热点共鸣 + 商品场景",
+                "selected_types": ["resonance", "commerce_scene"],
+                "primary_type": "resonance",
+                "secondary_types": ["commerce_scene"],
+                "support_types": [],
+                "duration_range": {"min": 7, "max": 10},
+                "shot_count_range": {"min": 3, "max": 4},
+                "constraints": ["must_mention_use_case", "hook_must_be_relatable"],
+            },
+            {
+                "combo_id": "combo_resonance_visual_softsell",
+                "name": "热点共鸣 + 视觉展示 + 轻转化",
+                "selected_types": ["resonance", "visual_showcase", "soft_sell"],
+                "primary_type": "resonance",
+                "secondary_types": ["visual_showcase"],
+                "support_types": ["soft_sell"],
+                "duration_range": {"min": 8, "max": 12},
+                "shot_count_range": {"min": 3, "max": 5},
+                "constraints": ["must_have_hero_sticker", "last_shot_must_have_cta"],
+            },
+            {
+                "combo_id": "combo_resonance_commerce_comment",
+                "name": "热点共鸣 + 商品场景 + 评论驱动",
+                "selected_types": ["resonance", "commerce_scene", "comment_driver"],
+                "primary_type": "resonance",
+                "secondary_types": ["commerce_scene"],
+                "support_types": ["comment_driver"],
+                "duration_range": {"min": 8, "max": 12},
+                "shot_count_range": {"min": 3, "max": 5},
+                "constraints": ["must_mention_use_case", "last_shot_must_be_question"],
+            },
+            {
+                "combo_id": "combo_visual_collection",
+                "name": "视觉展示 + 整包展示",
+                "selected_types": ["visual_showcase", "collection_flex"],
+                "primary_type": "visual_showcase",
+                "secondary_types": ["collection_flex"],
+                "support_types": [],
+                "duration_range": {"min": 7, "max": 10},
+                "shot_count_range": {"min": 3, "max": 4},
+                "constraints": ["must_have_hero_sticker", "must_show_collection_sheet"],
+            },
+            {
+                "combo_id": "combo_visual_collection_softsell",
+                "name": "视觉展示 + 整包展示 + 轻转化",
+                "selected_types": ["visual_showcase", "collection_flex", "soft_sell"],
+                "primary_type": "visual_showcase",
+                "secondary_types": ["collection_flex"],
+                "support_types": ["soft_sell"],
+                "duration_range": {"min": 8, "max": 12},
+                "shot_count_range": {"min": 3, "max": 5},
+                "constraints": ["must_have_hero_sticker", "must_show_collection_sheet", "last_shot_must_have_cta"],
+            },
+            {
+                "combo_id": "combo_resonance_collection_comment",
+                "name": "热点共鸣 + 整包展示 + 评论驱动",
+                "selected_types": ["resonance", "collection_flex", "comment_driver"],
+                "primary_type": "resonance",
+                "secondary_types": ["collection_flex"],
+                "support_types": ["comment_driver"],
+                "duration_range": {"min": 8, "max": 12},
+                "shot_count_range": {"min": 3, "max": 5},
+                "constraints": ["must_show_collection_sheet", "last_shot_must_be_question"],
+            },
+            {
+                "combo_id": "combo_commerce_collection_softsell",
+                "name": "商品场景 + 整包展示 + 轻转化",
+                "selected_types": ["commerce_scene", "collection_flex", "soft_sell"],
+                "primary_type": "commerce_scene",
+                "secondary_types": ["collection_flex"],
+                "support_types": ["soft_sell"],
+                "duration_range": {"min": 8, "max": 12},
+                "shot_count_range": {"min": 3, "max": 5},
+                "constraints": ["must_mention_use_case", "must_show_collection_sheet", "last_shot_must_have_cta"],
+            },
+        ]
+
+        for cb in combos:
+            c.execute(
+                """INSERT OR IGNORE INTO video_type_combos
+                   (combo_id, name, selected_types_json, primary_type,
+                    secondary_types_json, support_types_json,
+                    duration_range_json, shot_count_range_json,
+                    constraints_json, is_active, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (
+                    cb["combo_id"], cb["name"],
+                    json.dumps(cb["selected_types"]),
+                    cb["primary_type"],
+                    json.dumps(cb["secondary_types"]),
+                    json.dumps(cb["support_types"]),
+                    json.dumps(cb["duration_range"]),
+                    json.dumps(cb["shot_count_range"]),
+                    json.dumps(cb["constraints"]),
+                    now, now,
+                ),
+            )
+        c.commit()
+        logger.info("Seeded %d video type combos", len(combos))
+
+    # --- V2: Video Types CRUD ---
+
+    def list_video_types(self, active_only: bool = False) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM video_types"
         if active_only:
             sql += " WHERE is_active = 1"
-        sql += " ORDER BY sort_order ASC, id ASC"
+        sql += " ORDER BY type_id ASC"
         rows = self.conn.execute(sql).fetchall()
         result = []
         for row in rows:
             d = dict(row)
-            d["structure"] = self._loads(d.pop("structure_json", "{}"), {})
+            for col in ("required_inputs", "allowed_positions", "text_style_rules",
+                        "can_pair_with", "output_elements"):
+                d[col] = self._loads(d.pop(f"{col}_json", "[]"), [])
             result.append(d)
         return result
 
-    def get_video_script_template(self, template_id: str) -> dict[str, Any] | None:
+    def get_video_type(self, type_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
-            "SELECT * FROM video_script_templates WHERE id = ?", (template_id,)
+            "SELECT * FROM video_types WHERE type_id = ?", (type_id,)
         ).fetchone()
         if not row:
             return None
         d = dict(row)
-        d["structure"] = self._loads(d.pop("structure_json", "{}"), {})
+        for col in ("required_inputs", "allowed_positions", "text_style_rules",
+                    "can_pair_with", "output_elements"):
+            d[col] = self._loads(d.pop(f"{col}_json", "[]"), [])
         return d
 
-    def insert_video_plan(self, data: dict) -> None:
+    def upsert_video_type(self, data: dict) -> None:
         now = _now()
         self.conn.execute(
-            """INSERT INTO video_plans (id, job_id, template_id, plan_json, status, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO video_types
+               (type_id, name, goal, description,
+                required_inputs_json, allowed_positions_json,
+                text_style_rules_json, can_pair_with_json,
+                output_elements_json, is_active, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(type_id) DO UPDATE SET
+                name=excluded.name, goal=excluded.goal, description=excluded.description,
+                required_inputs_json=excluded.required_inputs_json,
+                allowed_positions_json=excluded.allowed_positions_json,
+                text_style_rules_json=excluded.text_style_rules_json,
+                can_pair_with_json=excluded.can_pair_with_json,
+                output_elements_json=excluded.output_elements_json,
+                is_active=excluded.is_active, updated_at=excluded.updated_at""",
             (
-                data["id"],
-                data["job_id"],
-                data["template_id"],
-                json.dumps(data.get("plan_json", {}), ensure_ascii=False),
+                data["type_id"], data["name"], data.get("goal", ""), data.get("description", ""),
+                json.dumps(data.get("required_inputs", []), ensure_ascii=False),
+                json.dumps(data.get("allowed_positions", ["any"]), ensure_ascii=False),
+                json.dumps(data.get("text_style_rules", []), ensure_ascii=False),
+                json.dumps(data.get("can_pair_with", []), ensure_ascii=False),
+                json.dumps(data.get("output_elements", []), ensure_ascii=False),
+                1 if data.get("is_active", True) else 0,
+                now, now,
+            ),
+        )
+        self.conn.commit()
+
+    def toggle_video_type(self, type_id: str, is_active: bool) -> bool:
+        cur = self.conn.execute(
+            "UPDATE video_types SET is_active = ?, updated_at = ? WHERE type_id = ?",
+            (1 if is_active else 0, _now(), type_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- V2: Video Type Combos CRUD ---
+
+    def list_video_type_combos(self, active_only: bool = False) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM video_type_combos"
+        if active_only:
+            sql += " WHERE is_active = 1"
+        sql += " ORDER BY combo_id ASC"
+        rows = self.conn.execute(sql).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            for col in ("selected_types", "secondary_types", "support_types", "constraints"):
+                d[col] = self._loads(d.pop(f"{col}_json", "[]"), [])
+            for col in ("duration_range", "shot_count_range"):
+                d[col] = self._loads(d.pop(f"{col}_json", "{}"), {})
+            result.append(d)
+        return result
+
+    def get_video_type_combo(self, combo_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM video_type_combos WHERE combo_id = ?", (combo_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for col in ("selected_types", "secondary_types", "support_types", "constraints"):
+            d[col] = self._loads(d.pop(f"{col}_json", "[]"), [])
+        for col in ("duration_range", "shot_count_range"):
+            d[col] = self._loads(d.pop(f"{col}_json", "{}"), {})
+        return d
+
+    def upsert_video_type_combo(self, data: dict) -> None:
+        now = _now()
+        self.conn.execute(
+            """INSERT INTO video_type_combos
+               (combo_id, name, selected_types_json, primary_type,
+                secondary_types_json, support_types_json,
+                duration_range_json, shot_count_range_json,
+                constraints_json, is_active, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(combo_id) DO UPDATE SET
+                name=excluded.name, selected_types_json=excluded.selected_types_json,
+                primary_type=excluded.primary_type,
+                secondary_types_json=excluded.secondary_types_json,
+                support_types_json=excluded.support_types_json,
+                duration_range_json=excluded.duration_range_json,
+                shot_count_range_json=excluded.shot_count_range_json,
+                constraints_json=excluded.constraints_json,
+                is_active=excluded.is_active, updated_at=excluded.updated_at""",
+            (
+                data["combo_id"], data["name"],
+                json.dumps(data.get("selected_types", []), ensure_ascii=False),
+                data.get("primary_type", ""),
+                json.dumps(data.get("secondary_types", []), ensure_ascii=False),
+                json.dumps(data.get("support_types", []), ensure_ascii=False),
+                json.dumps(data.get("duration_range", {"min": 7, "max": 12}), ensure_ascii=False),
+                json.dumps(data.get("shot_count_range", {"min": 3, "max": 5}), ensure_ascii=False),
+                json.dumps(data.get("constraints", []), ensure_ascii=False),
+                1 if data.get("is_active", True) else 0,
+                now, now,
+            ),
+        )
+        self.conn.commit()
+
+    def toggle_video_type_combo(self, combo_id: str, is_active: bool) -> bool:
+        cur = self.conn.execute(
+            "UPDATE video_type_combos SET is_active = ?, updated_at = ? WHERE combo_id = ?",
+            (1 if is_active else 0, _now(), combo_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_video_type_combo(self, combo_id: str) -> bool:
+        cur = self.conn.execute("DELETE FROM video_type_combos WHERE combo_id = ?", (combo_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- V2: Script Plan (two-stage) CRUD ---
+
+    def insert_video_script_plan_v2(self, data: dict) -> None:
+        now = _now()
+        self.conn.execute(
+            """INSERT INTO video_script_plans_v2
+               (id, design_id, pack_id, job_id, combo_id, selected_types_json,
+                input_json, plan_json, status, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data["id"], data.get("design_id", ""), data.get("pack_id", ""),
+                data.get("job_id", ""), data["combo_id"],
+                json.dumps(data.get("selected_types", []), ensure_ascii=False),
+                json.dumps(data.get("input_snapshot", {}), ensure_ascii=False),
+                json.dumps(data.get("plan", {}), ensure_ascii=False),
                 data.get("status", "completed"),
                 data.get("created_by", "system"),
                 now,
@@ -1247,52 +1554,108 @@ class OpsDatabase:
         )
         self.conn.commit()
 
-    def list_video_plans(self, job_id: str | None = None) -> list[dict[str, Any]]:
+    def list_video_script_plans_v2(self, job_id: str | None = None, combo_id: str | None = None) -> list[dict[str, Any]]:
+        conditions = []
+        params: list[str] = []
         if job_id:
-            rows = self.conn.execute(
-                """SELECT vp.*, vst.name AS template_name, vst.target AS template_target,
-                          gj.trend_name AS job_trend_name
-                   FROM video_plans vp
-                   LEFT JOIN video_script_templates vst ON vst.id = vp.template_id
-                   LEFT JOIN generation_jobs gj ON gj.id = vp.job_id
-                   WHERE vp.job_id = ?
-                   ORDER BY vp.created_at DESC""",
-                (job_id,),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                """SELECT vp.*, vst.name AS template_name, vst.target AS template_target,
-                          gj.trend_name AS job_trend_name
-                   FROM video_plans vp
-                   LEFT JOIN video_script_templates vst ON vst.id = vp.template_id
-                   LEFT JOIN generation_jobs gj ON gj.id = vp.job_id
-                   ORDER BY vp.created_at DESC"""
-            ).fetchall()
+            conditions.append("job_id = ?")
+            params.append(job_id)
+        if combo_id:
+            conditions.append("combo_id = ?")
+            params.append(combo_id)
+        sql = "SELECT * FROM video_script_plans_v2"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY created_at DESC"
+        rows = self.conn.execute(sql, params).fetchall()
         result = []
         for row in rows:
             d = dict(row)
             d["plan"] = self._loads(d.pop("plan_json", "{}"), {})
+            d["input_snapshot"] = self._loads(d.pop("input_json", "{}"), {})
+            d["selected_types"] = self._loads(d.pop("selected_types_json", "[]"), [])
             result.append(d)
         return result
 
-    def get_video_plan(self, plan_id: str) -> dict[str, Any] | None:
+    def get_video_script_plan_v2(self, plan_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
-            """SELECT vp.*, vst.name AS template_name, vst.target AS template_target,
-                      gj.trend_name AS job_trend_name
-               FROM video_plans vp
-               LEFT JOIN video_script_templates vst ON vst.id = vp.template_id
-               LEFT JOIN generation_jobs gj ON gj.id = vp.job_id
-               WHERE vp.id = ?""",
-            (plan_id,),
+            "SELECT * FROM video_script_plans_v2 WHERE id = ?", (plan_id,)
         ).fetchone()
         if not row:
             return None
         d = dict(row)
         d["plan"] = self._loads(d.pop("plan_json", "{}"), {})
+        d["input_snapshot"] = self._loads(d.pop("input_json", "{}"), {})
+        d["selected_types"] = self._loads(d.pop("selected_types_json", "[]"), [])
         return d
 
-    def delete_video_plan(self, plan_id: str) -> bool:
-        cur = self.conn.execute("DELETE FROM video_plans WHERE id = ?", (plan_id,))
+    def delete_video_script_plan_v2(self, plan_id: str) -> bool:
+        cur = self.conn.execute("DELETE FROM video_script_plans_v2 WHERE id = ?", (plan_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- V2: Video Scripts CRUD ---
+
+    def insert_video_script(self, data: dict) -> None:
+        now = _now()
+        self.conn.execute(
+            """INSERT INTO video_scripts
+               (id, design_id, pack_id, job_id, combo_id, plan_id,
+                hook_text, cta_text, caption_text, title_options_json,
+                script_json, status, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data["id"], data.get("design_id", ""), data.get("pack_id", ""),
+                data.get("job_id", ""), data["combo_id"], data.get("plan_id", ""),
+                data.get("hook_text", ""), data.get("cta_text", ""),
+                data.get("caption_text", ""),
+                json.dumps(data.get("title_options", []), ensure_ascii=False),
+                json.dumps(data.get("script", {}), ensure_ascii=False),
+                data.get("status", "completed"),
+                data.get("created_by", "system"),
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    def list_video_scripts(self, job_id: str | None = None, combo_id: str | None = None, plan_id: str | None = None) -> list[dict[str, Any]]:
+        conditions = []
+        params: list[str] = []
+        if job_id:
+            conditions.append("job_id = ?")
+            params.append(job_id)
+        if combo_id:
+            conditions.append("combo_id = ?")
+            params.append(combo_id)
+        if plan_id:
+            conditions.append("plan_id = ?")
+            params.append(plan_id)
+        sql = "SELECT * FROM video_scripts"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY created_at DESC"
+        rows = self.conn.execute(sql, params).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["script"] = self._loads(d.pop("script_json", "{}"), {})
+            d["title_options"] = self._loads(d.pop("title_options_json", "[]"), [])
+            result.append(d)
+        return result
+
+    def get_video_script(self, script_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM video_scripts WHERE id = ?", (script_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["script"] = self._loads(d.pop("script_json", "{}"), {})
+        d["title_options"] = self._loads(d.pop("title_options_json", "[]"), [])
+        return d
+
+    def delete_video_script(self, script_id: str) -> bool:
+        cur = self.conn.execute("DELETE FROM video_scripts WHERE id = ?", (script_id,))
         self.conn.commit()
         return cur.rowcount > 0
 

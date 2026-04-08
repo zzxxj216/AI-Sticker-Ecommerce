@@ -1,0 +1,319 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Video Script Studio</p>
+    <h1>脚本工作室</h1>
+    <p class="page-subtitle">选择卡包 + 组合 → 两阶段生成 TikTok 分镜脚本（Plan → Script）。</p>
+  </div>
+</section>
+
+<!-- ① Generation Panel -->
+<section class="panel" id="gen-panel">
+  <div class="panel-header"><h2>生成脚本</h2></div>
+  <div style="padding:20px 24px;">
+    <div class="gen-form-row">
+      <div class="gen-field">
+        <label>选择已完成的卡包 (Job)</label>
+        <select id="sel_job">
+          <option value="">-- 选择卡包 --</option>
+          {% for j in jobs %}
+          <option value="{{ j.id }}">{{ j.trend_name or j.id }} ({{ j.image_count }} 张)</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="gen-field">
+        <label>选择视频组合 (Combo)</label>
+        <select id="sel_combo">
+          <option value="">-- 选择组合 --</option>
+          {% for c in combos %}
+          <option value="{{ c.combo_id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="gen-field" style="flex:0 0 auto;align-self:flex-end;">
+        <button class="btn-primary" id="btn_gen" onclick="startGenerate()" style="padding:10px 20px;font-size:13px;">
+          <span id="btn_gen_text">生成脚本</span>
+          <span id="btn_gen_spinner" style="display:none;" class="spinner"></span>
+        </button>
+      </div>
+    </div>
+    <div id="gen_status" style="margin-top:12px;font-size:13px;color:var(--text-muted);display:none;"></div>
+  </div>
+</section>
+
+<!-- ② Plans List -->
+<section class="panel" id="plans-panel">
+  <div class="panel-header">
+    <h2>脚本规划 (Plans)</h2>
+    <span class="muted" style="font-size:12px;">{{ plans|length }} 个</span>
+  </div>
+
+  {% if plans %}
+  <div style="padding:16px 24px;" id="plans-list">
+    {% for p in plans %}
+    <div class="vs-card" data-plan-id="{{ p.id }}">
+      <div class="vs-card-header">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="vs-badge vs-badge-plan">PLAN</span>
+          <strong style="font-size:13px;">{{ p.plan.video_intent[:80] if p.plan.video_intent else p.id }}</strong>
+          <span class="vs-combo-tag">{{ p.combo_id }}</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span style="font-size:11px;color:var(--text-muted);">{{ p.created_at[:16]|replace('T',' ') }}</span>
+          <button class="btn-secondary vs-toggle" style="padding:3px 10px;font-size:11px;">展开</button>
+          <button class="btn-primary" onclick="generateScript('{{ p.id }}')" style="padding:3px 12px;font-size:11px;">生成脚本</button>
+          <button class="btn-secondary" onclick="deletePlan('{{ p.id }}')" style="padding:3px 8px;font-size:11px;color:var(--danger,#ef4444);">删</button>
+        </div>
+      </div>
+
+      {% if p.plan.hook_idea %}
+      <div class="vs-hook">Hook: {{ p.plan.hook_idea }}</div>
+      {% endif %}
+
+      <div class="vs-detail" style="display:none;margin-top:10px;">
+        <div class="vs-meta-row">
+          <span>CTA 方向: <strong>{{ p.plan.cta_direction }}</strong></span>
+          <span>总时长: <strong>{{ p.plan.total_duration_sec }}s</strong></span>
+          <span>类型顺序: {{ p.plan.type_order|join(' → ') if p.plan.type_order else '-' }}</span>
+        </div>
+        {% if p.plan.shot_plan %}
+        <div class="vs-shots-header">Shot Plan</div>
+        {% for sp in p.plan.shot_plan %}
+        <div class="vs-shot-row">
+          <span class="vs-shot-idx">{{ sp.shot_index }}</span>
+          <span class="vs-shot-type">{{ sp.type_id }}</span>
+          <span style="flex:1;">{{ sp.purpose }}</span>
+          <span class="vs-shot-dur">{{ sp.duration_sec }}s</span>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% if p.plan.notes %}
+        <div class="vs-notes">{{ p.plan.notes }}</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:40px 24px;">
+    <p style="color:var(--text-muted);font-size:13px;">暂无脚本规划，请在上方选择卡包和组合后生成。</p>
+  </div>
+  {% endif %}
+</section>
+
+<!-- ③ Scripts List -->
+<section class="panel" id="scripts-panel">
+  <div class="panel-header">
+    <h2>正式脚本 (Scripts)</h2>
+    <span class="muted" style="font-size:12px;">{{ scripts|length }} 个</span>
+  </div>
+
+  {% if scripts %}
+  <div style="padding:16px 24px;" id="scripts-list">
+    {% for s in scripts %}
+    <div class="vs-card" data-script-id="{{ s.id }}">
+      <div class="vs-card-header">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="vs-badge vs-badge-script">SCRIPT</span>
+          <strong style="font-size:13px;">{{ s.script.title or s.hook_text[:50] or s.id }}</strong>
+          <span class="vs-combo-tag">{{ s.combo_id }}</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span style="font-size:11px;color:var(--text-muted);">{{ s.created_at[:16]|replace('T',' ') }}</span>
+          <button class="btn-secondary vs-toggle" style="padding:3px 10px;font-size:11px;">展开</button>
+          <button class="btn-secondary" onclick="deleteScript('{{ s.id }}')" style="padding:3px 8px;font-size:11px;color:var(--danger,#ef4444);">删</button>
+        </div>
+      </div>
+
+      {% if s.hook_text %}
+      <div class="vs-hook">Hook: {{ s.hook_text }}</div>
+      {% endif %}
+
+      <div class="vs-detail" style="display:none;margin-top:10px;">
+        <div class="vs-meta-row">
+          {% if s.cta_text %}<span>CTA: <strong>{{ s.cta_text }}</strong></span>{% endif %}
+          {% if s.script.music_mood %}<span>Music: {{ s.script.music_mood }}</span>{% endif %}
+          {% if s.script.sticker_hero %}<span>Hero: {{ s.script.sticker_hero }}</span>{% endif %}
+          {% if s.script.total_duration_sec %}<span>时长: {{ s.script.total_duration_sec }}s</span>{% endif %}
+        </div>
+
+        {% if s.script.shots %}
+        <div class="vs-shots-header">Storyboard</div>
+        {% for shot in s.script.shots %}
+        <div class="vs-storyboard-shot">
+          <div class="vs-sb-header">
+            <span class="vs-shot-idx">{{ shot.shot_index }}</span>
+            <span class="vs-shot-type">{{ shot.type_id }}</span>
+            <span class="vs-shot-time">{{ shot.time_range }}</span>
+            <span class="vs-shot-dur">{{ shot.duration_sec }}s</span>
+          </div>
+          <div class="vs-sb-visual">{{ shot.visual_description }}</div>
+          {% if shot.on_screen_text %}
+          <div class="vs-sb-text"><strong>Text:</strong> {{ shot.on_screen_text }}</div>
+          {% endif %}
+          {% if shot.voiceover %}
+          <div class="vs-sb-vo"><strong>VO:</strong> {{ shot.voiceover }}</div>
+          {% endif %}
+          {% if shot.sticker_action %}
+          <div class="vs-sb-action"><strong>Sticker:</strong> {{ shot.sticker_action }}</div>
+          {% endif %}
+          {% if shot.transition %}
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Transition: {{ shot.transition }}</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {% if s.caption_text %}
+        <div class="vs-caption-box">
+          <strong>Caption:</strong> {{ s.caption_text }}
+        </div>
+        {% endif %}
+
+        {% if s.script.hashtags %}
+        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;">
+          {% for tag in s.script.hashtags %}
+          <span class="vs-hashtag">{{ tag }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if s.title_options %}
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
+          <strong>Title Options:</strong>
+          {% for opt in s.title_options %}<span class="vs-title-opt">{{ opt }}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        {% if s.script.production_notes %}
+        <div class="vs-notes">{{ s.script.production_notes }}</div>
+        {% endif %}
+
+        {% if s.script._validation_issues %}
+        <div class="vs-validation-warn">
+          <strong>Validation:</strong>
+          {% for iss in s.script._validation_issues %}<span>{{ iss }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="padding:40px 24px;">
+    <p style="color:var(--text-muted);font-size:13px;">暂无正式脚本，从上方 Plan 列表点击「生成脚本」。</p>
+  </div>
+  {% endif %}
+</section>
+
+<style>
+.gen-form-row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;}
+.gen-field{flex:1;min-width:200px;}
+.gen-field label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px;}
+.gen-field select{width:100%;padding:10px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;font-size:13px;background:#fff;}
+.gen-field select:focus{outline:none;border-color:var(--primary,#7c5cfc);}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.vs-card{border:1px solid var(--line-soft,#e5e7eb);border-radius:var(--radius-md,8px);padding:14px 16px;margin-bottom:10px;transition:border-color .15s;}
+.vs-card:hover{border-color:var(--primary,#7c5cfc);}
+.vs-card-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;}
+.vs-badge{padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;letter-spacing:.5px;}
+.vs-badge-plan{background:#dbeafe;color:#1e40af;}
+.vs-badge-script{background:#dcfce7;color:#166534;}
+.vs-combo-tag{font-size:11px;padding:2px 8px;border-radius:8px;background:var(--surface-hover,#f3f4f6);color:var(--text-muted);}
+.vs-hook{margin-top:6px;padding:6px 12px;background:linear-gradient(135deg,rgba(124,92,252,.06),rgba(6,182,212,.06));border-radius:6px;font-size:13px;font-weight:500;}
+.vs-meta-row{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--text-muted);margin-bottom:8px;}
+.vs-shots-header{font-size:12px;font-weight:700;color:var(--text-muted);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.5px;}
+.vs-shot-row{display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line-soft,#e5e7eb);font-size:13px;}
+.vs-shot-row:last-child{border-bottom:none;}
+.vs-shot-idx{width:24px;height:24px;border-radius:50%;background:var(--primary,#7c5cfc);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
+.vs-shot-type{padding:2px 8px;border-radius:8px;background:var(--surface-hover,#f3f4f6);font-size:11px;font-weight:600;}
+.vs-shot-dur{font-weight:600;color:var(--primary,#7c5cfc);font-size:12px;}
+.vs-shot-time{font-size:11px;color:var(--text-muted);}
+
+.vs-storyboard-shot{padding:10px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;margin-bottom:8px;}
+.vs-sb-header{display:flex;gap:8px;align-items:center;margin-bottom:6px;}
+.vs-sb-visual{font-size:13px;line-height:1.5;}
+.vs-sb-text{font-size:12px;color:var(--primary,#7c5cfc);margin-top:4px;}
+.vs-sb-vo{font-size:12px;color:var(--text-muted);margin-top:2px;}
+.vs-sb-action{font-size:12px;color:#059669;margin-top:2px;}
+
+.vs-caption-box{margin-top:10px;padding:8px 12px;background:var(--surface-hover,#f9fafb);border-radius:6px;font-size:12px;}
+.vs-hashtag{padding:2px 8px;border-radius:8px;background:#dbeafe;color:#1e40af;font-size:11px;}
+.vs-title-opt{padding:2px 8px;border-radius:8px;background:#fef3c7;color:#92400e;font-size:11px;margin-left:4px;}
+.vs-notes{margin-top:8px;padding:8px 12px;background:var(--surface-hover,#f9fafb);border-radius:6px;font-size:12px;color:var(--text-muted);}
+.vs-validation-warn{margin-top:8px;padding:8px 12px;background:#fef2f2;border-radius:6px;font-size:11px;color:#dc2626;display:flex;flex-wrap:wrap;gap:6px;}
+</style>
+
+<script>
+document.querySelectorAll('.vs-toggle').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const card=btn.closest('.vs-card');
+    const detail=card.querySelector('.vs-detail');
+    if(detail.style.display==='none'){detail.style.display='block';btn.textContent='收起';}
+    else{detail.style.display='none';btn.textContent='展开';}
+  });
+});
+
+const statusEl=document.getElementById('gen_status');
+function showStatus(msg,color){statusEl.style.display='block';statusEl.style.color=color||'var(--text-muted)';statusEl.textContent=msg;}
+
+async function startGenerate(){
+  const jobId=document.getElementById('sel_job').value;
+  const comboId=document.getElementById('sel_combo').value;
+  if(!jobId||!comboId){alert('请选择卡包和组合');return;}
+
+  const btn=document.getElementById('btn_gen');
+  const btnText=document.getElementById('btn_gen_text');
+  const spinner=document.getElementById('btn_gen_spinner');
+  btn.disabled=true;btnText.textContent='生成中...';spinner.style.display='inline-block';
+  showStatus('第 1 步：正在汇总输入数据...');
+
+  try{
+    const assembleRes=await fetch('/api/v2/video-scripts/assemble-input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:jobId})});
+    if(!assembleRes.ok){const e=await assembleRes.json();throw new Error(e.detail||'汇总数据失败');}
+    const{script_input}=await assembleRes.json();
+
+    showStatus('第 2 步：正在生成脚本规划 (Plan)...');
+    const planRes=await fetch('/api/v2/video-plans/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({combo_id:comboId,script_input,job_id:jobId})});
+    if(!planRes.ok){const e=await planRes.json();throw new Error(e.detail||'Plan 生成失败');}
+    const plan=await planRes.json();
+
+    showStatus('第 3 步：正在基于 Plan 生成正式脚本 (Script)...');
+    const scriptRes=await fetch('/api/v2/video-scripts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.id})});
+    if(!scriptRes.ok){const e=await scriptRes.json();throw new Error(e.detail||'Script 生成失败');}
+
+    showStatus('生成完成！正在刷新页面...','#059669');
+    setTimeout(()=>location.reload(),800);
+  }catch(e){
+    showStatus('生成失败: '+e.message,'#dc2626');
+  }finally{
+    btn.disabled=false;btnText.textContent='生成脚本';spinner.style.display='none';
+  }
+}
+
+async function generateScript(planId){
+  if(!confirm('基于此 Plan 生成正式脚本？'))return;
+  showStatus('正在生成正式脚本...');
+  try{
+    const r=await fetch('/api/v2/video-scripts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:planId})});
+    if(!r.ok){const e=await r.json();throw new Error(e.detail||'生成失败');}
+    showStatus('生成完成！','#059669');
+    setTimeout(()=>location.reload(),800);
+  }catch(e){showStatus('生成失败: '+e.message,'#dc2626');}
+}
+
+async function deletePlan(planId){
+  if(!confirm('确定删除该规划？'))return;
+  await fetch('/api/v2/video-plans/'+planId,{method:'DELETE'});
+  location.reload();
+}
+async function deleteScript(scriptId){
+  if(!confirm('确定删除该脚本？'))return;
+  await fetch('/api/v2/video-scripts/'+scriptId,{method:'DELETE'});
+  location.reload();
+}
+</script>
+{% endblock %}

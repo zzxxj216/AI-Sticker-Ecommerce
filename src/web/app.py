@@ -21,7 +21,10 @@ from src.core.logger import get_logger
 from src.services.ops.trend_service import TrendService
 from src.services.tools.sticker_agent import StickerAgentService
 from src.services.tools.blog_agent import BlogAgentService
-from src.services.video.script_agent import VideoScriptAgent
+from src.services.video.video_type_service import VideoTypeService
+from src.services.video.video_combo_service import VideoComboService
+from src.services.video.video_plan_service import VideoPlanService
+from src.services.video.video_script_service import VideoScriptService
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -56,7 +59,10 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 trend_service = TrendService()
 chat_sticker_svc = StickerAgentService()
 chat_blog_svc = BlogAgentService()
-video_script_agent = VideoScriptAgent(db=trend_service.db)
+video_type_svc = VideoTypeService(trend_service.db)
+video_combo_svc = VideoComboService(trend_service.db)
+video_plan_svc = VideoPlanService(trend_service.db)
+video_script_svc = VideoScriptService(trend_service.db)
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -1087,61 +1093,289 @@ def api_batch_delete_chat_sessions(payload: dict):
     return {"deleted": count}
 
 
-# ── Video Script Plans ──────────────────────────────────────
+# ── Video Type + Combo Script Generation System ─────────────
 
 
-@app.get("/api/video-scripts")
-def api_video_scripts():
-    tpls = trend_service.db.list_video_script_templates(active_only=True)
-    return {"templates": tpls}
+@app.get("/api/v2/video-types")
+def api_v2_list_video_types(active_only: bool = False):
+    types = video_type_svc.list_types(active_only=active_only)
+    return {"types": types}
 
 
-@app.post("/api/video-plans/generate")
-def api_generate_video_plans(request: Request, payload: dict, background_tasks: BackgroundTasks):
-    job_ids = payload.get("job_ids", [])
-    template_ids = payload.get("template_ids", [])
-    if not job_ids or not template_ids:
-        raise HTTPException(400, "job_ids and template_ids are required")
+@app.get("/api/v2/video-types/{type_id}")
+def api_v2_get_video_type(type_id: str):
+    t = video_type_svc.get_type(type_id)
+    if not t:
+        raise HTTPException(404, "Video type not found")
+    return t
+
+
+@app.post("/api/v2/video-types")
+def api_v2_save_video_type(payload: dict):
+    try:
+        video_type_svc.save_type(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.put("/api/v2/video-types/{type_id}/toggle")
+def api_v2_toggle_video_type(type_id: str, payload: dict):
+    is_active = payload.get("is_active", True)
+    ok = video_type_svc.toggle_active(type_id, is_active)
+    if not ok:
+        raise HTTPException(404, "Video type not found")
+    return {"ok": True}
+
+
+@app.get("/api/v2/video-combos")
+def api_v2_list_video_combos(active_only: bool = False):
+    combos = video_combo_svc.list_combos(active_only=active_only)
+    return {"combos": combos}
+
+
+@app.get("/api/v2/video-combos/{combo_id}")
+def api_v2_get_video_combo(combo_id: str):
+    c = video_combo_svc.get_combo(combo_id)
+    if not c:
+        raise HTTPException(404, "Video combo not found")
+    return c
+
+
+@app.post("/api/v2/video-combos")
+def api_v2_save_video_combo(payload: dict):
+    try:
+        video_combo_svc.save_combo(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.put("/api/v2/video-combos/{combo_id}/toggle")
+def api_v2_toggle_video_combo(combo_id: str, payload: dict):
+    is_active = payload.get("is_active", True)
+    ok = video_combo_svc.toggle_active(combo_id, is_active)
+    if not ok:
+        raise HTTPException(404, "Video combo not found")
+    return {"ok": True}
+
+
+@app.delete("/api/v2/video-combos/{combo_id}")
+def api_v2_delete_video_combo(combo_id: str):
+    ok = video_combo_svc.delete_combo(combo_id)
+    if not ok:
+        raise HTTPException(404, "Video combo not found")
+    return {"ok": True}
+
+
+@app.get("/api/v2/video-combos/{combo_id}/validate")
+def api_v2_validate_video_combo(combo_id: str):
+    issues = video_combo_svc.validate_combo(combo_id)
+    return {"valid": len(issues) == 0, "issues": issues}
+
+
+@app.post("/api/v2/video-plans/generate")
+def api_v2_generate_video_plan(request: Request, payload: dict):
+    combo_id = payload.get("combo_id", "")
+    script_input = payload.get("script_input", {})
+    job_id = payload.get("job_id", "")
+    if not combo_id:
+        raise HTTPException(400, "combo_id is required")
     created_by = (_current_user(request) or {}).get("name") or "system"
-
-    plans = video_script_agent.generate_batch(job_ids, template_ids, created_by=created_by)
-    return {"plans": plans}
-
-
-@app.get("/api/video-plans")
-def api_list_video_plans(job_id: str | None = None):
-    plans = trend_service.db.list_video_plans(job_id=job_id)
-    return {"plans": plans}
-
-
-@app.get("/api/video-plans/{plan_id}")
-def api_get_video_plan(plan_id: str):
-    plan = trend_service.db.get_video_plan(plan_id)
-    if not plan:
-        raise HTTPException(404, "Video plan not found")
+    try:
+        plan = video_plan_svc.generate_plan(
+            combo_id, script_input, job_id=job_id, created_by=created_by,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error("Video plan generation failed: %s", e, exc_info=True)
+        raise HTTPException(500, f"Plan generation failed: {e}")
     return plan
 
 
-@app.delete("/api/video-plans/{plan_id}")
-def api_delete_video_plan(plan_id: str):
-    ok = trend_service.db.delete_video_plan(plan_id)
+@app.get("/api/v2/video-plans")
+def api_v2_list_video_plans(job_id: str | None = None, combo_id: str | None = None):
+    plans = trend_service.db.list_video_script_plans_v2(job_id=job_id, combo_id=combo_id)
+    return {"plans": plans}
+
+
+@app.get("/api/v2/video-plans/{plan_id}")
+def api_v2_get_video_plan(plan_id: str):
+    p = trend_service.db.get_video_script_plan_v2(plan_id)
+    if not p:
+        raise HTTPException(404, "Video plan not found")
+    return p
+
+
+@app.delete("/api/v2/video-plans/{plan_id}")
+def api_v2_delete_video_plan(plan_id: str):
+    ok = trend_service.db.delete_video_script_plan_v2(plan_id)
     if not ok:
         raise HTTPException(404, "Video plan not found")
     return {"ok": True}
 
 
-@app.get("/video-plans", response_class=HTMLResponse)
-def video_plans_page(request: Request):
-    plans = trend_service.db.list_video_plans()
-    script_tpls = trend_service.db.list_video_script_templates(active_only=True)
+@app.post("/api/v2/video-scripts/generate")
+def api_v2_generate_video_script(request: Request, payload: dict):
+    plan_id = payload.get("plan_id", "")
+    if not plan_id:
+        raise HTTPException(400, "plan_id is required")
+    created_by = (_current_user(request) or {}).get("name") or "system"
+    try:
+        script = video_script_svc.generate_script(plan_id, created_by=created_by)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error("Video script generation failed: %s", e, exc_info=True)
+        raise HTTPException(500, f"Script generation failed: {e}")
+    return script
+
+
+@app.post("/api/v2/video-scripts/generate-full")
+def api_v2_generate_full(request: Request, payload: dict):
+    """Convenience endpoint: plan → script in one call."""
+    combo_id = payload.get("combo_id", "")
+    script_input = payload.get("script_input", {})
+    job_id = payload.get("job_id", "")
+    if not combo_id:
+        raise HTTPException(400, "combo_id is required")
+    created_by = (_current_user(request) or {}).get("name") or "system"
+    try:
+        result = video_script_svc.generate_from_combo(
+            combo_id, script_input, job_id=job_id, created_by=created_by,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error("Full video script generation failed: %s", e, exc_info=True)
+        raise HTTPException(500, f"Full generation failed: {e}")
+    return result
+
+
+@app.get("/api/v2/video-scripts")
+def api_v2_list_video_scripts(job_id: str | None = None, combo_id: str | None = None, plan_id: str | None = None):
+    scripts = trend_service.db.list_video_scripts(job_id=job_id, combo_id=combo_id, plan_id=plan_id)
+    return {"scripts": scripts}
+
+
+@app.get("/api/v2/video-scripts/{script_id}")
+def api_v2_get_video_script(script_id: str):
+    s = trend_service.db.get_video_script(script_id)
+    if not s:
+        raise HTTPException(404, "Video script not found")
+    return s
+
+
+@app.delete("/api/v2/video-scripts/{script_id}")
+def api_v2_delete_video_script(script_id: str):
+    ok = trend_service.db.delete_video_script(script_id)
+    if not ok:
+        raise HTTPException(404, "Video script not found")
+    return {"ok": True}
+
+
+@app.post("/api/v2/video-scripts/assemble-input")
+def api_v2_assemble_input(payload: dict):
+    """Helper: assemble VideoScriptInput from a job_id, pulling trend brief + sticker data."""
+    job_id = payload.get("job_id", "")
+    if not job_id:
+        raise HTTPException(400, "job_id is required")
+
+    job = trend_service.db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    script_input: dict[str, Any] = {
+        "job_id": job_id,
+        "pack_id": job_id,
+        "trend_topic": job.get("trend_name", ""),
+        "platform": "tiktok",
+    }
+
+    trend_id = job.get("trend_id", "")
+    if trend_id and not trend_id.startswith("chat:"):
+        brief_row = trend_service.db.get_brief(trend_id)
+        if brief_row:
+            bj = brief_row.get("brief_json", {})
+            script_input["one_line_explanation"] = bj.get("one_line_explanation", "")
+            script_input["emotional_hooks"] = bj.get("emotional_hooks", bj.get("emotional_core", []))
+            ta = bj.get("target_audience", {})
+            script_input["audience_persona"] = ta.get("profile", "")
+            script_input["visual_symbols"] = bj.get("visual_symbols", [])
+            script_input["use_cases"] = ta.get("usage_scenarios", [])
+            script_input["one_line_product_angle"] = bj.get("product_goal", "")
+
+    brand = video_plan_svc.brand_profile
+    materials_cfg = brand.get("materials", {})
+    script_input["materials"] = materials_cfg.get("safe_claims", [])
+    script_input["brand_tone"] = (brand.get("brand", {}).get("voice", ""))[:200]
+
+    outputs = trend_service.db.list_outputs(job_id)
+    descs: list[str] = []
+    for out in outputs:
+        if out.get("output_type") != "image":
+            continue
+        meta = out.get("metadata_json", {})
+        name = meta.get("name", "")
+        prompt_txt = meta.get("prompt", "")
+        if name:
+            desc = name
+            if prompt_txt:
+                desc += f" — {prompt_txt[:120]}"
+            descs.append(desc)
+        elif prompt_txt:
+            descs.append(prompt_txt[:150])
+    script_input["sticker_descriptions"] = descs
+    if descs:
+        script_input["hero_sticker"] = descs[0]
+    if len(descs) > 3:
+        script_input["collection_sheet"] = "available"
+
+    return {"script_input": script_input}
+
+
+# ── V2: HTML Pages ──────────────────────────────────────────
+
+
+@app.get("/video-types", response_class=HTMLResponse)
+def video_types_page(request: Request):
+    types = video_type_svc.list_types()
     return templates.TemplateResponse(
         request,
-        "video_plans.html",
+        "video_types.html",
+        _base_context(request, types=types, page_title="视频类型管理"),
+    )
+
+
+@app.get("/video-combos", response_class=HTMLResponse)
+def video_combos_page(request: Request):
+    combos = video_combo_svc.list_combos()
+    types = video_type_svc.list_types(active_only=True)
+    return templates.TemplateResponse(
+        request,
+        "video_combos.html",
+        _base_context(request, combos=combos, types=types, page_title="组合管理"),
+    )
+
+
+@app.get("/video-studio", response_class=HTMLResponse)
+def video_studio_page(request: Request):
+    combos = video_combo_svc.list_combos(active_only=True)
+    all_jobs = trend_service.db.list_jobs()
+    jobs = [j for j in all_jobs if j.get("status") == "completed"]
+    plans = trend_service.db.list_video_script_plans_v2()
+    scripts = trend_service.db.list_video_scripts()
+    return templates.TemplateResponse(
+        request,
+        "video_studio.html",
         _base_context(
             request,
+            combos=combos,
+            jobs=jobs,
             plans=plans,
-            script_templates=script_tpls,
-            page_title="视频方案",
+            scripts=scripts,
+            page_title="脚本工作室",
         ),
     )
 
