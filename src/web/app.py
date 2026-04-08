@@ -261,13 +261,18 @@ def api_trend_detail(trend_id: str) -> dict:
 
 
 @app.post("/api/trends/{trend_id}/approve")
-def api_trend_approve(trend_id: str, request: Request) -> dict:
+def api_trend_approve(
+    trend_id: str, request: Request, background_tasks: BackgroundTasks
+) -> dict:
     user = _current_user(request)
     reviewer = (user or {}).get("name", "anonymous")
     trend = trend_service.approve_trend(trend_id, reviewed_by=reviewer)
     if not trend:
         raise HTTPException(status_code=404, detail="Trend not found")
-    return trend
+    trend_service.enqueue_brief_after_approve_if_needed(
+        trend_id, reviewer, "approve_api", background_tasks
+    )
+    return trend_service.get_trend(trend_id) or trend
 
 
 @app.post("/api/trends/{trend_id}/skip")
@@ -667,20 +672,11 @@ def save_brief_form(request: Request, trend_id: str, brief_json: str = Form(...)
 
 @app.post("/trends/{trend_id}/approve", response_class=HTMLResponse)
 def approve_form(request: Request, trend_id: str, background_tasks: BackgroundTasks):
-    from src.models.ops import TrendBriefRecord
     reviewer = (_current_user(request) or {}).get("name", "anonymous")
     trend_service.approve_trend(trend_id, reviewed_by=reviewer)
-    existing_brief = trend_service.db.get_brief(trend_id)
-    if not existing_brief or not existing_brief.get("brief_json"):
-        trend_service.db.upsert_brief(TrendBriefRecord(
-            trend_id=trend_id, brief_status="generating", brief_json={},
-        ))
-        trend_service.db.log_brief_generation(
-            trend_id,
-            f"采纳后已排队后台 Brief 生成（审核人 {reviewer}）",
-            source="approve_form",
-        )
-        background_tasks.add_task(trend_service.generate_brief_background, trend_id)
+    trend_service.enqueue_brief_after_approve_if_needed(
+        trend_id, reviewer, "approve_form", background_tasks
+    )
     return RedirectResponse(url=f"/trends/{trend_id}", status_code=303)
 
 

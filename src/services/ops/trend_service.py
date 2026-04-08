@@ -224,6 +224,31 @@ class TrendService:
         self.db.set_trend_review(trend_id, "approved", "recommend", reviewed_by=reviewed_by)
         return self.get_trend(trend_id)
 
+    def enqueue_brief_after_approve_if_needed(
+        self,
+        trend_id: str,
+        reviewer: str,
+        log_source: str,
+        background_tasks,
+    ) -> None:
+        """列表页 API 与详情页表单采纳共用：无可用 Brief 时排队后台生成。"""
+        existing_brief = self.db.get_brief(trend_id)
+        if existing_brief and existing_brief.get("brief_json"):
+            return
+        self.db.upsert_brief(
+            TrendBriefRecord(
+                trend_id=trend_id,
+                brief_status="generating",
+                brief_json={},
+            )
+        )
+        self.db.log_brief_generation(
+            trend_id,
+            f"采纳后已排队后台 Brief 生成（审核人 {reviewer}）",
+            source=log_source,
+        )
+        background_tasks.add_task(self.generate_brief_background, trend_id)
+
     def _brief_trace(
         self,
         trend_id: str,
