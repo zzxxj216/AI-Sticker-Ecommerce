@@ -21,14 +21,14 @@
   </div>
 </section>
 
-{% set news_recommend = news_items|selectattr('score', 'ge', 70)|list %}
-{% set news_watchlist = news_items|selectattr('score', 'lt', 70)|list %}
+{% set news_pending = news_items|selectattr('review_status', 'equalto', 'pending')|list %}
+{% set news_recommend = news_pending|selectattr('score', 'ge', 70)|list %}
+{% set news_watchlist = news_pending|selectattr('score', 'lt', 70)|list %}
 {% set news_approved = news_items|selectattr('review_status', 'equalto', 'approved')|list %}
-{% set _bdates = news_items|map(attribute='batch_date')|select|list %}
-{% set news_batch_date = (_bdates|max) if _bdates else (news_items[0].created_at[:10] if news_items else '未知日期') %}
+{% set news_batch_date = today_date %}
 {# TikTok：第三列只展示管线里 AI 判定 Approve（入库 decision=recommend），不用分数≥70（否则 Watchlist 高分也会进栏，数量会虚高） #}
-{% set tk_recommend = tiktok_items|selectattr('decision', 'equalto', 'recommend')|list %}
 {% set tk_pending_review = tiktok_items|selectattr('review_status', 'equalto', 'pending')|list %}
+{% set tk_recommend = tk_pending_review|selectattr('decision', 'equalto', 'recommend')|list %}
 {% set tk_approved = tiktok_items|selectattr('review_status', 'equalto', 'approved')|list %}
 {% set all_review = [] %}
 {# Jinja2 list concat workaround：热点低分待看 + TikTok 凡待人工审核（含 Watchlist） #}

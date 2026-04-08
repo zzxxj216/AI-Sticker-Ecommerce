@@ -107,10 +107,11 @@ class TrendService:
             self.db.log_task_step(job_id, "Daily unified pipeline completed entirely")
             
         except Exception as e:
-            self.db.log_task_step(job_id, f"Pipeline Error: {e}", log_level="ERROR")
+            import traceback as _tb
+            tb_str = _tb.format_exc()
+            self.db.log_task_step(job_id, f"Pipeline Error: {e}\n{tb_str}", log_level="ERROR")
             self.db.update_sys_task(job_id, "failed", f'{{"error": "{str(e)}"}}')
-            import traceback
-            traceback.print_exc()
+            logger.exception("run_daily_pipelines failed")
 
     def crawl_tiktok(self, job_id: str = None) -> dict:
         """Run TikTok fetcher → write to tk_ tables in ops_workbench.db → sync to ops db trend_items."""
@@ -199,8 +200,13 @@ class TrendService:
             "synced": sync_count,
         }
 
-    def list_trends(self, source_type: str | None = None, status: str | None = 'pending') -> list[dict]:
-        return self.db.list_trends(source_type, status=status)
+    def list_trends(
+        self,
+        source_type: str | None = None,
+        status: str | None = 'pending',
+        batch_date: str | None = None,
+    ) -> list[dict]:
+        return self.db.list_trends(source_type, status=status, batch_date=batch_date)
         
     def list_approved_trends(self) -> list[dict]:
         return self.db.list_approved_trends()

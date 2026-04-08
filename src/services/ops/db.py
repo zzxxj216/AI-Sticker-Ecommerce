@@ -455,25 +455,34 @@ class OpsDatabase:
             )
         self.conn.commit()
 
-    def list_trends(self, source_type: str | None = None, only_latest: bool = True, status: str | None = 'pending') -> list[dict[str, Any]]:
+    def list_trends(
+        self,
+        source_type: str | None = None,
+        only_latest: bool = True,
+        status: str | None = 'pending',
+        batch_date: str | None = None,
+    ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM trend_items WHERE 1=1"
         params: list[Any] = []
-        
+
         if status:
             sql += " AND review_status = ?"
             params.append(status)
-        
+
         if source_type:
             sql += " AND source_type = ?"
             params.append(source_type)
-            
-        if only_latest:
+
+        if batch_date:
+            sql += " AND batch_date = ?"
+            params.append(batch_date)
+        elif only_latest:
             if source_type:
                 sql += " AND batch_date = (SELECT MAX(batch_date) FROM trend_items WHERE source_type = ?)"
                 params.append(source_type)
             else:
                 sql += " AND batch_date = (SELECT MAX(batch_date) FROM trend_items)"
-                
+
         sql += " ORDER BY score DESC, updated_at DESC"
         c = self.conn.execute(sql, params)
         cols = [col[0] for col in c.description]

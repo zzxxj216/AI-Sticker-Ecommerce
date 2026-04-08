@@ -20,9 +20,17 @@ _tf_dir = os.path.dirname(os.path.abspath(__file__))
 if _tf_dir not in sys.path:
     sys.path.insert(0, _tf_dir)
 
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+def _fix_win32_encoding() -> None:
+    """修复 Windows 终端直接运行时的编码问题，仅限直接执行脚本，不在模块导入时替换 stdout。"""
+    if sys.platform != "win32":
+        return
+    try:
+        if hasattr(sys.stdout, "buffer"):
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "buffer"):
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 try:
     from config import config
@@ -138,4 +146,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _fix_win32_encoding()
     main()

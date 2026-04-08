@@ -7,7 +7,7 @@ import queue
 import re
 import secrets
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -419,8 +419,22 @@ def home(request: Request):
 
 @app.get("/trends", response_class=HTMLResponse)
 def trends_page(request: Request):
-    news_items = trend_service.list_trends("news", status=None)
-    tiktok_items = trend_service.list_trends("tiktok", status=None)
+    cn_tz = timezone(timedelta(hours=8))
+    today = datetime.now(cn_tz).strftime("%Y-%m-%d")
+
+    news_items = trend_service.list_trends("news", status=None, batch_date=today)
+    tiktok_items = trend_service.list_trends("tiktok", status=None, batch_date=today)
+
+    # 今日无数据则 fallback 到最近一次批次
+    if not news_items:
+        news_items = trend_service.list_trends("news", status=None)
+    if not tiktok_items:
+        tiktok_items = trend_service.list_trends("tiktok", status=None)
+
+    batch_date_news = news_items[0].get("batch_date", today) if news_items else today
+    batch_date_tk = tiktok_items[0].get("batch_date", today) if tiktok_items else today
+    display_date = batch_date_news if batch_date_news == batch_date_tk else f"{batch_date_news} / {batch_date_tk}"
+
     return templates.TemplateResponse(
         request,
         "trends.html",
@@ -428,6 +442,7 @@ def trends_page(request: Request):
             request,
             news_items=news_items,
             tiktok_items=tiktok_items,
+            today_date=display_date,
             page_title="热点咨询",
         ),
     )
