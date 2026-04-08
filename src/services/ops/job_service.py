@@ -35,7 +35,16 @@ class JobService:
             self._gemini = GeminiService()
         return self._gemini
 
-    def create_job(self, trend_id: str, trend_name: str, created_by: str = "system") -> GenerationJob:
+    def create_job(
+        self,
+        trend_id: str,
+        trend_name: str,
+        created_by: str = "system",
+        *,
+        family_id: str | None = None,
+        subtheme_id: int | None = None,
+        variant_label: str | None = None,
+    ) -> GenerationJob:
         job = GenerationJob(
             id=f"job_{uuid.uuid4().hex[:12]}",
             trend_id=trend_id,
@@ -44,6 +53,9 @@ class JobService:
             created_by=created_by,
             created_at=datetime.now(_CN_TZ),
             updated_at=datetime.now(_CN_TZ),
+            family_id=family_id,
+            subtheme_id=subtheme_id,
+            variant_label=variant_label,
         )
         self.db.create_job(job)
         self.db.set_trend_queue_status(trend_id, "queued")

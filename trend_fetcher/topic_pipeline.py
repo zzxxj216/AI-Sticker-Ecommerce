@@ -1,8 +1,10 @@
 """Topic 评审 + Brief 生成流水线
 
 流程:
-  1. review_new_topics() → 从 DB 读取未审核 hashtag → 组装 Topic Card → AI 审核 → 写回 DB
-  2. generate_briefs()   → 从 DB 读取 Approved 且无 Brief → 组装 Reviewed Card → AI 生成 → 写回 DB
+  1. review_new_topics()       → 从 DB 读取未审核 hashtag → 组装 Topic Card → AI 审核 → 写回 DB
+  2. generate_theme_families() → 从 DB 读取 Approved 且无 family → AI 生成 Theme Family + 子题材 → 写回 DB
+  3. generate_subtheme_briefs()→ 从 DB 读取 selected 且 brief_pending 子题材 → AI 生成 Brief → 写回 DB
+  4. generate_legacy_briefs()  → 旧链路兜底: Approved 且无 Brief → 单 Brief（保留兼容）
 """
 
 from __future__ import annotations
@@ -19,11 +21,17 @@ from trend_fetcher.topic_prompts import (
     TOPIC_REVIEW_PROMPT,
     BATCH_TOPIC_REVIEW_PROMPT,
     TOPIC_TO_BRIEF_PROMPT,
+    TOPIC_TO_THEME_FAMILY_PROMPT,
+    SUBTHEME_TO_BRIEF_PROMPT,
     build_topic_card,
     build_reviewed_card,
+    build_family_input,
+    build_subtheme_brief_input,
     parse_review_response,
     parse_batch_review_response,
     parse_brief_response,
+    parse_theme_family_response,
+    parse_subtheme_brief_response,
 )
 
 
@@ -167,10 +175,141 @@ class TopicPipeline:
 
         return stats
 
-    # ── Phase B: Brief Generation ────────────────────────
+    # ── Phase B: Theme Family Generation ─────────────────
 
-    def generate_briefs(self) -> dict[str, int]:
-        """为所有 Approved 且无 Brief 的话题生成 Brief。"""
+    def generate_theme_families(self) -> dict[str, int]:
+        """为所有 Approved 且 family_status=pending 的话题生成主题家族。"""
+        pending = self.db.get_families_needing_expansion()
+        total = len(pending)
+
+        if total == 0:
+            print("[Pipeline] 没有待生成主题家族的话题")
+            return {"total": 0, "generated": 0, "error": 0}
+
+        print(f"[Pipeline] 开始生成主题家族: {total} 个话题")
+
+        stats = {"total": total, "generated": 0, "error": 0}
+
+        for i, row in enumerate(pending, 1):
+            hid = row["hashtag_id"]
+            name = row["hashtag_name"]
+            review_id = row["review_id"]
+            try:
+                input_text = build_family_input(row, row)
+                response = self._chat(
+                    TOPIC_TO_THEME_FAMILY_PROMPT,
+                    input_text,
+                    max_tokens=4000,
+                )
+                parsed = parse_theme_family_response(response)
+                family_id = self.db.save_theme_family(hid, review_id, parsed, response)
+
+                n_sub = len(parsed.get("subthemes", []))
+                parent = parsed.get("parent_topic", "")
+                print(
+                    f"  [{i:3d}/{total}] #{name:<30s}  → 家族[{parent}] {n_sub}个子题材",
+                    flush=True,
+                )
+                stats["generated"] += 1
+
+            except Exception as e:
+                print(f"  [{i:3d}/{total}] #{name:<30s}  → ERROR: {e}", flush=True)
+                stats["error"] += 1
+                try:
+                    self.db.conn.execute(
+                        "UPDATE tk_hashtags SET family_status = 'failed' WHERE hashtag_id = ?",
+                        (hid,)
+                    )
+                    self.db.conn.commit()
+                except Exception:
+                    pass
+
+            if i % self.batch_size == 0 and i < total:
+                time.sleep(1)
+
+        print(f"\n[Pipeline] 主题家族生成完成: "
+              f"Generated {stats['generated']} / Error {stats['error']}")
+        return stats
+
+    # ── Phase C: Subtheme Brief Generation ────────────────
+
+    def generate_subtheme_briefs(self, family_id: int | None = None) -> dict[str, int]:
+        """为选中且 brief_pending 状态的子题材生成 Brief。
+
+        family_id: 限定特定家族，为 None 则处理所有。
+        """
+        if family_id:
+            pending = self.db.get_selected_subthemes_without_brief(family_id)
+        else:
+            all_families = self.db.conn.execute(
+                "SELECT id FROM tk_theme_families"
+            ).fetchall()
+            pending = []
+            for fam in all_families:
+                pending.extend(self.db.get_selected_subthemes_without_brief(fam["id"]))
+
+        total = len(pending)
+        if total == 0:
+            print("[Pipeline] 没有待生成 Brief 的子题材")
+            return {"total": 0, "generated": 0, "error": 0}
+
+        print(f"[Pipeline] 开始生成子题材 Brief: {total} 个")
+
+        stats = {"total": total, "generated": 0, "error": 0}
+
+        for i, sub in enumerate(pending, 1):
+            sub_id = sub["id"]
+            sub_name = sub.get("subtheme_name", "")
+
+            review_row = self.db.conn.execute(
+                "SELECT * FROM tk_topic_reviews WHERE id = ?",
+                (sub["review_id"],)
+            ).fetchone()
+            if not review_row:
+                print(f"  [{i:3d}/{total}] {sub_name:<30s}  → ERROR: review not found")
+                stats["error"] += 1
+                continue
+            review_row = dict(review_row)
+
+            family = {
+                "parent_theme": sub.get("parent_theme", ""),
+                "shared_emotional_core": sub.get("shared_emotional_core", ""),
+                "shared_visual_core": sub.get("shared_visual_core", ""),
+                "shared_platform_fit": sub.get("shared_platform_fit", ""),
+            }
+
+            try:
+                input_text = build_subtheme_brief_input(review_row, sub, family)
+                response = self._chat(
+                    SUBTHEME_TO_BRIEF_PROMPT,
+                    input_text,
+                    max_tokens=3000,
+                )
+                parsed = parse_subtheme_brief_response(response)
+                self.db.save_subtheme_brief(sub_id, parsed, response)
+
+                trend_name = parsed.get("trend_name", sub_name)
+                print(
+                    f"  [{i:3d}/{total}] {sub_name:<30s}  → READY [{trend_name}]",
+                    flush=True,
+                )
+                stats["generated"] += 1
+
+            except Exception as e:
+                print(f"  [{i:3d}/{total}] {sub_name:<30s}  → ERROR: {e}", flush=True)
+                stats["error"] += 1
+
+            if i % self.batch_size == 0 and i < total:
+                time.sleep(1)
+
+        print(f"\n[Pipeline] 子题材 Brief 生成完成: "
+              f"Generated {stats['generated']} / Error {stats['error']}")
+        return stats
+
+    # ── Phase Legacy: Brief Generation (fallback) ─────────
+
+    def generate_legacy_briefs(self) -> dict[str, int]:
+        """旧链路兜底：为 Approved 且无 Brief 的话题直接生成单 Brief。"""
         pending = self.db.get_approved_without_brief()
         total = len(pending)
 
@@ -220,15 +359,15 @@ class TopicPipeline:
     # ── Full Pipeline ────────────────────────────────────
 
     def run_full(self) -> dict[str, Any]:
-        """执行完整流水线: review → brief。"""
+        """执行完整流水线: review → theme family (新) → (人工确认后) subtheme briefs。"""
         print(f"\n{'='*60}")
         print("  Phase A: Topic Review")
         print(f"{'='*60}")
         review_stats = self.review_new_topics()
 
         print(f"\n{'='*60}")
-        print("  Phase B: Brief Generation")
+        print("  Phase B: Theme Family Generation")
         print(f"{'='*60}")
-        brief_stats = self.generate_briefs()
+        family_stats = self.generate_theme_families()
 
-        return {"review": review_stats, "brief": brief_stats}
+        return {"review": review_stats, "family": family_stats}

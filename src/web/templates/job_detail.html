@@ -14,6 +14,100 @@
   </div>
 </section>
 
+{% if job.family_id and job.variant_label %}
+<section class="panel" id="job-family-belong-panel" style="margin-bottom:24px;">
+  <div class="panel-header">
+    <h2>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+      家族归属
+    </h2>
+  </div>
+  <div style="padding:16px 24px;font-size:14px;line-height:1.5;">
+    家族: <strong>{{ job.parent_theme or '—' }}</strong>
+    <span class="muted" style="margin:0 8px;">|</span>
+    子包: <strong>{{ job.variant_label }}</strong>
+  </div>
+</section>
+{% endif %}
+
+{% if job.family_id %}
+<section class="panel" id="job-siblings-panel" style="margin-bottom:24px;">
+  <div class="panel-header">
+    <h2>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      同族卡包
+    </h2>
+    <span class="muted" id="job-siblings-count"></span>
+  </div>
+  <div id="job-siblings-body" style="padding:12px 24px 20px;font-size:13px;">
+    <p class="muted" id="job-siblings-loading">正在加载同族任务…</p>
+    <ul id="job-siblings-list" style="list-style:none;padding:0;margin:0;display:none;"></ul>
+    <p class="muted" id="job-siblings-empty" style="display:none;">暂无同族任务记录。</p>
+    <p class="muted" id="job-siblings-error" style="display:none;"></p>
+  </div>
+</section>
+<script>
+(function () {
+  var familyId = {{ job.family_id | tojson }};
+  var currentJobId = {{ job.id | tojson }};
+  var listEl = document.getElementById('job-siblings-list');
+  var loadingEl = document.getElementById('job-siblings-loading');
+  var emptyEl = document.getElementById('job-siblings-empty');
+  var errEl = document.getElementById('job-siblings-error');
+  var countEl = document.getElementById('job-siblings-count');
+  if (!listEl || familyId == null || familyId === '') return;
+
+  function esc(s) {
+    if (s == null) return '';
+    var d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  fetch('/api/jobs')
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+    .then(function (data) {
+      var items = (data && data.items) ? data.items : [];
+      var sibs = items.filter(function (j) {
+        return j && String(j.family_id || '') === String(familyId);
+      });
+      sibs.sort(function (a, b) {
+        var ta = (a.created_at || '').toString();
+        var tb = (b.created_at || '').toString();
+        return tb.localeCompare(ta);
+      });
+      loadingEl.style.display = 'none';
+      if (countEl) countEl.textContent = sibs.length ? sibs.length + ' 个' : '';
+      if (!sibs.length) {
+        emptyEl.style.display = '';
+        return;
+      }
+      listEl.style.display = '';
+      listEl.innerHTML = sibs.map(function (j) {
+        var jid = j.id || '';
+        var label = j.variant_label || j.trend_name || jid;
+        var st = j.status || '';
+        var cur = jid === currentJobId;
+        var shortId = jid.length > 12 ? jid.slice(0, 12) + '…' : jid;
+        return (
+          '<li style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line-soft);flex-wrap:wrap;">' +
+          '<a class="primary-link" href="/jobs/' + encodeURIComponent(jid) + '" style="font-weight:600;">' + esc(label) + '</a>' +
+          '<span class="badge" data-status="' + esc(st) + '">' + esc(st) + '</span>' +
+          (cur ? '<span class="muted" style="font-size:11px;">当前</span>' : '') +
+          '<span class="mono-cell muted" style="font-size:11px;margin-left:auto;">' + esc(shortId) + '</span>' +
+          '</li>'
+        );
+      }).join('');
+    })
+    .catch(function (e) {
+      loadingEl.style.display = 'none';
+      errEl.textContent = '加载失败：' + (e && e.message ? e.message : '未知错误');
+      errEl.style.display = '';
+    });
+})();
+</script>
+{% endif %}
+
 <div class="layout-two">
   <section class="panel" id="job-info-panel">
     <div class="panel-header">

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,25 +20,30 @@ def _now() -> str:
 
 
 class OpsDatabase:
+    _write_lock = threading.Lock()
+
     def __init__(self, db_path: str | Path = "data/ops_workbench.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: sqlite3.Connection | None = None
+        self._local = threading.local()
         self._ensure_tables()
 
     @property
     def conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-        return self._conn
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA foreign_keys=ON")
+            self._local.conn = c
+        return c
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        c = getattr(self._local, "conn", None)
+        if c is not None:
+            c.close()
+            self._local.conn = None
 
     def _ensure_tables(self) -> None:
         c = self.conn
@@ -317,6 +323,11 @@ class OpsDatabase:
             ("generation_jobs", "finished_at TEXT"),
             ("trend_briefs", "edited_by TEXT DEFAULT ''"),
             ("trend_briefs", "edited_at TEXT"),
+            ("generation_jobs", "family_id TEXT"),
+            ("generation_jobs", "subtheme_id INTEGER"),
+            ("generation_jobs", "variant_label TEXT"),
+            ("trend_items", "family_status TEXT DEFAULT 'pending'"),
+            ("trend_items", "allocation_status TEXT DEFAULT 'pending'"),
         ]
         for table, column_def in migrations:
             col_name = column_def.split()[0]
@@ -440,35 +451,49 @@ class OpsDatabase:
         need_fk_bypass = payload["trend_id"].startswith("chat:")
         if need_fk_bypass:
             self.conn.execute("PRAGMA foreign_keys=OFF")
-        self.conn.execute(
-            """
-            INSERT INTO generation_jobs (
-                id, trend_id, trend_name, status, output_dir, image_count, error_message,
-                created_by, created_at, started_at, finished_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload["id"],
-                payload["trend_id"],
-                payload["trend_name"],
-                payload["status"],
-                payload["output_dir"],
-                payload["image_count"],
-                payload["error_message"],
-                payload["created_by"],
-                self._to_iso(payload["created_at"]),
-                self._to_iso(payload["started_at"]),
-                self._to_iso(payload["finished_at"]),
-                self._to_iso(payload["updated_at"]),
-            ),
-        )
-        self.conn.commit()
-        if need_fk_bypass:
-            self.conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO generation_jobs (
+                    id, trend_id, trend_name, status, output_dir, image_count, error_message,
+                    created_by, created_at, started_at, finished_at, updated_at,
+                    family_id, subtheme_id, variant_label
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["id"],
+                    payload["trend_id"],
+                    payload["trend_name"],
+                    payload["status"],
+                    payload["output_dir"],
+                    payload["image_count"],
+                    payload["error_message"],
+                    payload["created_by"],
+                    self._to_iso(payload["created_at"]),
+                    self._to_iso(payload["started_at"]),
+                    self._to_iso(payload["finished_at"]),
+                    self._to_iso(payload["updated_at"]),
+                    payload.get("family_id"),
+                    payload.get("subtheme_id"),
+                    payload.get("variant_label"),
+                ),
+            )
+            self.conn.commit()
+        finally:
+            if need_fk_bypass:
+                self.conn.execute("PRAGMA foreign_keys=ON")
+
+    _JOB_UPDATABLE_COLS = frozenset({
+        "status", "error_message", "output_dir", "image_count",
+        "started_at", "finished_at", "updated_at",
+    })
 
     def update_job(self, job_id: str, **fields: Any) -> None:
         if not fields:
             return
+        bad_keys = set(fields) - self._JOB_UPDATABLE_COLS
+        if bad_keys:
+            raise ValueError(f"Disallowed columns for update_job: {bad_keys}")
         fields["updated_at"] = _now()
         assignments = ", ".join(f"{key} = ?" for key in fields)
         values = [self._to_iso(value) for value in fields.values()]
@@ -709,6 +734,13 @@ class OpsDatabase:
                 result[jid] = {"trend_name": row[1], "paths": []}
             result[jid]["paths"].append(row[2])
         return result
+
+    def list_jobs_by_family(self, family_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM generation_jobs WHERE family_id = ? ORDER BY created_at DESC",
+            (family_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def skip_stale_pending_trends(self, source_type: str, current_batch_date: str) -> int:
         """将早于本次爬取批次、且从未人工审核过的 pending 趋势标记为跳过。"""

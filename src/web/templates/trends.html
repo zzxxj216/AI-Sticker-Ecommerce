@@ -27,12 +27,12 @@
 {% set news_approved = news_items|selectattr('review_status', 'equalto', 'approved')|list %}
 {% set news_batch_date = today_date %}
 {# TikTok：
-   - tk_recommend：管线 AI 判定 recommend 且未被人工跳过的条目（决策区分：reviewed_by 空=管线自动，非空=人工）
+   - tk_recommend：管线 AI 判定 recommend 且未被人工处理的条目（排除 skipped + 排除 reviewed_by 非空）
    - tk_pending_review：watchlist 类，待人工审核（review_status=pending，reviewed_by 空）
    - tk_approved：仅人工采纳（reviewed_by 非空 + review_status=approved），用于统计数字
 #}
 {% set tk_pending_review = tiktok_items|selectattr('review_status', 'equalto', 'pending')|rejectattr('reviewed_by')|list %}
-{% set tk_recommend = tiktok_items|selectattr('decision', 'equalto', 'recommend')|rejectattr('review_status', 'equalto', 'skipped')|list %}
+{% set tk_recommend = tiktok_items|selectattr('decision', 'equalto', 'recommend')|rejectattr('review_status', 'equalto', 'skipped')|rejectattr('reviewed_by')|list %}
 {% set tk_approved = tiktok_items|selectattr('review_status', 'equalto', 'approved')|selectattr('reviewed_by')|list %}
 {% set all_review = [] %}
 {# Jinja2 list concat workaround：热点低分待看 + TikTok 凡待人工审核（含 Watchlist） #}
@@ -76,7 +76,12 @@
 
 {# ── Unified review item macro ── #}
 {% macro review_item(item, idx) %}
-<div class="leaderboard-item-wrap review-page-item" id="item-{{ item.id|replace(':', '-') }}" data-source="{{ item.source_type or 'news' }}">
+{% set _raw = item.raw_payload if item.raw_payload is mapping else {} %}
+{% set _fam = (_raw.get('family') or {}) if _raw else {} %}
+{% set _parent = _fam.get('parent_theme') if _fam is mapping else none %}
+{% set _fs = item.family_status | default('pending', true) %}
+{% set tk_has_family = _parent or (_fs == 'generated') %}
+<div class="leaderboard-item-wrap review-page-item" id="item-{{ item.id|replace(':', '-') }}" data-source="{{ item.source_type or 'news' }}"{% if item.source_type == 'tiktok' %} data-tiktok-family="{{ 1 if tk_has_family else 0 }}"{% endif %}>
   {% if current_user %}
   <a class="leaderboard-item" href="/trends/{{ item.id }}">
   {% else %}
@@ -108,41 +113,12 @@
       </div>
       {% endif %}
     </div>
-    <div class="item-status" style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
-      {% if item.review_status == 'approved' and item.reviewed_by %}
-        {# 人工已采纳 #}
-        <span class="badge badge-approved" title="由 {{ item.reviewed_by }} 采纳">✓ 已采纳</span>
-      {% elif item.review_status == 'approved' %}
-        {# 管线 AI 自动推荐（reviewed_by 为空），视为"待人工确认" #}
-        <span class="badge" style="background:rgba(99,102,241,0.12);color:#6366f1;font-weight:600;">⚡ AI推荐</span>
-      {% elif item.review_status == 'skipped' and item.reviewed_by %}
-        {# 人工已跳过 #}
-        <span class="badge badge-skipped">已跳过</span>
-      {% else %}
-        <span class="badge badge-ai-watch">待审核</span>
-      {% endif %}
-      <span class="badge" style="font-size:10px;padding:1px 6px;background:{% if item.source_type == 'tiktok' %}rgba(0,0,0,0.06){% else %}rgba(59,130,246,0.08){% endif %};color:var(--text-muted);">
-        {{ 'TikTok' if item.source_type == 'tiktok' else '热点' }}
-      </span>
-    </div>
   {% if current_user %}</a>{% else %}</div>{% endif %}
   {% if current_user %}
   {% if item.review_status == 'pending' or (item.review_status == 'approved' and not item.reviewed_by) %}
-  {# pending 或管线 AI 自动推荐（未人工确认）均显示操作按钮 #}
-  <div class="inline-actions">
-    <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-      采纳
-    </button>
-    <button class="btn-skip" onclick="reviewTrend('{{ item.id }}', 'skip', this)" title="跳过">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-      跳过
-    </button>
-  </div>
-  {% elif item.review_status == 'approved' and item.reviewed_by %}
-  <div class="review-meta">
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-    {{ item.reviewed_by }} 采纳
+  <div class="inline-actions" style="display:flex;gap:6px;padding:2px 24px 10px 66px;margin-top:-4px;" onclick="event.preventDefault();event.stopPropagation();">
+    <button class="btn-approve" onclick="event.preventDefault();event.stopPropagation();reviewTrend('{{ item.id }}', 'approve', this);">采纳</button>
+    <button class="btn-skip" onclick="event.preventDefault();event.stopPropagation();reviewTrend('{{ item.id }}', 'skip', this);">跳过</button>
   </div>
   {% endif %}
   {% endif %}
@@ -338,38 +314,31 @@ function pagerGo(key, delta) {
 document.addEventListener('DOMContentLoaded', renderAll);
 
 /* ── Review actions ── */
-async function reviewTrend(trendId, action, btn) {
-  const wrap = btn.closest('.leaderboard-item-wrap');
-  const actionsBar = btn.closest('.inline-actions');
-  const endpoint = action === 'approve'
-    ? `/api/trends/${encodeURIComponent(trendId)}/approve`
-    : `/api/trends/${encodeURIComponent(trendId)}/skip`;
+function reviewTrend(trendId, action, btn) {
+  var wrap = btn.closest('.leaderboard-item-wrap');
+  if (!wrap) return;
+  var endpoint = action === 'approve'
+    ? '/api/trends/' + encodeURIComponent(trendId) + '/approve'
+    : '/api/trends/' + encodeURIComponent(trendId) + '/skip';
 
   btn.disabled = true;
   btn.textContent = '处理中…';
 
-  try {
-    const resp = await fetch(endpoint, { method: 'POST' });
-    if (!resp.ok) throw new Error(await resp.text());
-    const data = await resp.json();
-
-    const statusEl = wrap.querySelector('.item-status');
-    if (action === 'approve') {
-      statusEl.innerHTML = '<span class="badge badge-approved">✓ 已采纳</span>';
-      actionsBar.innerHTML = `<div class="review-meta">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        ${esc(data.reviewed_by || 'anonymous')} 采纳
-      </div>`;
-    } else {
-      statusEl.innerHTML = '<span class="badge badge-skipped">已跳过</span>';
-      actionsBar.remove();
-    }
-    wrap.style.opacity = action === 'skip' ? '0.5' : '1';
-  } catch (e) {
-    alert('操作失败: ' + e.message);
-    btn.disabled = false;
-    btn.textContent = action === 'approve' ? '采纳' : '跳过';
-  }
+  fetch(endpoint, { method: 'POST' })
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    })
+    .then(function() {
+      wrap.style.transition = 'opacity 0.3s ease';
+      wrap.style.opacity = '0';
+      setTimeout(function() { wrap.style.display = 'none'; }, 350);
+    })
+    .catch(function(e) {
+      alert('操作失败: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = action === 'approve' ? '采纳' : '跳过';
+    });
 }
 
 async function syncData() {
@@ -380,6 +349,7 @@ async function syncData() {
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 引擎启动中…';
   try {
     const resp = await fetch('/api/jobs/trigger', { method: 'POST' });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
     const data = await resp.json();
     if (data.job_id) {
       btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 引擎运行中…';
@@ -436,6 +406,7 @@ async function crawlTikTok() {
   btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><path d="M9 12a4 4 0 104 4V4a5 5 0 005 5"/></svg> 调度中…';
   try {
     const resp = await fetch('/api/tiktok/crawl', { method: 'POST' });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
     const data = await resp.json();
     if (data.error) {
       alert('调度失败: ' + data.error);

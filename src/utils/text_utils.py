@@ -1,7 +1,6 @@
 """文本工具函数"""
 
 import re
-from typing import Optional
 
 
 def sanitize_filename(filename: str, max_length: int = 255) -> str:

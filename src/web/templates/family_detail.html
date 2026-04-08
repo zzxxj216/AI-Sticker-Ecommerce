@@ -1,0 +1,551 @@
+{% extends 'base.html' %}
+{% block content %}
+
+{# ── Status badge helper ── #}
+{% macro status_badge(s) %}
+{% if s == 'draft' %}
+<span class="badge" style="background:var(--surface-hover);color:var(--text-muted);">{{ s }}</span>
+{% elif s == 'brief_pending' %}
+<span class="badge" style="background:#fef9c3;color:#854d0e;">{{ s }}</span>
+{% elif s == 'brief_ready' %}
+<span class="badge" style="background:#dcfce7;color:#166534;">{{ s }}</span>
+{% elif s == 'queued' %}
+<span class="badge" style="background:#dbeafe;color:#1e40af;">{{ s }}</span>
+{% elif s == 'completed' %}
+<span class="badge" style="background:#dcfce7;color:#166534;">{{ s }}</span>
+{% elif s == 'skipped' %}
+<span class="badge" style="background:var(--surface-hover);color:var(--text-muted);">{{ s }}</span>
+{% else %}
+<span class="badge" style="background:var(--surface-hover);color:var(--text-muted);">{{ s or '-' }}</span>
+{% endif %}
+{% endmacro %}
+
+{% macro priority_badge(p) %}
+{% if p == 'high' %}
+<span class="badge" style="background:#fef2f2;color:#991b1b;">{{ p }}</span>
+{% elif p == 'medium' %}
+<span class="badge" style="background:#fef9c3;color:#854d0e;">{{ p }}</span>
+{% else %}
+<span class="badge" style="background:var(--surface-hover);color:var(--text-muted);">{{ p or '-' }}</span>
+{% endif %}
+{% endmacro %}
+
+<!-- ====== Page Header ====== -->
+<section class="page-header">
+  <div>
+    <p class="eyebrow">
+      <a href="/trends/{{ trend_id }}" class="text-link" style="margin-right:6px">&larr; 返回趋势详情</a>
+      Theme Family
+    </p>
+    <h1>{{ (family.parent_theme if family) or trend.trend_name or trend.title }}</h1>
+    <p class="page-subtitle">查看子题材 &middot; 调整数量 &middot; 生成 Brief &middot; 开始制作</p>
+  </div>
+  <div class="header-actions">
+    <span class="badge" data-status="{{ trend.review_status }}">{{ trend.review_status }}</span>
+    {% if trend.source_type %}
+    <span class="badge secondary">{{ trend.source_type }}</span>
+    {% endif %}
+  </div>
+</section>
+
+{% if family is none %}
+<!-- ====== No Family: Generate CTA ====== -->
+<section class="panel" style="text-align:center;padding:48px 24px;">
+  <div style="font-size:32px;margin-bottom:12px;">🧩</div>
+  <h2 style="margin-bottom:8px;">尚未生成主题家族</h2>
+  <p style="color:var(--text-muted);font-size:13px;margin-bottom:24px;">点击下方按钮，AI 将自动拆解趋势为多个子题材，并给出配量建议。</p>
+  <button type="button" id="btn-generate-family" onclick="regenerateFamily()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+    生成主题家族
+  </button>
+</section>
+
+{% else %}
+<!-- ====== Family Info Panel ====== -->
+<section class="panel" id="family-info-panel">
+  <div class="panel-header">
+    <h2>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      家族信息
+    </h2>
+    <span class="badge secondary">{{ family.subthemes|length }} 个子题材</span>
+  </div>
+  <dl class="meta-list compact-meta">
+    <dt>母题材</dt><dd><strong>{{ family.parent_theme }}</strong></dd>
+    {% if family.shared_emotional_core %}
+    <dt>共享情感内核</dt>
+    <dd>
+      {% for e in (family.shared_emotional_core if family.shared_emotional_core is iterable and family.shared_emotional_core is not string else [family.shared_emotional_core]) %}
+      <span class="badge" style="background:#ede9fe;color:#6d28d9;margin-right:4px;margin-bottom:4px;font-size:12px;">{{ e }}</span>
+      {% endfor %}
+    </dd>
+    {% endif %}
+    {% if family.shared_visual_core %}
+    <dt>共享视觉内核</dt>
+    <dd>
+      {% for v in (family.shared_visual_core if family.shared_visual_core is iterable and family.shared_visual_core is not string else [family.shared_visual_core]) %}
+      <span class="badge" style="background:#e0f2fe;color:#0369a1;margin-right:4px;margin-bottom:4px;font-size:12px;">{{ v }}</span>
+      {% endfor %}
+    </dd>
+    {% endif %}
+    {% if family.shared_platform_fit %}
+    <dt>平台适配</dt>
+    <dd>
+      {% for p in (family.shared_platform_fit if family.shared_platform_fit is iterable and family.shared_platform_fit is not string else [family.shared_platform_fit]) %}
+      <span class="badge" style="background:#fff7ed;color:#9a3412;margin-right:4px;margin-bottom:4px;font-size:12px;">{{ p }}</span>
+      {% endfor %}
+    </dd>
+    {% endif %}
+    {% if family.generated_at %}
+    <dt>生成时间</dt><dd style="color:var(--text-muted);font-size:13px;">{{ family.generated_at }}</dd>
+    {% endif %}
+  </dl>
+</section>
+
+<!-- ====== Subtheme Allocation Table ====== -->
+<section class="panel" id="allocation-panel">
+  <div class="panel-header">
+    <h2>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      子题材列表与数量分配
+    </h2>
+  </div>
+  <div style="overflow-x:auto;padding:0 0 16px;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:960px;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--line);text-align:left;">
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;width:40px;">选中</th>
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;">子题材</th>
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;width:80px;">类型</th>
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;width:200px;">AI 建议</th>
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;width:280px;">手动调整</th>
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;width:120px;">Brief</th>
+          <th style="padding:10px 12px;font-weight:600;white-space:nowrap;width:70px;">操作</th>
+        </tr>
+      </thead>
+      <tbody id="allocation-tbody">
+        {% for sub in family.subthemes %}
+        <tr data-subtheme-id="{{ sub.id }}" style="border-bottom:1px solid var(--line-soft);vertical-align:top;">
+          <!-- 选中 -->
+          <td style="padding:10px 12px;text-align:center;">
+            <input type="checkbox" class="alloc-selected" value="{{ sub.id }}"
+                   {% if sub.selected is not none %}{% if sub.selected %}checked{% endif %}{% elif sub.ai_selected %}checked{% endif %} />
+          </td>
+          <!-- 子题材 -->
+          <td style="padding:10px 12px;">
+            <div style="font-weight:600;margin-bottom:2px;">{{ sub.subtheme_name }}</div>
+            {% if sub.one_line_direction %}
+            <div style="font-size:12px;color:var(--text-muted);">{{ sub.one_line_direction }}</div>
+            {% endif %}
+            {% if sub.recommended_pack_archetype %}
+            <div style="margin-top:4px;">
+              <span class="badge" style="background:var(--surface-hover);color:var(--text);font-size:11px;">{{ sub.recommended_pack_archetype }}</span>
+              {% if sub.recommended_pack_size %}
+              <span class="badge" style="background:var(--surface-hover);color:var(--text);font-size:11px;">{{ sub.recommended_pack_size }}</span>
+              {% endif %}
+              {% if sub.natural_sticker_count_range %}
+              <span class="badge" style="background:var(--surface-hover);color:var(--text);font-size:11px;">{{ sub.natural_sticker_count_range }} 张</span>
+              {% endif %}
+            </div>
+            {% endif %}
+          </td>
+          <!-- 类型 -->
+          <td style="padding:10px 12px;">
+            <span class="badge" style="background:var(--surface-hover);color:var(--text);">{{ sub.subtheme_type or '-' }}</span>
+          </td>
+          <!-- AI 推荐 -->
+          <td style="padding:10px 12px;">
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">
+              {% if sub.ai_selected %}
+              <span class="badge" style="background:#dcfce7;color:#166534;font-size:11px;">✓ AI选中</span>
+              {% else %}
+              <span class="badge" style="background:var(--surface-hover);color:var(--text-muted);font-size:11px;">AI未选</span>
+              {% endif %}
+              {% if sub.ai_priority %}
+              {{ priority_badge(sub.ai_priority) }}
+              {% endif %}
+              {% if sub.ai_target_sticker_count %}
+              <span class="badge" style="background:#e0f2fe;color:#0369a1;font-size:11px;">{{ sub.ai_target_sticker_count }} 张</span>
+              {% endif %}
+            </div>
+            {% if sub.ai_reason %}
+            <div style="font-size:11px;color:var(--text-muted);line-height:1.4;">{{ sub.ai_reason }}</div>
+            {% endif %}
+          </td>
+          <!-- 人工配量 -->
+          <td style="padding:10px 12px;">
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <select class="alloc-priority" style="font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--text);">
+                {% set cur_priority = sub.priority or sub.ai_priority or 'medium' %}
+                <option value="high" {% if cur_priority == 'high' %}selected{% endif %}>high</option>
+                <option value="medium" {% if cur_priority == 'medium' %}selected{% endif %}>medium</option>
+                <option value="low" {% if cur_priority == 'low' %}selected{% endif %}>low</option>
+              </select>
+              <input type="number" class="alloc-count" min="0" max="100"
+                     value="{{ sub.target_sticker_count if sub.target_sticker_count is not none else (sub.ai_target_sticker_count or '') }}"
+                     placeholder="贴纸数"
+                     style="font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--text);width:80px;" />
+              <input type="text" class="alloc-notes"
+                     value="{{ sub.allocation_notes or '' }}"
+                     placeholder="备注…"
+                     style="font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--text);" />
+            </div>
+          </td>
+          <!-- Brief 状态 -->
+          <td style="padding:10px 12px;" class="brief-status-cell" data-subtheme-id="{{ sub.id }}">
+            {{ status_badge(sub.status) }}
+            {% if sub.brief and sub.brief.brief_json %}
+            <button type="button" class="btn-toggle-brief" onclick="toggleBrief(this)"
+                    style="margin-top:6px;font-size:11px;color:var(--primary);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline;">
+              展开 Brief
+            </button>
+            <div class="brief-content" style="display:none;margin-top:8px;padding:8px;background:var(--surface-hover);border-radius:var(--radius-md);font-size:11px;line-height:1.5;max-height:200px;overflow-y:auto;">
+              <pre style="margin:0;white-space:pre-wrap;word-break:break-all;font-family:monospace;font-size:11px;">{{ sub.brief.brief_json | tojson(indent=2) if sub.brief.brief_json is mapping else sub.brief.brief_json }}</pre>
+            </div>
+            {% endif %}
+          </td>
+          <!-- 操作 -->
+          <td style="padding:10px 12px;">
+            {% if sub.status == 'brief_ready' %}
+            <button type="button" class="button-secondary" onclick="queueSubtheme('{{ sub.id }}')" style="font-size:11px;padding:4px 10px;white-space:nowrap;">
+              入队
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ====== Action Buttons Bar ====== -->
+<section class="panel" id="actions-bar" style="padding:16px 24px;">
+  <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px;line-height:1.6;">
+    操作说明：调整数量后会自动保存 &middot; 勾选子题材后可生成 Brief、开始制作或重新生成
+  </p>
+  <div class="actions" style="flex-wrap:wrap;gap:8px;align-items:center;">
+    <button type="button" onclick="confirmAiAllocation()" style="white-space:nowrap;" title="将所有子题材的数量和优先级设为 AI 建议的值">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      采用 AI 建议
+    </button>
+    <button type="button" onclick="saveAllocation()" style="white-space:nowrap;" title="手动保存当前修改（修改也会自动保存）">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      保存修改
+    </button>
+    <button type="button" onclick="generateBriefs()" style="white-space:nowrap;" title="为选中的子题材生成产品方案（Brief）">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      生成 Brief
+    </button>
+    <button type="button" onclick="queueSelected()" style="white-space:nowrap;" title="将选中的子题材送入图片生成队列开始制作">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+      开始制作选中
+    </button>
+    <button type="button" class="button-secondary" id="btn-regen-selected" onclick="regenerateSelected()" style="white-space:nowrap;" title="删除选中的子题材，让 AI 重新生成替代方案">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+      重新生成选中
+    </button>
+  </div>
+</section>
+{% endif %}
+
+<!-- ====== Toast container ====== -->
+<div id="toast-container" style="position:fixed;top:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;"></div>
+
+<style>
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes toast-in { from { opacity:0; transform:translateY(-12px); } to { opacity:1; transform:translateY(0); } }
+@keyframes toast-out { from { opacity:1; transform:translateY(0); } to { opacity:0; transform:translateY(-12px); } }
+
+#allocation-panel table th {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+#allocation-panel table td {
+  transition: background 0.15s;
+}
+#allocation-panel table tr:hover td {
+  background: rgba(0,0,0,0.015);
+}
+.alloc-selected {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+.toast-msg {
+  pointer-events: auto;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  animation: toast-in 0.25s ease;
+}
+.toast-msg.success { background: #dcfce7; color: #166534; }
+.toast-msg.error   { background: #fef2f2; color: #991b1b; }
+.toast-msg.info    { background: #dbeafe; color: #1e40af; }
+.toast-msg.leaving { animation: toast-out 0.3s ease forwards; }
+</style>
+
+<script>
+const TREND_ID = "{{ trend_id }}";
+let briefPollTimer = null;
+
+/* ── Toast helper ── */
+function showToast(msg, type) {
+  type = type || 'info';
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = 'toast-msg ' + type;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 350);
+  }, 3500);
+}
+
+/* ── Loading state helper ── */
+function setLoading(btn, loading, originalHTML) {
+  if (loading) {
+    btn._origHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> 处理中…';
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = originalHTML || btn._origHTML || '完成';
+  }
+}
+
+/* ── Brief expand/collapse ── */
+function toggleBrief(triggerBtn) {
+  const content = triggerBtn.nextElementSibling;
+  if (!content) return;
+  const hidden = content.style.display === 'none';
+  content.style.display = hidden ? 'block' : 'none';
+  triggerBtn.textContent = hidden ? '收起 Brief' : '展开 Brief';
+}
+
+/* ── 1. Confirm AI Allocation ── */
+async function confirmAiAllocation() {
+  const btn = event.currentTarget;
+  setLoading(btn, true);
+  showToast('正在将 AI 建议写入所有子题材…', 'info');
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/confirm-ai-allocation', { method: 'POST' });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
+    showToast('已采用 AI 建议，页面即将刷新', 'success');
+    setTimeout(() => location.reload(), 800);
+  } catch (e) {
+    showToast('操作失败：' + e.message, 'error');
+    setLoading(btn, false);
+  }
+}
+
+/* ── 2. Save Allocation (core) ── */
+function collectAllocations() {
+  const rows = document.querySelectorAll('#allocation-tbody tr[data-subtheme-id]');
+  const allocations = [];
+  rows.forEach(row => {
+    allocations.push({
+      subtheme_id: row.dataset.subthemeId,
+      selected: row.querySelector('.alloc-selected').checked ? 1 : 0,
+      priority: row.querySelector('.alloc-priority').value,
+      target_sticker_count: parseInt(row.querySelector('.alloc-count').value, 10) || 0,
+      allocation_notes: row.querySelector('.alloc-notes').value.trim()
+    });
+  });
+  return allocations;
+}
+
+async function doSave(silent) {
+  const allocations = collectAllocations();
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/allocation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allocations: allocations })
+    });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
+    if (!silent) showToast('修改已保存', 'success');
+  } catch (e) {
+    showToast('保存失败：' + e.message, 'error');
+  }
+}
+
+async function saveAllocation() {
+  const btn = event.currentTarget;
+  setLoading(btn, true);
+  showToast('正在保存…', 'info');
+  await doSave(false);
+  setLoading(btn, false);
+}
+
+/* ── Auto-save on input change (debounced) ── */
+let _autoSaveTimer = null;
+function scheduleAutoSave() {
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(() => doSave(true), 1000);
+}
+(function initAutoSave() {
+  const panel = document.getElementById('allocation-panel');
+  if (!panel) return;
+  panel.addEventListener('change', scheduleAutoSave);
+  panel.addEventListener('input', scheduleAutoSave);
+})();
+
+/* ── 3. Generate Briefs ── */
+async function generateBriefs() {
+  const btn = event.currentTarget;
+  setLoading(btn, true);
+  showToast('正在为选中的子题材生成 Brief，请稍候…', 'info');
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/subtheme-briefs', { method: 'POST' });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
+    const data = await resp.json();
+    showToast('Brief 生成已启动，状态会自动更新', 'success');
+    startBriefPolling();
+  } catch (e) {
+    showToast('Brief 生成失败：' + e.message, 'error');
+    setLoading(btn, false);
+  }
+}
+
+/* ── 2. Queue Selected ── */
+async function queueSelected() {
+  const ids = getSelectedSubthemeIds();
+  if (ids.length === 0) {
+    showToast('请先勾选要制作的子题材', 'error');
+    return;
+  }
+  const btn = event.currentTarget;
+  setLoading(btn, true);
+  showToast('正在将 ' + ids.length + ' 个子题材加入制作队列…', 'info');
+  let ok = 0, fail = 0;
+  for (const id of ids) {
+    try {
+      const resp = await fetch('/api/subthemes/' + id + '/queue', { method: 'POST' });
+      if (resp.ok) ok++; else fail++;
+    } catch (_) { fail++; }
+  }
+  if (ok > 0) showToast(ok + ' 个子题材已加入制作队列，即将开始生成', 'success');
+  if (fail > 0) showToast(fail + ' 个入队失败（需要先生成 Brief）', 'error');
+  setTimeout(() => location.reload(), 800);
+}
+
+/* ── 5. First-time generate (no family yet) ── */
+async function regenerateFamily() {
+  const btn = event.currentTarget || document.getElementById('btn-generate-family');
+  setLoading(btn, true);
+  showToast('AI 正在拆解主题家族，请稍候…', 'info');
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/family', { method: 'POST' });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
+    showToast('主题家族已生成，页面即将刷新', 'success');
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    showToast('生成失败：' + e.message, 'error');
+    setLoading(btn, false);
+  }
+}
+
+/* ── Helper: get checked subtheme IDs ── */
+function getSelectedSubthemeIds() {
+  return Array.from(document.querySelectorAll('.alloc-selected:checked')).map(cb => parseInt(cb.value, 10));
+}
+
+/* ── 3. Regenerate Selected ── */
+async function regenerateSelected() {
+  const ids = getSelectedSubthemeIds();
+  if (ids.length === 0) {
+    showToast('请先勾选要重新生成的子题材', 'error');
+    return;
+  }
+  const btn = document.getElementById('btn-regen-selected');
+  setLoading(btn, true);
+  showToast('AI 正在为 ' + ids.length + ' 个子题材生成替代方案…', 'info');
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/family/regenerate-selected', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subtheme_ids: ids })
+    });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || '服务器返回 ' + resp.status); }
+    const data = await resp.json();
+    showToast('已替换 ' + (data.replaced || 0) + ' 个，新增 ' + (data.new_count || 0) + ' 个，页面即将刷新', 'success');
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    showToast('重新生成失败：' + e.message, 'error');
+    setLoading(btn, false);
+  }
+}
+
+/* ── 6. Queue Single Subtheme ── */
+async function queueSubtheme(subthemeId) {
+  const btn = event.currentTarget;
+  setLoading(btn, true);
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/subthemes/' + encodeURIComponent(subthemeId) + '/queue', { method: 'POST' });
+    if (!resp.ok) throw new Error('服务器返回 ' + resp.status);
+    const data = await resp.json();
+    showToast(data.message || '子题材已入队', 'success');
+    setTimeout(() => location.reload(), 800);
+  } catch (e) {
+    showToast('入队失败: ' + e.message, 'error');
+    setLoading(btn, false);
+  }
+}
+
+/* ── Brief Status Polling ── */
+function startBriefPolling() {
+  if (briefPollTimer) return;
+  briefPollTimer = setInterval(pollFamilyStatus, 4000);
+}
+
+async function pollFamilyStatus() {
+  try {
+    const resp = await fetch('/api/trends/' + encodeURIComponent(TREND_ID) + '/family');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.family || !data.family.subthemes) return;
+
+    let allDone = true;
+    data.family.subthemes.forEach(sub => {
+      if (sub.status === 'brief_pending') allDone = false;
+      const cell = document.querySelector('.brief-status-cell[data-subtheme-id="' + sub.id + '"]');
+      if (!cell) return;
+      const badgeMap = {
+        'draft':         '<span class="badge" style="background:var(--surface-hover);color:var(--text-muted);">draft</span>',
+        'brief_pending': '<span class="badge" style="background:#fef9c3;color:#854d0e;">brief_pending</span>',
+        'brief_ready':   '<span class="badge" style="background:#dcfce7;color:#166534;">brief_ready</span>',
+        'queued':        '<span class="badge" style="background:#dbeafe;color:#1e40af;">queued</span>',
+        'completed':     '<span class="badge" style="background:#dcfce7;color:#166534;">completed</span>',
+        'skipped':       '<span class="badge" style="background:var(--surface-hover);color:var(--text-muted);">skipped</span>'
+      };
+      const badge = badgeMap[sub.status] || badgeMap['draft'];
+      const existingBrief = cell.querySelector('.brief-content');
+      if (!existingBrief) {
+        cell.innerHTML = badge;
+      }
+    });
+
+    if (allDone && briefPollTimer) {
+      clearInterval(briefPollTimer);
+      briefPollTimer = null;
+      showToast('Brief 状态已更新', 'info');
+      setTimeout(() => location.reload(), 600);
+    }
+  } catch (_) {}
+}
+
+{% if family and family.subthemes %}
+(function checkPendingBriefs() {
+  var pending = {{ family.subthemes | selectattr('status', 'equalto', 'brief_pending') | list | length }};
+  if (pending > 0) startBriefPolling();
+})();
+{% endif %}
+</script>
+{% endblock %}

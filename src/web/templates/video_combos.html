@@ -208,12 +208,18 @@ async function saveCombo(e){
 }
 
 async function toggleCombo(comboId,active){
-  await fetch('/api/v2/video-combos/'+comboId+'/toggle',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_active:active==='true'||active===true})});
+  try{
+    const r=await fetch('/api/v2/video-combos/'+comboId+'/toggle',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_active:active==='true'||active===true})});
+    if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||'切换失败');}
+  }catch(e){alert('网络错误');}
   location.reload();
 }
 async function deleteCombo(comboId){
   if(!confirm('确定删除该组合？'))return;
-  await fetch('/api/v2/video-combos/'+comboId,{method:'DELETE'});
+  try{
+    const r=await fetch('/api/v2/video-combos/'+comboId,{method:'DELETE'});
+    if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||'删除失败');}
+  }catch(e){alert('网络错误');}
   location.reload();
 }
 

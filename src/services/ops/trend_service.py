@@ -110,7 +110,7 @@ class TrendService:
             import traceback as _tb
             tb_str = _tb.format_exc()
             self.db.log_task_step(job_id, f"Pipeline Error: {e}\n{tb_str}", log_level="ERROR")
-            self.db.update_sys_task(job_id, "failed", f'{{"error": "{str(e)}"}}')
+            self.db.update_sys_task(job_id, "failed", json.dumps({"error": str(e)}))
             logger.exception("run_daily_pipelines failed")
 
     def crawl_tiktok(self, job_id: str = None) -> dict:
@@ -147,9 +147,9 @@ class TrendService:
         trend_db = TrendDB(tiktok_db_path)
         db_stats = trend_db.upsert_crawl(crawl_result)
 
-        # AI Review + Brief Generation
+        # AI Review + Theme Family Generation (v2 pipeline)
         review_stats: dict = {}
-        brief_stats: dict = {}
+        family_stats: dict = {}
         if job_id:
             self.db.log_task_step(job_id, "[TikTok] Running AI topic review...")
         try:
@@ -163,12 +163,12 @@ class TrendService:
                     f"watchlist={review_stats.get('watchlist',0)}, reject={review_stats.get('reject',0)}"
                 )
 
-            brief_stats = pipeline.generate_briefs()
+            family_stats = pipeline.generate_theme_families()
             if job_id:
                 self.db.log_task_step(
                     job_id,
-                    f"[TikTok] Brief done: ready={brief_stats.get('ready',0)}, "
-                    f"not_ready={brief_stats.get('not_ready',0)}"
+                    f"[TikTok] Theme Family done: generated={family_stats.get('generated',0)}, "
+                    f"error={family_stats.get('error',0)}"
                 )
         except Exception as e:
             if job_id:
@@ -478,7 +478,329 @@ class TrendService:
         if not job:
             return None
         job["outputs"] = self.db.list_outputs(job_id)
+        fid = job.get("family_id")
+        if fid:
+            try:
+                tdb = self._get_trend_db()
+                fam = tdb.get_theme_family(int(fid))
+                if fam:
+                    job["parent_theme"] = fam.get("parent_theme") or ""
+            except (ValueError, TypeError):
+                job["parent_theme"] = ""
         return job
 
     def retry_job(self, job_id: str) -> dict:
         return self.job_service.retry_job(job_id)
+
+    # ── Theme Family Service Methods ─────────────────────
+
+    def _get_trend_db(self):
+        from trend_fetcher.trend_db import TrendDB
+        return TrendDB("data/ops_workbench.db")
+
+    def get_theme_family(self, trend_id: str) -> dict | None:
+        """获取 trend 对应的主题家族详情（含子题材和 brief 状态）。"""
+        trend = self.db.get_trend(trend_id)
+        if not trend:
+            return None
+
+        raw = trend.get("raw_payload", {})
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "")
+        if not hashtag_id:
+            source_item_id = trend.get("source_item_id", "")
+            if source_item_id:
+                hashtag_id = source_item_id
+
+        if not hashtag_id:
+            return None
+
+        tdb = self._get_trend_db()
+        family = tdb.get_family_by_hashtag(hashtag_id)
+        if not family:
+            return None
+
+        subthemes = tdb.list_subthemes(family["id"])
+        for sub in subthemes:
+            brief = tdb.get_subtheme_brief(sub["id"])
+            sub["brief"] = brief
+
+        family["subthemes"] = subthemes
+        family["trend"] = trend
+        return family
+
+    def generate_theme_family_background(self, trend_id: str) -> dict:
+        """后台为单个 trend 生成主题家族。"""
+        trend = self.db.get_trend(trend_id)
+        if not trend:
+            raise ValueError(f"Trend not found: {trend_id}")
+
+        raw = trend.get("raw_payload", {})
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "")
+        if not hashtag_id:
+            hashtag_id = trend.get("source_item_id", "")
+
+        tdb = self._get_trend_db()
+
+        existing = tdb.get_family_by_hashtag(hashtag_id)
+        if existing:
+            tdb.delete_family(existing["id"])
+
+        from trend_fetcher.topic_pipeline import TopicPipeline
+        pipeline = TopicPipeline(db=tdb)
+
+        hashtag_row = tdb.get_hashtag(hashtag_id)
+        if not hashtag_row:
+            raise ValueError(f"TikTok hashtag not found: {hashtag_id}")
+
+        review = tdb.conn.execute(
+            "SELECT * FROM tk_topic_reviews WHERE hashtag_id = ? ORDER BY id DESC LIMIT 1",
+            (hashtag_id,)
+        ).fetchone()
+        if not review:
+            raise ValueError(f"No review found for hashtag: {hashtag_id}")
+        review = dict(review)
+
+        from trend_fetcher.topic_prompts import (
+            TOPIC_TO_THEME_FAMILY_PROMPT,
+            build_family_input,
+            parse_theme_family_response,
+        )
+
+        merged = {**hashtag_row, **review}
+        input_text = build_family_input(merged, merged)
+
+        from trend_fetcher.config import config
+        from openai import OpenAI
+        client = OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL or None)
+        resp = client.chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": TOPIC_TO_THEME_FAMILY_PROMPT},
+                {"role": "user", "content": input_text},
+            ],
+            temperature=0.5,
+            max_tokens=4000,
+        )
+        response_text = resp.choices[0].message.content or ""
+        parsed = parse_theme_family_response(response_text)
+        family_id = tdb.save_theme_family(hashtag_id, review["id"], parsed, response_text)
+
+        self.sync_service.sync_tiktok_pipeline()
+
+        return {"family_id": family_id, "subtheme_count": len(parsed.get("subthemes", []))}
+
+    # ── 部分重生成 / 补充扩展 ─────────────────────────────
+
+    def _resolve_hashtag_and_family(self, trend_id: str):
+        """内部工具：从 trend_id 解析 hashtag_id、tdb、family、review、hashtag_row。"""
+        trend = self.db.get_trend(trend_id)
+        if not trend:
+            raise ValueError(f"Trend not found: {trend_id}")
+
+        raw = trend.get("raw_payload", {})
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "") or trend.get("source_item_id", "")
+
+        tdb = self._get_trend_db()
+        family = tdb.get_family_by_hashtag(hashtag_id)
+        if not family:
+            raise ValueError("Theme family not found")
+
+        hashtag_row = tdb.get_hashtag(hashtag_id)
+        if not hashtag_row:
+            raise ValueError(f"TikTok hashtag not found: {hashtag_id}")
+
+        review = tdb.conn.execute(
+            "SELECT * FROM tk_topic_reviews WHERE hashtag_id = ? ORDER BY id DESC LIMIT 1",
+            (hashtag_id,)
+        ).fetchone()
+        if not review:
+            raise ValueError(f"No review found for hashtag: {hashtag_id}")
+        review = dict(review)
+
+        return tdb, family, hashtag_row, review
+
+    def _call_family_llm(self, review_row, topic_row, **build_kwargs) -> dict:
+        """调用 LLM 生成 theme family 并返回 parsed JSON。"""
+        from trend_fetcher.topic_prompts import (
+            TOPIC_TO_THEME_FAMILY_PROMPT,
+            build_family_input,
+            parse_theme_family_response,
+        )
+        from trend_fetcher.config import config
+        from openai import OpenAI
+
+        input_text = build_family_input(review_row, topic_row, **build_kwargs)
+        client = OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL or None)
+        resp = client.chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": TOPIC_TO_THEME_FAMILY_PROMPT},
+                {"role": "user", "content": input_text},
+            ],
+            temperature=0.5,
+            max_tokens=4000,
+        )
+        return parse_theme_family_response(resp.choices[0].message.content or "")
+
+    def regenerate_selected_subthemes(self, trend_id: str, subtheme_ids: list[int]) -> dict:
+        """删除选中的子题材，让 AI 生成替换子题材写回同一家族。"""
+        tdb, family, hashtag_row, review = self._resolve_hashtag_and_family(trend_id)
+
+        all_subs = tdb.list_subthemes(family["id"])
+        to_replace = [s for s in all_subs if s["id"] in subtheme_ids]
+        remaining = [s for s in all_subs if s["id"] not in subtheme_ids]
+
+        if not to_replace:
+            raise ValueError("No matching subthemes found to replace")
+
+        merged = {**hashtag_row, **review}
+        parsed = self._call_family_llm(
+            merged, merged,
+            existing_subthemes=remaining,
+            mode="replace",
+        )
+        new_subs = parsed.get("subthemes", [])
+
+        tdb.delete_subthemes_by_ids(subtheme_ids)
+        new_ids = tdb.add_subthemes_to_family(family["id"], new_subs)
+
+        self.sync_service.sync_tiktok_pipeline()
+        return {"replaced": len(subtheme_ids), "new_count": len(new_ids), "new_ids": new_ids}
+
+    def supplement_theme_family(self, trend_id: str) -> dict:
+        """保留现有子题材，AI 补充新的子题材到家族中。"""
+        tdb, family, hashtag_row, review = self._resolve_hashtag_and_family(trend_id)
+
+        existing_subs = tdb.list_subthemes(family["id"])
+        merged = {**hashtag_row, **review}
+        parsed = self._call_family_llm(
+            merged, merged,
+            existing_subthemes=existing_subs,
+            mode="supplement",
+        )
+        new_subs = parsed.get("subthemes", [])
+        new_ids = tdb.add_subthemes_to_family(family["id"], new_subs)
+
+        self.sync_service.sync_tiktok_pipeline()
+        return {"existing": len(existing_subs), "added": len(new_ids), "new_ids": new_ids}
+
+    def save_allocation(self, trend_id: str, allocations: list[dict]) -> dict:
+        """保存人工确认的配量。allocations: [{subtheme_id, selected, priority, target_sticker_count, allocation_notes}]"""
+        tdb = self._get_trend_db()
+        for alloc in allocations:
+            tdb.update_subtheme_allocation(alloc["subtheme_id"], alloc)
+
+        trend = self.db.get_trend(trend_id)
+        raw = trend.get("raw_payload", {}) if trend else {}
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "") or trend.get("source_item_id", "")
+
+        family = tdb.get_family_by_hashtag(hashtag_id)
+        if family:
+            tdb.finalize_allocation(family["id"], hashtag_id)
+
+        self.sync_service.sync_tiktok_pipeline()
+        return {"status": "ok", "updated": len(allocations)}
+
+    def confirm_ai_allocation(self, trend_id: str) -> dict:
+        """一键确认 AI 推荐配量。"""
+        trend = self.db.get_trend(trend_id)
+        if not trend:
+            raise ValueError(f"Trend not found: {trend_id}")
+
+        raw = trend.get("raw_payload", {})
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "") or trend.get("source_item_id", "")
+
+        tdb = self._get_trend_db()
+        family = tdb.get_family_by_hashtag(hashtag_id)
+        if not family:
+            raise ValueError("Theme family not found")
+
+        tdb.confirm_ai_allocation(family["id"])
+        tdb.finalize_allocation(family["id"], hashtag_id)
+        self.sync_service.sync_tiktok_pipeline()
+        return {"status": "ok", "family_id": family["id"]}
+
+    def generate_subtheme_briefs_background(self, trend_id: str) -> dict:
+        """为 trend 下的选中子题材批量生成 Brief。"""
+        trend = self.db.get_trend(trend_id)
+        if not trend:
+            raise ValueError(f"Trend not found: {trend_id}")
+
+        raw = trend.get("raw_payload", {})
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "") or trend.get("source_item_id", "")
+
+        tdb = self._get_trend_db()
+        family = tdb.get_family_by_hashtag(hashtag_id)
+        if not family:
+            raise ValueError("Theme family not found")
+
+        from trend_fetcher.topic_pipeline import TopicPipeline
+        pipeline = TopicPipeline(db=tdb)
+        stats = pipeline.generate_subtheme_briefs(family["id"])
+
+        self.sync_service.sync_tiktok_pipeline()
+        return stats
+
+    def queue_subtheme(self, subtheme_id: int, created_by: str = "system") -> dict:
+        """单个子题材入队规划。"""
+        tdb = self._get_trend_db()
+        sub = tdb.get_subtheme(subtheme_id)
+        if not sub:
+            raise ValueError(f"Subtheme not found: {subtheme_id}")
+
+        brief = tdb.get_subtheme_brief(subtheme_id)
+        if not brief or not brief.get("brief_json"):
+            raise ValueError("Subtheme Brief 尚未生成")
+
+        family = tdb.get_theme_family(sub["family_id"])
+        if not family:
+            raise ValueError("Theme family not found")
+
+        hashtag = tdb.get_hashtag(family["hashtag_id"])
+        hashtag_name = (hashtag or {}).get("hashtag_name", "")
+
+        trend_id = f"tiktok:{family['hashtag_id']}"
+        trend_name = sub.get("subtheme_name", "")
+
+        brief_json = json.loads(brief["brief_json"]) if isinstance(brief["brief_json"], str) else brief["brief_json"]
+
+        job = self.job_service.create_job(
+            trend_id, trend_name, created_by,
+            family_id=str(family["id"]),
+            subtheme_id=subtheme_id,
+            variant_label=trend_name,
+        )
+        self.job_service.start_job_async(job.id, brief_json, trend_name)
+
+        tdb.conn.execute(
+            "UPDATE tk_subthemes SET status = 'queued' WHERE id = ?", (subtheme_id,)
+        )
+        tdb.conn.commit()
+
+        return self.db.get_job(job.id) or job.model_dump()
+
+    def queue_family(self, trend_id: str, created_by: str = "system") -> list[dict]:
+        """批量入队整个家族中已有 Brief 的选中子题材。"""
+        trend = self.db.get_trend(trend_id)
+        if not trend:
+            raise ValueError(f"Trend not found: {trend_id}")
+
+        raw = trend.get("raw_payload", {})
+        hashtag_id = raw.get("hashtag", {}).get("hashtag_id", "") or trend.get("source_item_id", "")
+
+        tdb = self._get_trend_db()
+        family = tdb.get_family_by_hashtag(hashtag_id)
+        if not family:
+            raise ValueError("Theme family not found")
+
+        ready_subs = tdb.get_subthemes_with_brief(family["id"])
+        jobs = []
+        for sub in ready_subs:
+            if sub.get("status") in ("queued", "completed"):
+                continue
+            try:
+                job = self.queue_subtheme(sub["id"], created_by)
+                jobs.append(job)
+            except Exception as e:
+                logger.warning("Failed to queue subtheme %s: %s", sub["id"], e)
+        return jobs

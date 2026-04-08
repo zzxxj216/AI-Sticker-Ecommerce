@@ -255,6 +255,7 @@
       }
 
       if (msg.type === 'complete') {
+        evtSource.close();
         bar.style.width = '100%';
         steps.innerHTML += `<div style="color:#16a34a;font-weight:600;">博客生成完成！共 ${msg.data.iteration} 轮迭代</div>`;
         showResult(msg.data);
@@ -280,7 +281,8 @@
         progressPct = Math.min(progressPct + 10, 90);
         bar.style.width = progressPct + '%';
         const icon = msg.data.passed ? '✅' : '🔄';
-        steps.innerHTML += `<div>${icon} 评审 #${msg.data.iteration}：${msg.data.score.toFixed(0)} 分 — ${esc(msg.data.summary)}</div>`;
+        const score = typeof msg.data.score === 'number' ? msg.data.score.toFixed(0) : '-';
+        steps.innerHTML += `<div>${icon} 评审 #${msg.data.iteration}：${score} 分 — ${esc(msg.data.summary || '')}</div>`;
         steps.scrollTop = steps.scrollHeight;
       }
       if (msg.type === 'plan_ready') {
@@ -297,6 +299,7 @@
 
     evtSource.onerror = function() {
       evtSource.close();
+      addBotMsg('<span style="color:#ef4444;">连接中断，请刷新页面重试。</span>');
     };
   }
 
@@ -318,11 +321,13 @@
 
   async function resetChat() {
     if (!confirm('确认清空对话历史？')) return;
-    await fetch(API + '/reset', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ session_id: SESSION_ID }),
-    });
+    try {
+      await fetch(API + '/reset', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: SESSION_ID }),
+      });
+    } catch (e) { /* best-effort */ }
     messages.innerHTML = '';
     document.getElementById('progress-panel').style.display = 'none';
     document.getElementById('result-panel').style.display = 'none';
@@ -374,6 +379,9 @@
     if (!resultMarkdown) return;
     navigator.clipboard.writeText(resultMarkdown).then(() => {
       btnCopy.textContent = '已复制!';
+      setTimeout(() => btnCopy.textContent = '复制 Markdown', 2000);
+    }).catch(() => {
+      btnCopy.textContent = '复制失败';
       setTimeout(() => btnCopy.textContent = '复制 Markdown', 2000);
     });
   });

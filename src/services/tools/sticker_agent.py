@@ -96,43 +96,53 @@ class TaskState:
 
 
 class SessionMemory:
+    """Thread-safe per-session conversation + task memory."""
+
     def __init__(self):
+        self._lock = threading.Lock()
         self._histories: Dict[str, list] = {}
         self._tasks: Dict[str, TaskState] = {}
         self._session_tasks: Dict[str, list] = {}
 
     def add_message(self, session_id: str, role: str, content: str):
-        if session_id not in self._histories:
-            self._histories[session_id] = []
-        self._histories[session_id].append({"role": role, "content": content})
-        if len(self._histories[session_id]) > 40:
-            self._histories[session_id] = self._histories[session_id][-30:]
+        with self._lock:
+            if session_id not in self._histories:
+                self._histories[session_id] = []
+            self._histories[session_id].append({"role": role, "content": content})
+            if len(self._histories[session_id]) > 40:
+                self._histories[session_id] = self._histories[session_id][-30:]
 
     def get_history(self, session_id: str) -> list:
-        return self._histories.get(session_id, [])
+        with self._lock:
+            return list(self._histories.get(session_id, []))
 
     def reset(self, session_id: str):
-        self._histories.pop(session_id, None)
+        with self._lock:
+            self._histories.pop(session_id, None)
 
     def create_task(self, session_id: str, theme: str) -> TaskState:
-        task_id = f"stk_{uuid.uuid4().hex[:12]}"
-        task = TaskState(task_id, session_id, theme)
-        self._tasks[task_id] = task
-        self._session_tasks.setdefault(session_id, []).append(task_id)
-        return task
+        with self._lock:
+            task_id = f"stk_{uuid.uuid4().hex[:12]}"
+            task = TaskState(task_id, session_id, theme)
+            self._tasks[task_id] = task
+            self._session_tasks.setdefault(session_id, []).append(task_id)
+            return task
 
     def get_task(self, task_id: str) -> Optional[TaskState]:
-        return self._tasks.get(task_id)
+        with self._lock:
+            return self._tasks.get(task_id)
 
     def resolve_task_id(self, session_id: str, raw: str) -> Optional[str]:
-        if raw.lower() == "latest":
-            ids = self._session_tasks.get(session_id, [])
-            return ids[-1] if ids else None
-        return raw if raw in self._tasks else None
+        with self._lock:
+            if raw.lower() == "latest":
+                ids = self._session_tasks.get(session_id, [])
+                return ids[-1] if ids else None
+            return raw if raw in self._tasks else None
 
     def get_session_tasks(self, session_id: str, limit: int = 5) -> list[TaskState]:
-        ids = self._session_tasks.get(session_id, [])
-        return [self._tasks[tid] for tid in reversed(ids[-limit:]) if tid in self._tasks]
+        with self._lock:
+            ids = self._session_tasks.get(session_id, [])
+            return [self._tasks[tid] for tid in reversed(ids[-limit:]) if tid in self._tasks]
 
 
 # ── Sticker Agent Service ───────────────────────────────────

@@ -5,8 +5,11 @@ AI Services:
     - ClaudeService   — Anthropic Claude API
     - GeminiService   — Google Gemini API (text, image, multimodal)
     - OpenAIService   — OpenAI / compatible API
-    - ChatService     — multi-turn chat session manager
     - PromptBuilder   — prompt construction helpers
+
+Ops Services:
+    - TrendService    — trend management, pipelines, and job scheduling
+    - BriefService    — trend brief generation and management
 """
 
 from src.services.ai import (

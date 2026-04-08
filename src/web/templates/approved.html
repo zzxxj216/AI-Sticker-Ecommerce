@@ -27,7 +27,7 @@
   <script>document.addEventListener('DOMContentLoaded',function(){initDateFilter('approved-date-filter',{serverSide:false})});</script>
   <div class="table-wrap" style="overflow-x:auto;">
     {% if items %}
-    <table class="data-table" data-sortable data-date-col="1" id="approved-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width:1000px;">
+    <table class="data-table" data-sortable data-date-col="1" id="approved-table" style="width: 100%; border-collapse: collapse; text-align: left; min-width:1120px;">
       <thead>
         <tr>
           <th style="width:4%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);">
@@ -35,7 +35,8 @@
           </th>
           <th data-sort-key="date" data-sort-type="date" data-sort-default="desc" style="width:12%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">采集日期</th>
           <th data-sort-key="source" style="width:7%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">来源</th>
-          <th data-sort-key="title" style="width:22%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">话题/标题</th>
+          <th data-sort-key="family" style="width:14%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">主题家族</th>
+          <th data-sort-key="title" style="width:20%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">话题/标题</th>
           <th style="width:25%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">AI 核心评价</th>
           <th data-sort-key="status" style="width:10%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成状态</th>
           <th data-sort-key="finished" data-sort-type="date" data-sort-default="desc" style="width:12%;padding:12px 16px;border-bottom:1px solid var(--line-soft);background:rgba(0,0,0,0.02);color:var(--text-muted);">生成时间</th>
@@ -44,10 +45,21 @@
       </thead>
       <tbody>
         {% for item in items %}
+        {% set _raw = item.raw_payload or {} %}
+        {% set _fam = _raw.get('family') %}
+        {% set _subs = _raw.get('subthemes') or [] %}
+        {% set _fam_ns = namespace(ready=0) %}
+        {% for _s in _subs %}
+          {% if _s.get('status') == 'brief_ready' or _s.get('brief_json') %}
+            {% set _fam_ns.ready = _fam_ns.ready + 1 %}
+          {% endif %}
+        {% endfor %}
         <tr data-id="{{ item.id }}"
             data-name="{{ item.trend_name or item.title }}"
             data-queue-status="{{ item.queue_status }}"
-            data-job-finished="{{ item.last_job_finished_at or '' }}">
+            data-job-finished="{{ item.last_job_finished_at or '' }}"
+            data-has-family="{{ '1' if _fam else '0' }}"
+            data-family-status="{{ item.family_status or '' }}">
           <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
             <input type="checkbox" class="row-check" value="{{ item.id }}" style="cursor:pointer;width:16px;height:16px;">
           </td>
@@ -57,7 +69,32 @@
               {{ 'TikTok' if item.source_type == 'tiktok' else 'News聚合' }}
             </span>
           </td>
-          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);"><strong><a href="/trends/{{ item.id }}" class="primary-link">{{ item.trend_name or item.title }}</a></strong></td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);font-size:12px;vertical-align:top;">
+            {% if item.source_type == 'tiktok' and item.family_status %}
+              {% if item.family_status == 'generated' %}
+                <span class="badge" style="background:#dcfce7;color:#166534;" title="family_status">已生成家族</span>
+              {% elif item.family_status == 'pending' %}
+                <span class="badge" style="background:#fef9c3;color:#854d0e;" title="family_status">家族待生成</span>
+              {% elif item.family_status == 'failed' %}
+                <span class="badge" data-status="failed" title="family_status">家族失败</span>
+              {% elif item.family_status == 'skipped' %}
+                <span class="badge" style="background:var(--surface-hover);color:var(--text-muted);" title="family_status">家族跳过</span>
+              {% else %}
+                <span class="badge" style="background:var(--surface-hover);color:var(--text-muted);" title="family_status">{{ item.family_status }}</span>
+              {% endif %}
+            {% elif item.source_type == 'tiktok' %}
+              <span class="muted">—</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+            {% if _fam %}
+              <div style="margin-top:6px;line-height:1.4;color:var(--text-muted);">
+                <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:11px;">家族</span>
+                <span title="子题材 Brief 就绪数 / 子题材总数">{{ _fam_ns.ready }}/{{ _subs|length }} Brief就绪</span>
+              </div>
+            {% endif %}
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);"><strong><a href="{% if _fam %}/trends/{{ item.id }}/family{% else %}/trends/{{ item.id }}{% endif %}" class="primary-link">{{ item.trend_name or item.title }}</a></strong></td>
           <td style="font-size:13px;color:var(--text-muted);padding:12px 16px;border-bottom:1px solid var(--line-soft);">
             <div style="max-height:2.8em;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">{{ item.summary or '-' }}</div>
           </td>
@@ -152,6 +189,16 @@
     if (completed.length > 0) {
       const msg = `以下 ${completed.length} 项已经生成过卡贴，确定要重新生成？\n\n` + completed.join('\n');
       if (!confirm(msg)) return;
+    }
+
+    const familyRows = checked.filter(cb => {
+      const row = document.querySelector(`tr[data-id="${cb.value}"]`);
+      return row && row.dataset.hasFamily === '1';
+    });
+    if (familyRows.length > 0) {
+      const famMsg = `所选 ${familyRows.length} 条含主题家族数据：本页「批量生成卡贴」仅将主话题入队（/api/trends/batch-queue）。` +
+        `若要为多个子题材分别入队，请打开对应行的主题家族页使用「批量入队」等操作。\n\n是否继续提交批量卡贴？`;
+      if (!confirm(famMsg)) return;
     }
 
     btnBatch.disabled = true;

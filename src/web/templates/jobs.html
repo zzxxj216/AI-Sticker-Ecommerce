@@ -103,11 +103,20 @@
   </div>
   <div class="table-wrap">
     {% if jobs %}
+    {% set palette = ['#6366f1', '#8b5cf6', '#d97706', '#0d9488', '#db2777', '#16a34a'] %}
+    {% set fc = namespace(colors={}, idx=0) %}
+    {% for job in jobs %}
+      {% if job.family_id and job.family_id not in fc.colors %}
+        {% set _ = fc.colors.update({job.family_id: palette[fc.idx % 6]}) %}
+        {% set fc.idx = fc.idx + 1 %}
+      {% endif %}
+    {% endfor %}
     <table id="jobs-table" data-sortable>
       <thead>
         <tr>
           <th data-sort-key="id">任务ID</th>
           <th data-sort-key="trend">趋势</th>
+          <th data-sort-key="variant">子包标签</th>
           <th data-sort-key="status">状态</th>
           <th data-sort-key="images" data-sort-type="number" data-sort-default="desc">图片数</th>
           <th>输出目录</th>
@@ -116,9 +125,12 @@
       </thead>
       <tbody>
         {% for job in jobs %}
-        <tr class="tbl-page-row" data-table="gen">
+        {% set fid = job.family_id or '' %}
+        {% set fam_border = fc.colors[fid] if fid and fid in fc.colors else '' %}
+        <tr class="tbl-page-row{% if fid %} job-row-family{% endif %}" data-table="gen" data-family-id="{{ fid }}"{% if fam_border %} style="border-left:4px solid {{ fam_border }};background:color-mix(in srgb,{{ fam_border }} 7%,transparent)"{% endif %}>
           <td><a class="primary-link" href="/jobs/{{ job.id }}">{{ job.id[:12] }}…</a></td>
           <td><strong>{{ job.trend_name }}</strong></td>
+          <td class="muted">{{ job.variant_label or '—' }}</td>
           <td><span class="badge" data-status="{{ job.status }}">{{ job.status }}</span></td>
           <td>{{ job.image_count }}</td>
           <td class="mono-cell">{{ job.output_dir or '-' }}</td>

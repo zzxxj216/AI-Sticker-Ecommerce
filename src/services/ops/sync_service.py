@@ -50,12 +50,22 @@ class OpsSyncService:
             rows = trend_db.list_tk_hashtags(limit=0)
             reviews = self._fetch_review_map(trend_db)
             briefs = self._fetch_brief_map(trend_db)
+            family_map = self._fetch_family_map(trend_db)
 
             for row in rows:
                 review = reviews.get(row["hashtag_id"], {})
                 brief = briefs.get(row["hashtag_id"])
                 trend_id = f"tiktok:{row['hashtag_id']}"
                 title = row.get("hashtag_name", "")
+
+                family_info = family_map.get(row["hashtag_id"])
+                raw_payload: dict[str, Any] = {
+                    "hashtag": row, "review": review, "brief": brief or {},
+                }
+                if family_info:
+                    raw_payload["family"] = family_info["family"]
+                    raw_payload["subthemes"] = family_info["subthemes"]
+
                 item = TrendItem(
                     id=trend_id,
                     source_type="tiktok",
@@ -75,13 +85,28 @@ class OpsSyncService:
                     risk_flags=self._split_csv(review.get("risk_flags", "")),
                     visual_symbols=self._split_csv(review.get("visual_symbols", "")),
                     emotional_core=self._split_csv(review.get("emotional_hooks", "")),
-                    raw_payload={"hashtag": row, "review": review, "brief": brief or {}},
+                    raw_payload=raw_payload,
                     source_url="",
                 )
                 self.db.upsert_trend_item(item)
-                if brief:
-                    payload = self._convert_tiktok_brief(brief)
-                    st = "ready" if brief.get("brief_status") == "ready" else "generated"
+
+                # Sync family_status and allocation_status
+                family_status = row.get("family_status", "pending") or "pending"
+                allocation_status = row.get("allocation_status", "pending") or "pending"
+                try:
+                    self.db.conn.execute(
+                        "UPDATE trend_items SET family_status = ?, allocation_status = ? WHERE id = ?",
+                        (family_status, allocation_status, trend_id),
+                    )
+                    self.db.conn.commit()
+                except Exception:
+                    pass
+
+                # Sync brief — prefer subtheme brief (highest priority) over legacy
+                best_brief = self._pick_best_brief(brief, family_info)
+                if best_brief:
+                    payload = self._convert_tiktok_brief(best_brief)
+                    st = "ready" if best_brief.get("brief_status") == "ready" else "generated"
                     prev = self.db.get_brief(trend_id)
                     self.db.upsert_brief(
                         TrendBriefRecord(
@@ -111,6 +136,27 @@ class OpsSyncService:
 
         logger.info("Synced %d TikTok trends", count)
         return count
+
+    @staticmethod
+    def _pick_best_brief(
+        legacy_brief: dict[str, Any] | None,
+        family_info: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """从旧 Brief 和家族子题材 Brief 中选取最佳代表。"""
+        if family_info:
+            priority_order = {"high": 0, "medium": 1, "low": 2}
+            best_sub = None
+            for sub in family_info.get("subthemes", []):
+                if sub.get("brief_json") and sub.get("selected"):
+                    if best_sub is None or priority_order.get(sub.get("priority", "medium"), 1) < priority_order.get(best_sub.get("priority", "medium"), 1):
+                        best_sub = sub
+            if best_sub and best_sub.get("brief_json"):
+                try:
+                    bj = json.loads(best_sub["brief_json"]) if isinstance(best_sub["brief_json"], str) else best_sub["brief_json"]
+                    return {**bj, "brief_status": "ready"}
+                except Exception:
+                    pass
+        return legacy_brief
 
     @staticmethod
     def _read_json_list(path: Path) -> list[dict[str, Any]]:
@@ -194,6 +240,26 @@ class OpsSyncService:
         for row in rows:
             payload = dict(row)
             result.setdefault(payload["hashtag_id"], payload)
+        return result
+
+    @staticmethod
+    def _fetch_family_map(trend_db: TrendDB) -> dict[str, dict[str, Any]]:
+        """Build hashtag_id -> {family, subthemes[with brief_json]} map."""
+        families = trend_db.conn.execute(
+            "SELECT * FROM tk_theme_families ORDER BY id DESC"
+        ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for fam in families:
+            fam_d = dict(fam)
+            hid = fam_d["hashtag_id"]
+            if hid in result:
+                continue
+            subs = trend_db.list_subthemes(fam_d["id"])
+            for sub in subs:
+                brief = trend_db.get_subtheme_brief(sub["id"])
+                sub["brief_json"] = brief.get("brief_json") if brief else None
+                sub["brief_status"] = brief.get("brief_status") if brief else None
+            result[hid] = {"family": fam_d, "subthemes": subs}
         return result
 
     @staticmethod

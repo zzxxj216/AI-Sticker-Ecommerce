@@ -15,6 +15,7 @@
   </div>
 </section>
 
+{% set brief_status = brief.get('brief_status', '') if brief else '' %}
 <div class="layout-two">
   <!-- ====== 左栏：趋势信息 ====== -->
   <section class="panel" id="trend-info-panel">
@@ -116,6 +117,7 @@
           {% set chart_w = 100 %}
           {% set chart_h = 80 %}
           {% set n = tk_extra.trend_data|length %}
+          {% set n_div = n - 1 if n > 1 else 1 %}
           <svg viewBox="0 0 {{ chart_w }} {{ chart_h + 18 }}" style="width:100%;height:auto;max-height:140px;overflow:visible;">
             <defs>
               <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
@@ -127,16 +129,16 @@
             <path d="
               M 0 {{ chart_h - ((tk_extra.trend_data[0].value - min_val) / range_val * (chart_h - 8)) | int }}
               {% for p in tk_extra.trend_data %}
-              L {{ (loop.index0 * chart_w / (n - 1)) | round(1) }} {{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }}
+              L {{ (loop.index0 * chart_w / n_div) | round(1) }} {{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }}
               {% endfor %}
               L {{ chart_w }} {{ chart_h }} L 0 {{ chart_h }} Z
             " fill="url(#tg)"/>
             {# 折线 #}
             <polyline fill="none" stroke="#7c5cfc" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"
-              points="{% for p in tk_extra.trend_data %}{{ (loop.index0 * chart_w / (n - 1)) | round(1) }},{{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }} {% endfor %}"/>
+              points="{% for p in tk_extra.trend_data %}{{ (loop.index0 * chart_w / n_div) | round(1) }},{{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }} {% endfor %}"/>
             {# 数据点 #}
             {% for p in tk_extra.trend_data %}
-            <circle cx="{{ (loop.index0 * chart_w / (n - 1)) | round(1) }}" cy="{{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }}" r="1.8" fill="#fff" stroke="#7c5cfc" stroke-width="1">
+            <circle cx="{{ (loop.index0 * chart_w / n_div) | round(1) }}" cy="{{ (chart_h - ((p.value - min_val) / range_val * (chart_h - 8))) | int }}" r="1.8" fill="#fff" stroke="#7c5cfc" stroke-width="1">
               <title>{{ p.date }}: {{ p.value }}</title>
             </circle>
             {% endfor %}
@@ -235,31 +237,38 @@
           </button>
         </form>
         {% else %}
-        <form method="post" action="/trends/{{ trend.id }}/queue">
-          {% if brief_status == 'generating' %}
-          <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-            Brief 生成中…
-          </button>
-          {% elif brief_status == 'failed' %}
-          <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
-            Brief 生成失败
-          </button>
-          <button type="button" onclick="retryBrief()" class="button-secondary" style="margin-left:8px;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-            重新生成 Brief
-          </button>
-          {% elif not brief.brief_json %}
-          <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
-            等待 Brief 生成…
-          </button>
+          {% if trend.source_type == 'tiktok' %}
+          <a href="/trends/{{ trend.id }}/family" style="display:inline-flex;align-items:center;gap:4px;padding:8px 16px;border-radius:var(--radius-pill);background:var(--primary);color:#fff;font-size:13px;font-weight:600;text-decoration:none;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+            查看主题家族
+          </a>
           {% else %}
-          <button type="submit" id="btn-queue">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            生成卡贴
-          </button>
+          <form method="post" action="/trends/{{ trend.id }}/queue">
+            {% if brief_status == 'generating' %}
+            <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+              Brief 生成中…
+            </button>
+            {% elif brief_status == 'failed' %}
+            <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
+              Brief 生成失败
+            </button>
+            <button type="button" onclick="retryBrief()" class="button-secondary" style="margin-left:8px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+              重新生成 Brief
+            </button>
+            {% elif not brief.brief_json %}
+            <button type="button" id="btn-queue" disabled style="opacity:0.5;cursor:not-allowed;">
+              等待 Brief 生成…
+            </button>
+            {% else %}
+            <button type="submit" id="btn-queue">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              生成卡贴
+            </button>
+            {% endif %}
+          </form>
           {% endif %}
-        </form>
         {% endif %}
 
       {% elif trend.review_status == 'skipped' %}
@@ -271,16 +280,104 @@
       </form>
       {% endif %}
     </div>
+
   </section>
 
-  <!-- ====== 右栏：Brief ====== -->
+  {% if trend.source_type == 'tiktok' %}
+  <!-- ====== 右栏：主题家族（TikTok） ====== -->
+  <section class="panel" id="family-panel">
+    <div class="panel-header">
+      <h2>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        主题家族
+      </h2>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="badge" id="family-status-badge" style="background:var(--surface-hover);color:var(--text-muted);">加载中</span>
+        <a href="/trends/{{ trend.id }}/family" style="display:inline-flex;align-items:center;gap:5px;padding:5px 14px;border-radius:20px;background:#6366f1;color:#ffffff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;">
+          管理主题家族 →
+        </a>
+      </div>
+    </div>
+    <div id="family-content" style="padding:16px 24px;">
+      <div style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:13px;">加载中...</div>
+    </div>
+  </section>
+  <script>
+  (function(){
+    fetch('/api/trends/{{ trend.id }}/family')
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        var badge = document.getElementById('family-status-badge');
+        var content = document.getElementById('family-content');
+        if (!data.family) {
+          badge.style.background = '#fef9c3';
+          badge.style.color = '#854d0e';
+          badge.textContent = '未生成';
+          content.innerHTML = '<div style="text-align:center;padding:30px 0;">'
+            + '<div style="font-size:24px;margin-bottom:8px;">🌱</div>'
+            + '<p style="font-weight:600;margin-bottom:4px;">尚未生成主题家族</p>'
+            + '<p style="font-size:13px;color:var(--text-muted);">进入管理页面生成主题家族</p>'
+            + '</div>';
+          return;
+        }
+        var f = data.family;
+        var subs = f.subthemes || [];
+        var selectedCount = subs.filter(function(s){ return s.selected; }).length;
+        var briefReady = subs.filter(function(s){ return ['brief_ready','queued','completed'].indexOf(s.status) >= 0; }).length;
+
+        badge.style.background = '#dcfce7';
+        badge.style.color = '#166534';
+        badge.textContent = '已生成';
+
+        var rows = '';
+        for (var i = 0; i < subs.length; i++) {
+          var s = subs[i];
+          var label = '待处理', bg = '#f3f4f6', color = '#6b7280';
+          if (s.status === 'brief_ready') { label = 'Brief就绪'; bg = '#dbeafe'; color = '#1e40af'; }
+          else if (s.status === 'queued') { label = '已排队'; bg = '#fef9c3'; color = '#854d0e'; }
+          else if (s.status === 'completed') { label = '已完成'; bg = '#dcfce7'; color = '#166534'; }
+          rows += '<tr>'
+            + '<td style="padding:8px 12px;border-bottom:1px solid var(--line-soft);font-size:13px;">'
+            + (s.selected ? '<span style="color:#059669;margin-right:4px;">✓</span>' : '<span style="color:#d1d5db;margin-right:4px;">○</span>')
+            + (s.sub_theme_name || '-') + '</td>'
+            + '<td style="padding:8px 12px;border-bottom:1px solid var(--line-soft);font-size:12px;color:var(--text-muted);">' + (s.ai_count || 0) + '</td>'
+            + '<td style="padding:8px 12px;border-bottom:1px solid var(--line-soft);font-size:12px;color:var(--text-muted);">' + (s.priority || '-') + '</td>'
+            + '<td style="padding:8px 12px;border-bottom:1px solid var(--line-soft);"><span class="badge" style="background:' + bg + ';color:' + color + ';font-size:11px;">' + label + '</span></td>'
+            + '</tr>';
+        }
+
+        content.innerHTML = '<div style="margin-bottom:16px;">'
+          + '<strong style="font-size:15px;">' + (f.parent_theme || '') + '</strong>'
+          + '<div style="font-size:13px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;">'
+          + '<span>子题材 <strong>' + subs.length + '</strong></span>'
+          + '<span>已选中 <strong>' + selectedCount + '</strong></span>'
+          + '<span>Brief就绪 <strong>' + briefReady + '</strong></span>'
+          + '</div>'
+          + (f.shared_emotional_core ? '<p style="font-size:12px;color:var(--text-muted);margin-top:6px;">情感核心：' + f.shared_emotional_core + '</p>' : '')
+          + '</div>'
+          + '<table style="width:100%;border-collapse:collapse;">'
+          + '<thead><tr style="background:var(--surface-hover);">'
+          + '<th style="padding:6px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--text-muted);">子题材</th>'
+          + '<th style="padding:6px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--text-muted);">数量</th>'
+          + '<th style="padding:6px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--text-muted);">优先级</th>'
+          + '<th style="padding:6px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--text-muted);">状态</th>'
+          + '</tr></thead>'
+          + '<tbody>' + rows + '</tbody></table>';
+      })
+      .catch(function(){
+        document.getElementById('family-status-badge').textContent = '加载失败';
+        document.getElementById('family-content').innerHTML = '<p style="text-align:center;padding:20px 0;color:var(--text-muted);font-size:13px;">无法加载主题家族信息</p>';
+      });
+  })();
+  </script>
+  {% else %}
+  <!-- ====== 右栏：Brief（非 TikTok） ====== -->
   <section class="panel" id="brief-editor-panel">
     <div class="panel-header">
       <h2>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;opacity:.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         Brief
       </h2>
-      {% set brief_status = brief.get('brief_status', '') if brief else '' %}
       {% if brief_status == 'generating' %}
       <span class="badge" id="brief-status-badge" style="background:#fef9c3;color:#854d0e;">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
@@ -424,6 +521,7 @@
     </div>
     {% endif %}
   </section>
+  {% endif %}
 </div>
 
 {% if trend.source_type == 'news' %}
@@ -481,11 +579,12 @@
 
 <script>
 const TREND_ID = "{{ trend.id }}";
+{% if trend.source_type != 'tiktok' %}
 let briefPollTimer = null;
 
 function pollBriefStatus() {
   fetch(`/api/trends/${TREND_ID}/brief-status`)
-    .then(r => r.json())
+    .then(r => { if (!r.ok) throw new Error('poll failed'); return r.json(); })
     .then(data => {
       if (data.status === 'generating') {
         if (!briefPollTimer) {
@@ -499,14 +598,17 @@ function pollBriefStatus() {
         }
       }
     })
-    .catch(() => {});
+    .catch(() => {
+      if (briefPollTimer) clearInterval(briefPollTimer);
+      briefPollTimer = null;
+    });
 }
 
 function retryBrief() {
   const btn = document.getElementById('btn-retry-brief');
   if (btn) { btn.disabled = true; btn.textContent = '正在重新生成…'; }
   fetch(`/api/trends/${TREND_ID}/retry-brief`, { method: 'POST' })
-    .then(r => r.json())
+    .then(r => { if (!r.ok) throw new Error('retry failed'); return r.json(); })
     .then(() => {
       location.reload();
     })
@@ -515,6 +617,7 @@ function retryBrief() {
 
 {% if brief_status == 'generating' %}
 pollBriefStatus();
+{% endif %}
 {% endif %}
 </script>
 {% endblock %}

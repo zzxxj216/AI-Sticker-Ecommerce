@@ -514,6 +514,247 @@ Writing rules:
 
 
 # ═══════════════════════════════════════════════════════════
+# Theme Family Prompts (v2 pipeline)
+# ═══════════════════════════════════════════════════════════
+
+TOPIC_TO_THEME_FAMILY_PROMPT = """You are a sticker product theme-family architect.
+
+Your job is to expand a single approved topic review into a "theme family" of 3-6 related subthemes.
+Each subtheme will become an independent sticker pack that shares a common emotional core with the parent.
+
+You are NOT generating sticker images.
+You are NOT creating final briefs yet.
+You ARE defining the strategic decomposition of a topic into production-ready pack variants.
+
+The input includes:
+- A [Reviewed Topic Card] with decision, normalized theme, visual symbols, emotional hooks, risk flags, and score.
+- A [Topic Card] with raw hashtag data, audience info, and trend signals.
+
+Your goals:
+1. Identify the parent theme and shared emotional/visual core.
+2. Generate 3-6 subthemes that maximize coverage while minimizing overlap.
+3. For EACH subtheme, provide an AI-recommended allocation (selected, priority, target sticker count) with reasoning.
+
+Subtheme design principles:
+- Each subtheme must be visually distinct enough to support its own sticker pack.
+- Together, subthemes should cover 70%+ of the theme's visual and emotional space.
+- At least one subtheme should be a "core" high-priority pack. Others can be supplementary.
+- Subthemes should differ by visual angle, NOT by random variation.
+
+Priority assignment rules:
+- "high": Core subtheme with widest appeal and strongest visual potential. Recommend 1-2 per family.
+- "medium": Good supplementary pack with clear audience. Recommend 1-3 per family.
+- "low": Niche angle or experimental. Recommend 0-2 per family.
+
+Target sticker count rules:
+- Based on recommended_pack_size: small=8-12, medium=15-25, large=25-40
+- High priority packs get larger counts; low priority get smaller counts.
+- Total across all selected subthemes should be 40-100 stickers for a typical family.
+
+OUTPUT FORMAT: Return a single JSON object (no other text):
+
+```json
+{
+  "parent_topic": "<parent theme name in Chinese or English>",
+  "shared_core": {
+    "emotional_core": "<3-5 shared emotional keywords>",
+    "visual_core": "<shared visual language description>",
+    "platform_fit": "<amazon/d2c/both>"
+  },
+  "subthemes": [
+    {
+      "subtheme_name": "<English name for the pack>",
+      "subtheme_type": "<one of: evergreen_emotion, seasonal_event, lifestyle_identity, animal_cute, aesthetic_visual, humor_relatable, nature_outdoors, food_drink, object_icon, label_badge>",
+      "one_line_direction": "<one-line creative direction in Chinese>",
+      "recommended_pack_archetype": "<one of: aesthetic_pack, emotion_humor_pack, seasonal_festival_pack, lifestyle_identity_pack, object_icon_pack, label_badge_pack>",
+      "recommended_pack_size": "<small/medium/large>",
+      "natural_sticker_count_range": "<e.g. 15-25>",
+      "ai_selected": true,
+      "ai_priority": "<high/medium/low>",
+      "ai_target_sticker_count": 20,
+      "ai_reason": "<1-2 sentence Chinese explanation for this allocation>"
+    }
+  ]
+}
+```
+
+CRITICAL:
+- Output ONLY the JSON object, no other text before or after.
+- Generate 3-6 subthemes.
+- At least one subtheme must have ai_priority "high".
+- ai_selected should be true for most; set false only for very marginal angles.
+- Write ai_reason and one_line_direction in Chinese.
+"""
+
+BATCH_TOPIC_TO_THEME_FAMILY_PROMPT = """You are a sticker product theme-family architect.
+
+You will receive MULTIPLE reviewed topics in a single request (separated by "---TOPIC---").
+For EACH topic, expand it into a theme family with 3-6 subthemes.
+
+Apply the SAME criteria as a single-topic theme family expansion.
+
+OUTPUT FORMAT: Return a JSON array. Each element is a theme family object for one input topic (same order).
+
+```json
+[
+  {
+    "parent_topic": "...",
+    "shared_core": { "emotional_core": "...", "visual_core": "...", "platform_fit": "..." },
+    "subthemes": [
+      {
+        "subtheme_name": "...",
+        "subtheme_type": "...",
+        "one_line_direction": "...",
+        "recommended_pack_archetype": "...",
+        "recommended_pack_size": "...",
+        "natural_sticker_count_range": "...",
+        "ai_selected": true,
+        "ai_priority": "high",
+        "ai_target_sticker_count": 20,
+        "ai_reason": "..."
+      }
+    ]
+  }
+]
+```
+
+CRITICAL:
+- Output ONLY the JSON array, no other text before or after.
+- Array length MUST match number of input topics.
+- Same order as input.
+- Each family should have 3-6 subthemes.
+- Write ai_reason and one_line_direction in Chinese.
+"""
+
+SUBTHEME_TO_BRIEF_PROMPT = """You are a sticker product brief builder for subtheme packs.
+
+Your job is to convert a subtheme assignment (part of a theme family) into a structured product brief.
+
+The input includes three sections:
+1. [Parent Review Card] — the original topic review with decision, theme, scores, risks.
+2. [Subtheme Assignment] — the specific subtheme details with target sticker count and priority.
+3. [Shared Core] — the family-level emotional/visual core that this pack belongs to.
+
+Your goals:
+1. Create a brief specifically for THIS subtheme, not the parent topic as a whole.
+2. The brief must respect the shared core while differentiating from sibling packs.
+3. The pack_size_goal must match the assigned target_sticker_count.
+4. Include parent_topic and subtheme_role for downstream traceability.
+
+OUTPUT FORMAT: Return a single JSON object (no other text):
+
+```json
+{
+  "parent_topic": "<parent theme name>",
+  "subtheme_role": "<e.g. 主包 - 核心场景 / 补充包 - 趣味互动>",
+  "trend_name": "<subtheme name, use the assigned subtheme_name>",
+  "trend_type": "<theme type>",
+  "one_line_explanation": "<product-relevant one-liner in Chinese>",
+  "why_now": "<market timing explanation in Chinese>",
+  "lifecycle": "<flash/seasonal/event_based/evergreen_with_boost/long_tail>",
+  "platform": "<amazon/d2c/both>",
+  "product_goal": "<comma-separated goals from: impulse_buy, giftable, collectible, functional_decoration, journal_use, device_decoration, emotional_expression>",
+  "target_audience": "<structured audience profile in Chinese>",
+  "emotional_core": "<3-5 emotional keywords>",
+  "visual_symbols": "<6-12 grounded visual elements>",
+  "visual_do": "<2-4 visual directions to emphasize>",
+  "visual_avoid": "<2-4 visual directions to avoid>",
+  "must_include": "<essential elements>",
+  "must_avoid": "<elements to avoid, reflecting risks>",
+  "risk_notes": "<concise risk notes>",
+  "pack_size_goal": "<size label (count), e.g. medium (20)>",
+  "reference_notes": "<optional short guidance>"
+}
+```
+
+CRITICAL:
+- Output ONLY the JSON object, no other text.
+- Write all Chinese fields in Chinese.
+- pack_size_goal count must match the assigned target_sticker_count.
+- visual_symbols should be specific to THIS subtheme, not a generic copy from the parent.
+"""
+
+
+# ═══════════════════════════════════════════════════════════
+# Theme Family Input Assembly
+# ═══════════════════════════════════════════════════════════
+
+def build_family_input(
+    review_row: dict,
+    topic_row: dict,
+    *,
+    existing_subthemes: list[dict] | None = None,
+    mode: str = "full",
+) -> str:
+    """组装主题家族扩展的输入文本。
+
+    mode:
+      - "full": 正常全量扩展（无已有上下文）
+      - "supplement": 保留已有子题材，AI 追加新的
+      - "replace": 替换指定子题材（告知 AI 保留哪些、替换哪些）
+    """
+    parts = [build_reviewed_card(review_row)]
+    parts.append("")
+    parts.append(build_topic_card(topic_row))
+
+    if existing_subthemes and mode in ("supplement", "replace"):
+        parts.append("")
+        parts.append("[Existing Subthemes — DO NOT duplicate these]")
+        for i, s in enumerate(existing_subthemes, 1):
+            parts.append(
+                f"  {i}. {s.get('subtheme_name', '')} "
+                f"({s.get('subtheme_type', '')}) — "
+                f"{s.get('one_line_direction', '')}"
+            )
+        parts.append("")
+        if mode == "supplement":
+            parts.append(
+                "[INSTRUCTION] Generate 2-4 NEW subthemes that complement "
+                "the existing ones above. Do NOT repeat or closely overlap with "
+                "any existing subtheme. Fill different visual/emotional angles."
+            )
+        elif mode == "replace":
+            parts.append(
+                "[INSTRUCTION] Generate replacement subthemes for the SAME number "
+                "as listed above. Each replacement should cover a DIFFERENT angle "
+                "from the originals while staying within the parent theme. "
+                "Do NOT duplicate the names or directions of existing subthemes."
+            )
+
+    return "\n".join(parts)
+
+
+def build_subtheme_brief_input(
+    review_row: dict,
+    subtheme: dict,
+    family: dict,
+) -> str:
+    """三段式组装子题材 Brief 的输入文本。"""
+    lines: list[str] = []
+
+    lines.append(build_reviewed_card(review_row))
+    lines.append("")
+
+    lines.append("[Subtheme Assignment]")
+    lines.append(f"subtheme_name: {subtheme.get('subtheme_name', '')}")
+    lines.append(f"subtheme_type: {subtheme.get('subtheme_type', '')}")
+    lines.append(f"one_line_direction: {subtheme.get('one_line_direction', '')}")
+    lines.append(f"recommended_pack_archetype: {subtheme.get('recommended_pack_archetype', '')}")
+    lines.append(f"recommended_pack_size: {subtheme.get('recommended_pack_size', '')}")
+    lines.append(f"priority: {subtheme.get('priority', '')}")
+    lines.append(f"target_sticker_count: {subtheme.get('target_sticker_count', 0)}")
+    lines.append("")
+
+    lines.append("[Shared Core]")
+    lines.append(f"parent_topic: {family.get('parent_theme', '')}")
+    lines.append(f"emotional_core: {family.get('shared_emotional_core', '')}")
+    lines.append(f"visual_core: {family.get('shared_visual_core', '')}")
+    lines.append(f"platform_fit: {family.get('shared_platform_fit', '')}")
+
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════
 # AI 响应解析
 # ═══════════════════════════════════════════════════════════
 
@@ -779,3 +1020,32 @@ def parse_brief_response(text: str) -> dict[str, Any]:
         "pack_size_goal": kv.get("pack_size_goal", ""),
         "reference_notes": kv.get("reference_notes", ""),
     }
+
+
+# ═══════════════════════════════════════════════════════════
+# Theme Family Response Parsing (v2 pipeline)
+# ═══════════════════════════════════════════════════════════
+
+def _strip_json_fences(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        first_nl = cleaned.index("\n")
+        last_fence = cleaned.rfind("```")
+        if last_fence > first_nl:
+            cleaned = cleaned[first_nl + 1:last_fence].strip()
+    return cleaned
+
+
+def parse_theme_family_response(text: str) -> dict[str, Any]:
+    """解析 TOPIC_TO_THEME_FAMILY_PROMPT 的 JSON 响应。"""
+    return json.loads(_strip_json_fences(text))
+
+
+def parse_batch_theme_family_response(text: str) -> list[dict[str, Any]]:
+    """解析 BATCH_TOPIC_TO_THEME_FAMILY_PROMPT 的 JSON 数组响应。"""
+    return json.loads(_strip_json_fences(text))
+
+
+def parse_subtheme_brief_response(text: str) -> dict[str, Any]:
+    """解析 SUBTHEME_TO_BRIEF_PROMPT 的 JSON 响应。"""
+    return json.loads(_strip_json_fences(text))

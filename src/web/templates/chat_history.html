@@ -153,12 +153,16 @@ function restoreSession(id, agentType) {
 
 async function deleteSession(id) {
   if (!confirm('确认删除该对话记录？')) return;
-  const resp = await fetch('/api/chat-history/sessions/' + id, { method: 'DELETE' });
-  if (resp.ok) {
-    const row = document.querySelector(`tr[data-id="${id}"]`);
-    if (row) row.remove();
-  } else {
-    alert('删除失败');
+  try {
+    const resp = await fetch('/api/chat-history/sessions/' + id, { method: 'DELETE' });
+    if (resp.ok) {
+      const row = document.querySelector(`tr[data-id="${id}"]`);
+      if (row) row.remove();
+    } else {
+      alert('删除失败');
+    }
+  } catch (e) {
+    alert('网络错误：' + e.message);
   }
 }
 
@@ -166,20 +170,24 @@ async function batchDelete() {
   const ids = Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.value);
   if (!ids.length) return;
   if (!confirm(`确认删除选中的 ${ids.length} 条对话记录？`)) return;
-  const resp = await fetch('/api/chat-history/sessions/batch-delete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids }),
-  });
-  if (resp.ok) {
-    ids.forEach(id => {
-      const row = document.querySelector(`tr[data-id="${id}"]`);
-      if (row) row.remove();
+  try {
+    const resp = await fetch('/api/chat-history/sessions/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
     });
-    updateBatchBtn();
-    document.getElementById('select-all').checked = false;
-  } else {
-    alert('批量删除失败');
+    if (resp.ok) {
+      ids.forEach(id => {
+        const row = document.querySelector(`tr[data-id="${id}"]`);
+        if (row) row.remove();
+      });
+      updateBatchBtn();
+      document.getElementById('select-all').checked = false;
+    } else {
+      alert('批量删除失败');
+    }
+  } catch (e) {
+    alert('网络错误：' + e.message);
   }
 }
 

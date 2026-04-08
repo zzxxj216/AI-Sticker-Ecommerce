@@ -1,10 +1,13 @@
 """TikTok 热点数据 SQLite 数据库
 
 Tables:
-  - tk_hashtags:       原始爬取数据 + 处理状态追踪
-  - tk_crawl_logs:     每次爬取的日志
-  - tk_topic_reviews:  AI 审核结果
-  - tk_topic_briefs:   AI Brief 结果
+  - tk_hashtags:         原始爬取数据 + 处理状态追踪
+  - tk_crawl_logs:       每次爬取的日志
+  - tk_topic_reviews:    AI 审核结果
+  - tk_topic_briefs:     AI Brief 结果（旧链路兜底）
+  - tk_theme_families:   主题家族（一条 review → 一个 family）
+  - tk_subthemes:        子题材（一个 family → 多个 subtheme）
+  - tk_subtheme_briefs:  子题材 Brief
 """
 
 from __future__ import annotations
@@ -123,8 +126,75 @@ class TrendDB:
             ON tk_topic_reviews(hashtag_id);
         CREATE INDEX IF NOT EXISTS idx_briefs_hashtag
             ON tk_topic_briefs(hashtag_id);
+
+        -- Theme Family tables (v2 pipeline) --
+        CREATE TABLE IF NOT EXISTS tk_theme_families (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            hashtag_id            TEXT NOT NULL REFERENCES tk_hashtags(hashtag_id),
+            review_id             INTEGER REFERENCES tk_topic_reviews(id),
+            parent_theme          TEXT,
+            shared_emotional_core TEXT,
+            shared_visual_core    TEXT,
+            shared_platform_fit   TEXT,
+            family_raw_text       TEXT,
+            generated_at          TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS tk_subthemes (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id                   INTEGER NOT NULL REFERENCES tk_theme_families(id),
+            subtheme_name               TEXT,
+            subtheme_type               TEXT,
+            one_line_direction          TEXT,
+            recommended_pack_archetype  TEXT,
+            recommended_pack_size       TEXT,
+            natural_sticker_count_range TEXT,
+            ai_selected                 INTEGER DEFAULT 1,
+            ai_priority                 TEXT DEFAULT 'medium',
+            ai_target_sticker_count     INTEGER DEFAULT 0,
+            ai_reason                   TEXT,
+            selected                    INTEGER DEFAULT 0,
+            priority                    TEXT DEFAULT 'medium',
+            target_sticker_count        INTEGER DEFAULT 0,
+            allocation_notes            TEXT,
+            status                      TEXT DEFAULT 'draft',
+            created_at                  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS tk_subtheme_briefs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            subtheme_id   INTEGER NOT NULL REFERENCES tk_subthemes(id),
+            brief_status  TEXT,
+            brief_text    TEXT,
+            brief_json    TEXT,
+            generated_at  TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_families_hashtag
+            ON tk_theme_families(hashtag_id);
+        CREATE INDEX IF NOT EXISTS idx_subthemes_family
+            ON tk_subthemes(family_id);
+        CREATE INDEX IF NOT EXISTS idx_subthemes_status
+            ON tk_subthemes(status);
+        CREATE INDEX IF NOT EXISTS idx_subtheme_briefs_subtheme
+            ON tk_subtheme_briefs(subtheme_id);
         """)
         c.commit()
+
+        self._migrate_add_columns()
+
+    def _migrate_add_columns(self) -> None:
+        """Safely add columns introduced in v2 pipeline."""
+        c = self.conn
+        for col, default in [
+            ("family_status", "'pending'"),
+            ("allocation_status", "'pending'"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE tk_hashtags ADD COLUMN {col} TEXT DEFAULT {default}")
+                c.commit()
+            except sqlite3.OperationalError:
+                pass
 
     # ── 爬取数据写入 ─────────────────────────────────────
 
@@ -407,6 +477,299 @@ class TrendDB:
 
     # ── 统计 ──────────────────────────────────────────────
 
+    # ── Theme Family CRUD ────────────────────────────────
+
+    def get_families_needing_expansion(self) -> list[dict]:
+        """获取所有 decision=approve 且 family_status=pending 的 hashtag + review。"""
+        rows = self.conn.execute(
+            """SELECT h.*, r.id as review_id, r.decision, r.normalized_theme,
+                      r.theme_type, r.one_line_interpretation, r.pack_archetype,
+                      r.best_platform, r.visual_symbols, r.emotional_hooks,
+                      r.risk_flags, r.score_total, r.sticker_fit_level
+               FROM tk_hashtags h
+               JOIN tk_topic_reviews r ON r.hashtag_id = h.hashtag_id
+               WHERE r.decision IN ('approve')
+                 AND h.family_status = 'pending'
+               ORDER BY r.score_total DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_theme_family(
+        self,
+        hashtag_id: str,
+        review_id: int,
+        parsed: dict[str, Any],
+        raw_text: str,
+    ) -> int:
+        """保存主题家族及其子题材（含AI推荐配量）。"""
+        c = self.conn
+        now = _now_iso()
+        shared = parsed.get("shared_core", {})
+
+        cur = c.execute(
+            """INSERT INTO tk_theme_families
+            (hashtag_id, review_id, parent_theme,
+             shared_emotional_core, shared_visual_core, shared_platform_fit,
+             family_raw_text, generated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                hashtag_id, review_id,
+                parsed.get("parent_topic", ""),
+                shared.get("emotional_core", ""),
+                shared.get("visual_core", ""),
+                shared.get("platform_fit", ""),
+                raw_text,
+                now,
+            )
+        )
+        family_id = cur.lastrowid
+
+        for sub in parsed.get("subthemes", []):
+            ai_sel = 1 if sub.get("ai_selected", True) else 0
+            ai_count = int(sub.get("ai_target_sticker_count", 0))
+            c.execute(
+                """INSERT INTO tk_subthemes
+                (family_id, subtheme_name, subtheme_type, one_line_direction,
+                 recommended_pack_archetype, recommended_pack_size,
+                 natural_sticker_count_range,
+                 ai_selected, ai_priority, ai_target_sticker_count, ai_reason,
+                 selected, priority, target_sticker_count,
+                 status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
+                (
+                    family_id,
+                    sub.get("subtheme_name", ""),
+                    sub.get("subtheme_type", ""),
+                    sub.get("one_line_direction", ""),
+                    sub.get("recommended_pack_archetype", ""),
+                    sub.get("recommended_pack_size", ""),
+                    sub.get("natural_sticker_count_range", ""),
+                    ai_sel,
+                    sub.get("ai_priority", "medium"),
+                    ai_count,
+                    sub.get("ai_reason", ""),
+                    ai_sel,
+                    sub.get("ai_priority", "medium"),
+                    ai_count,
+                    now,
+                )
+            )
+
+        c.execute(
+            "UPDATE tk_hashtags SET family_status = 'generated' WHERE hashtag_id = ?",
+            (hashtag_id,)
+        )
+        c.commit()
+        return family_id
+
+    def get_theme_family(self, family_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM tk_theme_families WHERE id = ?", (family_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_family_by_hashtag(self, hashtag_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM tk_theme_families WHERE hashtag_id = ? ORDER BY id DESC LIMIT 1",
+            (hashtag_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_subthemes(self, family_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM tk_subthemes WHERE family_id = ? ORDER BY id",
+            (family_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_subtheme(self, subtheme_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM tk_subthemes WHERE id = ?", (subtheme_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_subtheme_allocation(self, subtheme_id: int, data: dict) -> None:
+        """更新人工确认配量。"""
+        c = self.conn
+        c.execute(
+            """UPDATE tk_subthemes SET
+                selected = ?,
+                priority = ?,
+                target_sticker_count = ?,
+                allocation_notes = ?
+            WHERE id = ?""",
+            (
+                1 if data.get("selected") else 0,
+                data.get("priority", "medium"),
+                int(data.get("target_sticker_count", 0)),
+                data.get("allocation_notes", ""),
+                subtheme_id,
+            )
+        )
+        c.commit()
+
+    def confirm_ai_allocation(self, family_id: int) -> None:
+        """一键确认 AI 推荐配量，将 ai_* 复制到正式字段。"""
+        c = self.conn
+        c.execute(
+            """UPDATE tk_subthemes SET
+                selected = ai_selected,
+                priority = ai_priority,
+                target_sticker_count = ai_target_sticker_count,
+                status = CASE WHEN ai_selected = 1 THEN 'brief_pending' ELSE 'skipped' END
+            WHERE family_id = ?""",
+            (family_id,)
+        )
+        c.commit()
+
+    def finalize_allocation(self, family_id: int, hashtag_id: str) -> None:
+        """确认配量后更新子题材 status 和 hashtag allocation_status。"""
+        c = self.conn
+        c.execute(
+            """UPDATE tk_subthemes SET
+                status = CASE WHEN selected = 1 THEN 'brief_pending' ELSE 'skipped' END
+            WHERE family_id = ?""",
+            (family_id,)
+        )
+        c.execute(
+            "UPDATE tk_hashtags SET allocation_status = 'allocated' WHERE hashtag_id = ?",
+            (hashtag_id,)
+        )
+        c.commit()
+
+    def get_selected_subthemes_without_brief(self, family_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT s.*, f.parent_theme, f.shared_emotional_core,
+                      f.shared_visual_core, f.shared_platform_fit,
+                      f.hashtag_id, f.review_id
+               FROM tk_subthemes s
+               JOIN tk_theme_families f ON f.id = s.family_id
+               WHERE s.family_id = ?
+                 AND s.selected = 1
+                 AND s.status = 'brief_pending'
+               ORDER BY s.id""",
+            (family_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_subtheme_brief(
+        self,
+        subtheme_id: int,
+        parsed: dict[str, Any],
+        raw_text: str,
+    ) -> int:
+        c = self.conn
+        now = _now_iso()
+        cur = c.execute(
+            """INSERT INTO tk_subtheme_briefs
+            (subtheme_id, brief_status, brief_text, brief_json, generated_at)
+            VALUES (?, 'generated', ?, ?, ?)""",
+            (
+                subtheme_id,
+                raw_text,
+                json.dumps(parsed, ensure_ascii=False),
+                now,
+            )
+        )
+        c.execute(
+            "UPDATE tk_subthemes SET status = 'brief_ready' WHERE id = ?",
+            (subtheme_id,)
+        )
+        c.commit()
+        return cur.lastrowid
+
+    def get_subtheme_brief(self, subtheme_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM tk_subtheme_briefs WHERE subtheme_id = ? ORDER BY id DESC LIMIT 1",
+            (subtheme_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_subthemes_with_brief(self, family_id: int) -> list[dict]:
+        """获取已有 brief 的选中子题材。"""
+        rows = self.conn.execute(
+            """SELECT s.*, sb.brief_json, sb.brief_status as brief_gen_status
+               FROM tk_subthemes s
+               LEFT JOIN tk_subtheme_briefs sb ON sb.subtheme_id = s.id
+               WHERE s.family_id = ?
+                 AND s.selected = 1
+                 AND s.status = 'brief_ready'
+               ORDER BY s.id""",
+            (family_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_subthemes_by_ids(self, subtheme_ids: list[int]) -> None:
+        """删除指定子题材及其 brief（用于选中重新生成）。"""
+        if not subtheme_ids:
+            return
+        c = self.conn
+        ph = ",".join("?" * len(subtheme_ids))
+        c.execute(f"DELETE FROM tk_subtheme_briefs WHERE subtheme_id IN ({ph})", subtheme_ids)
+        c.execute(f"DELETE FROM tk_subthemes WHERE id IN ({ph})", subtheme_ids)
+        c.commit()
+
+    def add_subthemes_to_family(self, family_id: int, subthemes: list[dict]) -> list[int]:
+        """向已有家族追加子题材（补充扩展 / 替换重生成后写回）。"""
+        c = self.conn
+        now = _now_iso()
+        new_ids: list[int] = []
+        for sub in subthemes:
+            ai_sel = 1 if sub.get("ai_selected", True) else 0
+            ai_count = int(sub.get("ai_target_sticker_count", 0))
+            cur = c.execute(
+                """INSERT INTO tk_subthemes
+                (family_id, subtheme_name, subtheme_type, one_line_direction,
+                 recommended_pack_archetype, recommended_pack_size,
+                 natural_sticker_count_range,
+                 ai_selected, ai_priority, ai_target_sticker_count, ai_reason,
+                 selected, priority, target_sticker_count,
+                 status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
+                (
+                    family_id,
+                    sub.get("subtheme_name", ""),
+                    sub.get("subtheme_type", ""),
+                    sub.get("one_line_direction", ""),
+                    sub.get("recommended_pack_archetype", ""),
+                    sub.get("recommended_pack_size", ""),
+                    sub.get("natural_sticker_count_range", ""),
+                    ai_sel,
+                    sub.get("ai_priority", "medium"),
+                    ai_count,
+                    sub.get("ai_reason", ""),
+                    ai_sel,
+                    sub.get("ai_priority", "medium"),
+                    ai_count,
+                    now,
+                )
+            )
+            new_ids.append(cur.lastrowid)
+        c.commit()
+        return new_ids
+
+    def delete_family(self, family_id: int) -> None:
+        """删除家族及其所有子题材和 brief（全部推倒重来）。"""
+        c = self.conn
+        sub_ids = [r[0] for r in c.execute(
+            "SELECT id FROM tk_subthemes WHERE family_id = ?", (family_id,)
+        ).fetchall()]
+        if sub_ids:
+            placeholders = ",".join("?" * len(sub_ids))
+            c.execute(f"DELETE FROM tk_subtheme_briefs WHERE subtheme_id IN ({placeholders})", sub_ids)
+        c.execute("DELETE FROM tk_subthemes WHERE family_id = ?", (family_id,))
+        family = c.execute("SELECT hashtag_id FROM tk_theme_families WHERE id = ?", (family_id,)).fetchone()
+        c.execute("DELETE FROM tk_theme_families WHERE id = ?", (family_id,))
+        if family:
+            c.execute(
+                "UPDATE tk_hashtags SET family_status = 'pending', allocation_status = 'pending' "
+                "WHERE hashtag_id = ?",
+                (family["hashtag_id"],)
+            )
+        c.commit()
+
+    # ── 统计 ──────────────────────────────────────────────
+
     def status_summary(self) -> dict[str, Any]:
         c = self.conn
         total = c.execute("SELECT COUNT(*) FROM tk_hashtags").fetchone()[0]
@@ -439,6 +802,14 @@ class TrendDB:
             "WHERE brief_status = 'pending' AND review_status = 'reviewed'"
         ).fetchone()[0]
 
+        families = c.execute("SELECT COUNT(*) FROM tk_theme_families").fetchone()[0]
+        families_pending = c.execute(
+            "SELECT COUNT(*) FROM tk_hashtags WHERE family_status = 'pending' AND review_status = 'reviewed'"
+        ).fetchone()[0]
+        alloc_pending = c.execute(
+            "SELECT COUNT(*) FROM tk_hashtags WHERE allocation_status = 'pending' AND family_status = 'generated'"
+        ).fetchone()[0]
+
         crawls = c.execute("SELECT COUNT(*) FROM tk_crawl_logs").fetchone()[0]
 
         return {
@@ -451,5 +822,8 @@ class TrendDB:
             "reject": reject,
             "briefs_generated": briefs_done,
             "briefs_pending": briefs_pending,
+            "families_generated": families,
+            "families_pending": families_pending,
+            "allocation_pending": alloc_pending,
             "total_crawls": crawls,
         }

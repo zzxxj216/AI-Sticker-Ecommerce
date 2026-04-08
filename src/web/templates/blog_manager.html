@@ -212,6 +212,7 @@ function closeBlogModal() {
 async function copyMarkdown(blogId) {
   try {
     const resp = await fetch(`/api/blogs/${blogId}`);
+    if (!resp.ok) throw new Error('获取文章失败');
     const data = await resp.json();
     await navigator.clipboard.writeText(data.content || '');
     alert('Markdown 已复制到剪贴板');
@@ -257,10 +258,18 @@ async function batchDelete() {
   const ids = getSelectedIds();
   if (!ids.length) return;
   if (!confirm(`确认删除 ${ids.length} 篇文章？`)) return;
-  for (const id of ids) {
-    await fetch(`/api/blogs/${id}`, {method:'DELETE'});
+  try {
+    let failed = 0;
+    for (const id of ids) {
+      const resp = await fetch(`/api/blogs/${id}`, {method:'DELETE'});
+      if (!resp.ok) failed++;
+    }
+    if (failed) alert(`${failed} 篇删除失败`);
+    location.reload();
+  } catch (e) {
+    alert('网络错误：' + e.message);
+    location.reload();
   }
-  location.reload();
 }
 
 // mdToHtml() provided by /static/common.js

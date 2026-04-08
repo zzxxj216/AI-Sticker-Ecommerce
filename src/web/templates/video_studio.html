@@ -15,11 +15,27 @@
     <div class="gen-form-row">
       <div class="gen-field">
         <label>选择已完成的卡包 (Job)</label>
+        {% set fam_jobs = jobs|rejectattr('family_id', 'none')|rejectattr('family_id', 'equalto', '')|list %}
+        {% set ns_solo = namespace(any=false) %}
+        {% for j in jobs %}{% if not j.family_id %}{% set ns_solo.any = true %}{% endif %}{% endfor %}
         <select id="sel_job">
           <option value="">-- 选择卡包 --</option>
-          {% for j in jobs %}
-          <option value="{{ j.id }}">{{ j.trend_name or j.id }} ({{ j.image_count }} 张)</option>
+          {% for family_id, group in (fam_jobs|sort(attribute='family_id')|groupby('family_id')) %}
+          <optgroup label="Parent Theme（家族） · {{ family_id }}">
+            {% for j in group %}
+            <option value="{{ j.id }}" data-family-id="{{ family_id }}">{{ (j.variant_label or j.trend_name or j.id) }} ({{ j.image_count|default(0) }} 张)</option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
+          {% if ns_solo.any %}
+          <optgroup label="独立卡包">
+            {% for j in jobs %}
+            {% if not j.family_id %}
+            <option value="{{ j.id }}">{{ (j.trend_name or j.id) }} ({{ j.image_count|default(0) }} 张)</option>
+            {% endif %}
+            {% endfor %}
+          </optgroup>
+          {% endif %}
         </select>
       </div>
       <div class="gen-field">
@@ -38,6 +54,7 @@
         </button>
       </div>
     </div>
+    <div id="vs_family_note" class="vs-family-note" style="display:none;margin-top:10px;padding:10px 12px;font-size:12px;color:var(--text-muted);background:var(--surface-hover,#f9fafb);border-radius:8px;border:1px solid var(--line-soft,#e5e7eb);max-width:720px;" role="status" aria-live="polite"></div>
     <div id="gen_status" style="margin-top:12px;font-size:13px;color:var(--text-muted);display:none;"></div>
   </div>
 </section>
@@ -260,6 +277,27 @@ document.querySelectorAll('.vs-toggle').forEach(btn=>{
 const statusEl=document.getElementById('gen_status');
 function showStatus(msg,color){statusEl.style.display='block';statusEl.style.color=color||'var(--text-muted)';statusEl.textContent=msg;}
 
+function updateFamilySiblingNote(){
+  const sel=document.getElementById('sel_job');
+  const note=document.getElementById('vs_family_note');
+  if(!sel||!note)return;
+  const opt=sel.options[sel.selectedIndex];
+  if(!opt||!opt.value){note.style.display='none';note.textContent='';return;}
+  const fid=opt.getAttribute('data-family-id');
+  if(!fid){note.style.display='none';note.textContent='';return;}
+  const sibs=[];
+  for(let i=0;i<sel.options.length;i++){
+    const o=sel.options[i];
+    if(!o.value||o===opt)continue;
+    if(o.getAttribute('data-family-id')===fid)sibs.push(o.textContent);
+  }
+  if(!sibs.length){note.style.display='none';note.textContent='';return;}
+  note.textContent='同家族其他卡包： '+sibs.join(' · ');
+  note.style.display='block';
+}
+document.getElementById('sel_job')?.addEventListener('change',updateFamilySiblingNote);
+updateFamilySiblingNote();
+
 async function startGenerate(){
   const jobId=document.getElementById('sel_job').value;
   const comboId=document.getElementById('sel_combo').value;
@@ -307,12 +345,18 @@ async function generateScript(planId){
 
 async function deletePlan(planId){
   if(!confirm('确定删除该规划？'))return;
-  await fetch('/api/v2/video-plans/'+planId,{method:'DELETE'});
+  try{
+    const r=await fetch('/api/v2/video-plans/'+planId,{method:'DELETE'});
+    if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||'删除失败');}
+  }catch(e){alert('网络错误');}
   location.reload();
 }
 async function deleteScript(scriptId){
   if(!confirm('确定删除该脚本？'))return;
-  await fetch('/api/v2/video-scripts/'+scriptId,{method:'DELETE'});
+  try{
+    const r=await fetch('/api/v2/video-scripts/'+scriptId,{method:'DELETE'});
+    if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||'删除失败');}
+  }catch(e){alert('网络错误');}
   location.reload();
 }
 </script>

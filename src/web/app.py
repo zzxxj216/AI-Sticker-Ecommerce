@@ -9,6 +9,7 @@ import secrets
 import zipfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
@@ -38,10 +39,21 @@ app = FastAPI(title="Feishu Sticker Workbench")
 
 auth_service = FeishuAuthService()
 
+_session_secret = os.getenv("FEISHU_H5_SESSION_SECRET") or os.getenv("SESSION_SECRET")
+if not _session_secret:
+    _env = os.getenv("ENV", "development")
+    if _env == "production":
+        raise RuntimeError(
+            "SESSION_SECRET or FEISHU_H5_SESSION_SECRET must be set in production. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+    _session_secret = "dev-session-secret-NOT-FOR-PRODUCTION"
+    logger.warning("Using insecure default session secret — set SESSION_SECRET for production")
+
 app.add_middleware(AuthMiddleware, feishu_configured=auth_service.is_configured())
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("FEISHU_H5_SESSION_SECRET", os.getenv("SESSION_SECRET", "dev-session-secret")),
+    secret_key=_session_secret,
     same_site="lax",
 )
 if STATIC_DIR.exists():
@@ -185,10 +197,11 @@ def feishu_callback(request: Request, code: str | None = None, state: str | None
         request.session.pop("feishu_login_state", None)
         request.session["user"] = user
         request.session["feishu_access_token"] = access_token
-        next_url = request.session.pop("next_url", "/trends")
+        next_url = _safe_next_url(request.session.pop("next_url", "/trends"))
         return RedirectResponse(url=next_url, status_code=303)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("Feishu callback failed: %s", exc)
+        raise HTTPException(status_code=400, detail="飞书登录失败，请重试") from exc
 
 
 @app.get("/auth/logout")
@@ -199,11 +212,19 @@ def logout(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/login", status_code=303)
 
 
+def _safe_next_url(url: str) -> str:
+    """Validate redirect target to prevent open-redirect attacks."""
+    if not url or not url.startswith("/") or url.startswith("//"):
+        return "/trends"
+    return url
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/trends"):
-    request.session["next_url"] = next
+    safe_next = _safe_next_url(next)
+    request.session["next_url"] = safe_next
     if _current_user(request):
-        return RedirectResponse(url=next, status_code=303)
+        return RedirectResponse(url=safe_next, status_code=303)
     return templates.TemplateResponse(
         request,
         "login.html",
@@ -250,7 +271,7 @@ def crawl_tiktok(background_tasks: BackgroundTasks) -> dict:
         return {"message": "TikTok crawl started", "job_id": job_id}
     except Exception as exc:
         logger.exception("TikTok crawl failed")
-        return {"error": str(exc)}
+        return JSONResponse(status_code=500, content={"error": "TikTok 抓取启动失败，请查看日志"})
 
 
 @app.get("/api/trends")
@@ -275,9 +296,10 @@ def api_trend_approve(
     trend = trend_service.approve_trend(trend_id, reviewed_by=reviewer)
     if not trend:
         raise HTTPException(status_code=404, detail="Trend not found")
-    trend_service.enqueue_brief_after_approve_if_needed(
-        trend_id, reviewer, "approve_api", background_tasks
-    )
+    if not trend_id.startswith(("tiktok:", "tk:")):
+        trend_service.enqueue_brief_after_approve_if_needed(
+            trend_id, reviewer, "approve_api", background_tasks
+        )
     return trend_service.get_trend(trend_id) or trend
 
 
@@ -321,6 +343,7 @@ def api_brief_status(trend_id: str) -> dict:
 @app.get("/api/trends/{trend_id}/brief-logs")
 def api_brief_gen_logs(trend_id: str, limit: int = 100) -> dict:
     """Brief 生成/保存过程日志（数据库 + 同步写入 logs/ops.brief.log）。"""
+    limit = min(max(1, limit), 500)
     trend = trend_service.get_trend(trend_id)
     if not trend:
         raise HTTPException(404, "Trend not found")
@@ -341,6 +364,124 @@ def api_retry_brief(trend_id: str, background_tasks: BackgroundTasks) -> dict:
     )
     background_tasks.add_task(trend_service.generate_brief_background, trend_id)
     return {"ok": True, "status": "generating"}
+
+
+# ── Theme Family API ────────────────────────────────────
+
+@app.get("/api/trends/{trend_id}/family")
+def api_get_family(trend_id: str) -> dict:
+    family = trend_service.get_theme_family(trend_id)
+    if not family:
+        return {"family": None}
+    return {"family": family}
+
+
+@app.post("/api/trends/{trend_id}/family")
+def api_generate_family(trend_id: str, background_tasks: BackgroundTasks) -> dict:
+    """全部推倒重来（重新生成整个家族）。"""
+    try:
+        result = trend_service.generate_theme_family_background(trend_id)
+        return {"ok": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/trends/{trend_id}/family/regenerate-selected")
+def api_regenerate_selected(trend_id: str, payload: dict) -> dict:
+    """重新生成选中的子题材（替换模式）。"""
+    ids = payload.get("subtheme_ids", [])
+    if not ids:
+        raise HTTPException(400, "No subtheme_ids provided")
+    try:
+        return {"ok": True, **trend_service.regenerate_selected_subthemes(trend_id, ids)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/trends/{trend_id}/allocation")
+def api_save_allocation(trend_id: str, payload: dict) -> dict:
+    allocations = payload.get("allocations", [])
+    if not allocations:
+        raise HTTPException(400, "No allocations provided")
+    return trend_service.save_allocation(trend_id, allocations)
+
+
+@app.post("/api/trends/{trend_id}/confirm-ai-allocation")
+def api_confirm_ai_allocation(trend_id: str) -> dict:
+    try:
+        return trend_service.confirm_ai_allocation(trend_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/trends/{trend_id}/subtheme-briefs")
+def api_generate_subtheme_briefs(trend_id: str, background_tasks: BackgroundTasks) -> dict:
+    try:
+        background_tasks.add_task(trend_service.generate_subtheme_briefs_background, trend_id)
+        return {"ok": True, "status": "generating"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/trends/{trend_id}/queue-family")
+def api_queue_family(request: Request, trend_id: str) -> dict:
+    created_by = (_current_user(request) or {}).get("name") or "system"
+    try:
+        jobs = trend_service.queue_family(trend_id, created_by=created_by)
+        return {"ok": True, "jobs_created": len(jobs), "jobs": jobs}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/subthemes/{subtheme_id}")
+def api_get_subtheme(subtheme_id: int) -> dict:
+    from trend_fetcher.trend_db import TrendDB
+    tdb = TrendDB("data/ops_workbench.db")
+    sub = tdb.get_subtheme(subtheme_id)
+    if not sub:
+        raise HTTPException(404, "Subtheme not found")
+    brief = tdb.get_subtheme_brief(subtheme_id)
+    sub["brief"] = brief
+    return sub
+
+
+@app.get("/api/subthemes/{subtheme_id}/brief")
+def api_get_subtheme_brief(subtheme_id: int) -> dict:
+    from trend_fetcher.trend_db import TrendDB
+    tdb = TrendDB("data/ops_workbench.db")
+    brief = tdb.get_subtheme_brief(subtheme_id)
+    if not brief:
+        return {"brief": None}
+    return {"brief": brief}
+
+
+@app.post("/api/subthemes/{subtheme_id}/queue")
+def api_queue_subtheme(request: Request, subtheme_id: int) -> dict:
+    created_by = (_current_user(request) or {}).get("name") or "system"
+    try:
+        return trend_service.queue_subtheme(subtheme_id, created_by=created_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Theme Family HTML Page ─────────────────────────────
+
+@app.get("/trends/{trend_id}/family", response_class=HTMLResponse)
+def page_family_detail(request: Request, trend_id: str):
+    trend = trend_service.get_trend(trend_id)
+    if not trend:
+        return templates.TemplateResponse("error.html", _base_context(request, message="Trend 不存在"), status_code=404)
+    family = trend_service.get_theme_family(trend_id)
+    return templates.TemplateResponse(
+        "family_detail.html",
+        _base_context(
+            request,
+            trend=trend,
+            family=family,
+            trend_id=trend_id,
+            page_title=f"主题家族 — {trend.get('trend_name') or trend.get('title') or trend_id}",
+        ),
+    )
 
 
 @app.get("/api/jobs")
@@ -458,6 +599,7 @@ def trends_page(request: Request):
 def hot_news_page(request: Request, page: int = 1,
                   sort: str = 'created_at', dir: str = 'desc',
                   date_from: str = '', date_to: str = ''):
+    page = max(1, page)
     per_page = 10
     offset = (page - 1) * per_page
     items, total = trend_service.db.list_raw_news(
@@ -498,6 +640,7 @@ def hot_news_page(request: Request, page: int = 1,
 def tk_topics_page(request: Request, page: int = 1,
                    sort: str = 'video_views', dir: str = 'desc',
                    date_from: str = '', date_to: str = ''):
+    page = max(1, page)
     per_page = 20
     offset = (page - 1) * per_page
     items, total = trend_service.db.list_tk_hashtags_paged(
@@ -545,6 +688,7 @@ def _fmt_items_ts(items: list) -> list:
 def aggregated_topics_page(request: Request, q: str | None = None, page: int = 1,
                            sort: str = 'created_at', dir: str = 'desc',
                            date_from: str = '', date_to: str = ''):
+    page = max(1, page)
     per_page = 10
     items, total = trend_service.list_archive_trends(
         search_text=q, page=page, per_page=per_page,
@@ -588,6 +732,7 @@ def approved_page(request: Request):
 def archive_page(request: Request, q: str | None = None, page: int = 1,
                  sort: str = 'created_at', dir: str = 'desc',
                  date_from: str = '', date_to: str = ''):
+    page = max(1, page)
     per_page = 20
     items, total = trend_service.list_archive_trends(
         search_text=q, page=page, per_page=per_page,
@@ -695,9 +840,10 @@ def save_brief_form(request: Request, trend_id: str, brief_json: str = Form(...)
 def approve_form(request: Request, trend_id: str, background_tasks: BackgroundTasks):
     reviewer = (_current_user(request) or {}).get("name", "anonymous")
     trend_service.approve_trend(trend_id, reviewed_by=reviewer)
-    trend_service.enqueue_brief_after_approve_if_needed(
-        trend_id, reviewer, "approve_form", background_tasks
-    )
+    if not trend_id.startswith(("tiktok:", "tk:")):
+        trend_service.enqueue_brief_after_approve_if_needed(
+            trend_id, reviewer, "approve_form", background_tasks
+        )
     return RedirectResponse(url=f"/trends/{trend_id}", status_code=303)
 
 
@@ -735,7 +881,8 @@ def batch_queue(request: Request, payload: dict):
             job = trend_service.queue_trend(tid, created_by=created_by)
             results.append({"trend_id": tid, "ok": True, "job_id": job.get("id")})
         except Exception as exc:
-            results.append({"trend_id": tid, "ok": False, "error": str(exc)})
+            logger.warning("batch-queue failed for %s: %s", tid, exc)
+            results.append({"trend_id": tid, "ok": False, "error": "排队失败"})
     return {"results": results}
 
 
@@ -877,6 +1024,29 @@ def _safe_folder_name(name: str) -> str:
     return name.strip()[:80] or 'pack'
 
 
+_ALLOWED_OUTPUT_ROOT = Path("output").resolve()
+
+
+def _is_safe_output_path(file_path: str) -> bool:
+    """Verify a file path is within the allowed output directory."""
+    try:
+        resolved = Path(file_path).resolve()
+        return str(resolved).startswith(str(_ALLOWED_OUTPUT_ROOT))
+    except (OSError, ValueError):
+        return False
+
+
+def _content_disposition(filename: str) -> str:
+    """Build a Content-Disposition header that handles non-ASCII filenames (RFC 5987)."""
+    from urllib.parse import quote
+    try:
+        filename.encode("latin-1")
+        return f'attachment; filename="{filename}"'
+    except UnicodeEncodeError:
+        encoded = quote(filename, safe="")
+        return f"attachment; filename*=UTF-8''{encoded}"
+
+
 @app.get("/api/stickers/{job_id}/download")
 def download_single_pack(job_id: str):
     paths = trend_service.db.get_job_image_paths(job_id)
@@ -888,6 +1058,8 @@ def download_single_pack(job_id: str):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fp in paths:
+            if not _is_safe_output_path(fp):
+                continue
             p = Path(fp)
             if p.is_file():
                 zf.write(p, f"{pack_name}/{p.name}")
@@ -895,7 +1067,7 @@ def download_single_pack(job_id: str):
     return StreamingResponse(
         buf,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{pack_name}.zip"'},
+        headers={"Content-Disposition": _content_disposition(f"{pack_name}.zip")},
     )
 
 
@@ -919,6 +1091,8 @@ def download_batch_packs(payload: dict):
             else:
                 seen_folders[folder] = 0
             for fp in info["paths"]:
+                if not _is_safe_output_path(fp):
+                    continue
                 p = Path(fp)
                 if p.is_file():
                     zf.write(p, f"{folder}/{p.name}")
@@ -991,7 +1165,7 @@ def api_download_blog(blog_id: str):
     return Response(
         content=draft.get("content", ""),
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename)},
     )
 
 
@@ -1031,9 +1205,10 @@ def api_publish_blog(blog_id: str, payload: dict):
         )
         return {"status": new_status, "shopify_url": shopify_url, "shopify_article_id": shopify_id}
     except ValueError as e:
-        raise HTTPException(400, f"Shopify 未配置或凭证错误: {e}")
+        raise HTTPException(400, "Shopify 未配置或凭证错误")
     except Exception as e:
-        raise HTTPException(500, f"发布失败: {e}")
+        logger.error("Blog publish failed for %s: %s", blog_id, e, exc_info=True)
+        raise HTTPException(500, "发布失败，请查看日志")
 
 
 @app.delete("/api/blogs/{blog_id}")
@@ -1063,7 +1238,10 @@ def chat_history_page(request: Request):
 @app.get("/api/chat-history/sessions")
 def api_list_chat_sessions(request: Request):
     agent_type = request.query_params.get("type", "")
-    limit = int(request.query_params.get("limit", "100"))
+    try:
+        limit = min(max(1, int(request.query_params.get("limit", "100"))), 500)
+    except (ValueError, TypeError):
+        limit = 100
     sessions = trend_service.db.list_chat_sessions(agent_type=agent_type or None, limit=limit)
     return {"sessions": sessions}
 
@@ -1190,7 +1368,7 @@ def api_v2_generate_video_plan(request: Request, payload: dict):
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error("Video plan generation failed: %s", e, exc_info=True)
-        raise HTTPException(500, f"Plan generation failed: {e}")
+        raise HTTPException(500, "视频计划生成失败，请查看日志")
     return plan
 
 
@@ -1228,7 +1406,7 @@ def api_v2_generate_video_script(request: Request, payload: dict):
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error("Video script generation failed: %s", e, exc_info=True)
-        raise HTTPException(500, f"Script generation failed: {e}")
+        raise HTTPException(500, "视频脚本生成失败，请查看日志")
     return script
 
 
@@ -1249,7 +1427,7 @@ def api_v2_generate_full(request: Request, payload: dict):
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error("Full video script generation failed: %s", e, exc_info=True)
-        raise HTTPException(500, f"Full generation failed: {e}")
+        raise HTTPException(500, "视频脚本一键生成失败，请查看日志")
     return result
 
 
@@ -1332,7 +1510,20 @@ def api_v2_assemble_input(payload: dict):
     if len(descs) > 3:
         script_input["collection_sheet"] = "available"
 
-    return {"script_input": script_input}
+    family_context = None
+    fid = job.get("family_id")
+    if fid:
+        sibling_jobs = trend_service.db.list_jobs_by_family(fid)
+        family_context = {
+            "family_id": fid,
+            "variant_label": job.get("variant_label", ""),
+            "sibling_packs": [
+                {"job_id": sj["id"], "trend_name": sj["trend_name"], "status": sj["status"], "variant_label": sj.get("variant_label", "")}
+                for sj in sibling_jobs if sj["id"] != job_id
+            ],
+        }
+
+    return {"script_input": script_input, "family_context": family_context}
 
 
 # ── V2: HTML Pages ──────────────────────────────────────────

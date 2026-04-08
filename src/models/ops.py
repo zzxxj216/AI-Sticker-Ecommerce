@@ -66,6 +66,9 @@ class GenerationJob(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     updated_at: datetime = Field(default_factory=_now)
+    family_id: str | None = None
+    subtheme_id: int | None = None
+    variant_label: str | None = None
 
 
 class GenerationOutput(BaseModel):

@@ -262,6 +262,7 @@
       }
 
       if (msg.type === 'complete') {
+        evtSource.close();
         bar.style.width = '100%';
         steps.innerHTML += `<div style="color:#16a34a;font-weight:600;">🎉 生成完成！共 ${msg.data.image_count} 张卡贴，耗时 ${Math.round(msg.data.duration || 0)}s</div>`;
         showResults(msg.data);
@@ -281,6 +282,7 @@
 
     evtSource.onerror = function() {
       evtSource.close();
+      addBotMsg('<span style="color:#ef4444;">连接中断，请刷新页面重试。</span>');
     };
   }
 
@@ -309,11 +311,13 @@
 
   async function resetChat() {
     if (!confirm('确认清空对话历史？')) return;
-    await fetch(API + '/reset', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ session_id: SESSION_ID }),
-    });
+    try {
+      await fetch(API + '/reset', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: SESSION_ID }),
+      });
+    } catch (e) { /* best-effort */ }
     messages.innerHTML = '';
     document.getElementById('progress-panel').style.display = 'none';
     document.getElementById('result-panel').style.display = 'none';

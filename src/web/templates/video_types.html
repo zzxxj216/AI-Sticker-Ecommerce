@@ -180,7 +180,10 @@ async function saveType(e){
 }
 
 async function toggleType(typeId,active){
-  await fetch('/api/v2/video-types/'+typeId+'/toggle',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_active:active==='true'||active===true})});
+  try{
+    const r=await fetch('/api/v2/video-types/'+typeId+'/toggle',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_active:active==='true'||active===true})});
+    if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||'切换失败');}
+  }catch(e){alert('网络错误');}
   location.reload();
 }
 

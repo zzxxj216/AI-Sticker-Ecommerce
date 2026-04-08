@@ -24,7 +24,7 @@
 {% if jobs %}
 <div id="galleryContainer">
 {% for job in jobs %}
-<section class="panel gallery-card" data-idx="{{ loop.index0 }}" style="margin-bottom:20px;">
+<section class="panel gallery-card" data-idx="{{ loop.index0 }}" data-family-id="{{ job.family_id or '' }}" data-variant-label="{{ job.variant_label or '' }}" style="margin-bottom:20px;">
   <div class="panel-header gallery-card-header" style="flex-wrap:wrap;gap:12px;cursor:pointer;user-select:none;" onclick="toggleCard(this)">
     <div style="display:flex;align-items:center;gap:10px;">
       <svg class="collapse-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform 0.2s;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
@@ -36,6 +36,9 @@
       <span class="badge {% if job.source_type == 'tiktok' %}badge-ai-watch{% elif job.source_type == 'chat' %}badge-skipped{% else %}badge-approved{% endif %}" style="font-size:11px;">
         {% if job.source_type == 'tiktok' %}TikTok{% elif job.source_type == 'chat' %}AI 对话{% else %}News聚合{% endif %}
       </span>
+      {% endif %}
+      {% if job.variant_label %}
+      <span class="badge" style="background:#e0e7ff;color:#3730a3;font-size:11px;">{{ job.variant_label }}</span>
       {% endif %}
     </div>
     <div style="display:flex;align-items:center;gap:14px;color:var(--text-muted);font-size:13px;">
@@ -96,66 +99,120 @@
 .gallery-card.collapsed .gallery-card-body { max-height:0 !important; opacity:0; padding:0 !important; }
 .gallery-card.collapsed .collapse-chevron { transform: rotate(-90deg); }
 .gallery-card-header:hover { background: var(--surface-hover); }
+.family-group { margin-bottom:20px; border:2px solid var(--primary, #7c5cfc); border-radius:var(--radius-lg, 12px); overflow:hidden; }
+.family-group-header { display:flex; align-items:center; gap:10px; padding:14px 24px; background:linear-gradient(135deg, rgba(124,92,252,0.08), rgba(6,182,212,0.06)); cursor:pointer; user-select:none; border-bottom:1px solid var(--line-soft); }
+.family-group-header:hover { background:linear-gradient(135deg, rgba(124,92,252,0.14), rgba(6,182,212,0.1)); }
+.family-group-header .collapse-chevron { transition:transform 0.2s; flex-shrink:0; }
+.family-group.collapsed .family-group-header .collapse-chevron { transform:rotate(-90deg); }
+.family-group.collapsed .family-group-body { max-height:0; overflow:hidden; opacity:0; }
+.family-group-body { transition:max-height 0.3s ease, opacity 0.2s ease; }
+.family-group .gallery-card { margin-bottom:0 !important; border-radius:0; box-shadow:none; border-bottom:1px solid var(--line-soft); }
+.family-group .gallery-card:last-child { border-bottom:none; }
 </style>
 
 <script>
 (function(){
-  const cards = Array.from(document.querySelectorAll('.gallery-card'));
-  const total = cards.length;
-  if(!total) return;
+  var container = document.getElementById('galleryContainer');
+  if (!container) return;
+  var allCards = Array.from(container.querySelectorAll('.gallery-card'));
+  if (!allCards.length) return;
 
-  let page = 0;
-  let pageSize = parseInt(document.getElementById('galPageSize').value) || 10;
+  function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-  function loadImages(card) {
-    card.querySelectorAll('img[data-src]').forEach(function(img) {
-      if (!img.src || img.src === window.location.href) {
-        img.src = img.dataset.src;
-      }
+  /* ── Family grouping: rearrange DOM ── */
+  var familyMap = {}, itemOrder = [];
+  allCards.forEach(function(card) {
+    var fid = card.dataset.familyId;
+    if (fid) {
+      if (!familyMap[fid]) { familyMap[fid] = []; itemOrder.push({ type:'family', id:fid }); }
+      familyMap[fid].push(card);
+    } else {
+      itemOrder.push({ type:'standalone', card:card });
+    }
+  });
+
+  container.innerHTML = '';
+  itemOrder.forEach(function(item) {
+    if (item.type === 'standalone') { container.appendChild(item.card); return; }
+    var cards = familyMap[item.id];
+    if (cards.length <= 1) { container.appendChild(cards[0]); return; }
+
+    var wrapper = document.createElement('div');
+    wrapper.className = 'family-group';
+    wrapper.dataset.familyId = item.id;
+
+    var totalImg = cards.reduce(function(s,c){
+      var b = c.querySelector('.badge'); return s + (parseInt(b ? b.textContent : '0') || 0);
+    }, 0);
+    var nameEl = cards[0].querySelector('h2 a');
+    var parentName = nameEl ? nameEl.textContent.trim() : item.id;
+
+    var hdr = document.createElement('div');
+    hdr.className = 'family-group-header';
+    hdr.innerHTML =
+      '<svg class="collapse-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>' +
+      '<span style="font-size:18px;">📦</span> ' +
+      '<strong style="font-size:15px;">' + escHtml(parentName) + '</strong> ' +
+      '<span class="badge" style="background:#ede9fe;color:#5b21b6;">' + cards.length + ' 个子包</span> ' +
+      '<span class="badge" style="background:#dcfce7;color:#166534;">' + totalImg + ' 张图片</span>';
+    hdr.addEventListener('click', function(){ wrapper.classList.toggle('collapsed'); });
+
+    wrapper.appendChild(hdr);
+    var body = document.createElement('div');
+    body.className = 'family-group-body';
+    cards.forEach(function(c){ body.appendChild(c); });
+    wrapper.appendChild(body);
+    container.appendChild(wrapper);
+  });
+
+  /* ── Pagination (top-level items: family groups + standalone cards) ── */
+  var items = Array.from(container.children);
+  var total = items.length;
+  var totalPacks = allCards.length;
+  var page = 0;
+  var pageSize = parseInt(document.getElementById('galPageSize').value) || 10;
+
+  function loadImages(el) {
+    el.querySelectorAll('img[data-src]').forEach(function(img) {
+      if (!img.src || img.src === window.location.href) img.src = img.dataset.src;
     });
   }
-
-  function unloadImages(card) {
-    card.querySelectorAll('img[data-src]').forEach(function(img) {
-      img.removeAttribute('src');
-      img.style.opacity = '0';
+  function unloadImages(el) {
+    el.querySelectorAll('img[data-src]').forEach(function(img) {
+      img.removeAttribute('src'); img.style.opacity = '0';
     });
   }
 
   function render(){
-    const pages = Math.ceil(total / pageSize) || 1;
-    if(page >= pages) page = pages - 1;
-    const start = page * pageSize;
-    const end = start + pageSize;
-    cards.forEach(function(c, i) {
+    var pages = Math.ceil(total / pageSize) || 1;
+    if (page >= pages) page = pages - 1;
+    var start = page * pageSize, end = start + pageSize;
+    items.forEach(function(el, i) {
       var visible = i >= start && i < end;
-      c.style.display = visible ? '' : 'none';
-      if (visible) loadImages(c); else unloadImages(c);
+      el.style.display = visible ? '' : 'none';
+      if (visible) loadImages(el); else unloadImages(el);
     });
-    document.getElementById('galPageInfo').textContent = '第 '+(page+1)+' / '+pages+' 页（共 '+total+' 个卡贴包）';
+    document.getElementById('galPageInfo').textContent = '第 '+(page+1)+' / '+pages+' 页（共 '+total+' 项）';
     document.getElementById('galPrev').disabled = page === 0;
     document.getElementById('galNext').disabled = page >= pages - 1;
-    document.getElementById('galleryInfo').textContent = '共 '+total+' 个卡贴包';
+    document.getElementById('galleryInfo').textContent = '共 '+totalPacks+' 个卡贴包';
   }
 
   window.galGo = function(d){ page += d; render(); window.scrollTo({top:0,behavior:'smooth'}); };
-
   document.getElementById('galPageSize').addEventListener('change', function(){
-    pageSize = parseInt(this.value) || 10;
-    page = 0;
-    render();
+    pageSize = parseInt(this.value) || 10; page = 0; render();
   });
-
   render();
 
-  /* collapse / expand */
-  let allCollapsed = false;
+  /* ── Collapse / expand all ── */
+  var allCollapsed = false;
   window.toggleCard = function(header){
     header.closest('.gallery-card').classList.toggle('collapsed');
   };
   document.getElementById('toggleCollapseAll').addEventListener('click', function(){
     allCollapsed = !allCollapsed;
-    cards.forEach(c => { c.classList.toggle('collapsed', allCollapsed); });
+    document.querySelectorAll('.gallery-card').forEach(function(c){ c.classList.toggle('collapsed', allCollapsed); });
+    document.querySelectorAll('.family-group').forEach(function(g){ g.classList.toggle('collapsed', allCollapsed); });
     this.querySelector('span').textContent = allCollapsed ? '全部展开' : '全部折叠';
     this.querySelector('svg').style.transform = allCollapsed ? 'rotate(-90deg)' : '';
   });

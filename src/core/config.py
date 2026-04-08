@@ -137,8 +137,16 @@ class Config:
                 base[key] = value
     
     def _validate_config(self):
-        """验证配置（仅做基础检查，API Key 由各 Service 自行校验）"""
-        pass
+        """验证配置：检查关键路径可用性，API Key 由各 Service 自行校验"""
+        env = os.getenv("ENV", "development")
+        if env == "production":
+            secret = os.getenv("FEISHU_H5_SESSION_SECRET") or os.getenv("SESSION_SECRET")
+            if not secret:
+                import warnings
+                warnings.warn(
+                    "SESSION_SECRET is not set in production — session security is compromised",
+                    stacklevel=2,
+                )
     
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置值（支持点号分隔的嵌套键）
