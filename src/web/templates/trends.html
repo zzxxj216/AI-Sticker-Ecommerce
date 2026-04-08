@@ -26,10 +26,14 @@
 {% set news_watchlist = news_pending|selectattr('score', 'lt', 70)|list %}
 {% set news_approved = news_items|selectattr('review_status', 'equalto', 'approved')|list %}
 {% set news_batch_date = today_date %}
-{# TikTok：第三列只展示管线里 AI 判定 Approve（入库 decision=recommend），不用分数≥70（否则 Watchlist 高分也会进栏，数量会虚高） #}
-{% set tk_pending_review = tiktok_items|selectattr('review_status', 'equalto', 'pending')|list %}
-{% set tk_recommend = tk_pending_review|selectattr('decision', 'equalto', 'recommend')|list %}
-{% set tk_approved = tiktok_items|selectattr('review_status', 'equalto', 'approved')|list %}
+{# TikTok：
+   - tk_recommend：管线 AI 判定 recommend 且未被人工跳过的条目（决策区分：reviewed_by 空=管线自动，非空=人工）
+   - tk_pending_review：watchlist 类，待人工审核（review_status=pending，reviewed_by 空）
+   - tk_approved：仅人工采纳（reviewed_by 非空 + review_status=approved），用于统计数字
+#}
+{% set tk_pending_review = tiktok_items|selectattr('review_status', 'equalto', 'pending')|rejectattr('reviewed_by')|list %}
+{% set tk_recommend = tiktok_items|selectattr('decision', 'equalto', 'recommend')|rejectattr('review_status', 'equalto', 'skipped')|list %}
+{% set tk_approved = tiktok_items|selectattr('review_status', 'equalto', 'approved')|selectattr('reviewed_by')|list %}
 {% set all_review = [] %}
 {# Jinja2 list concat workaround：热点低分待看 + TikTok 凡待人工审核（含 Watchlist） #}
 {% for item in news_watchlist %}{% if all_review.append(item) %}{% endif %}{% endfor %}
@@ -105,9 +109,14 @@
       {% endif %}
     </div>
     <div class="item-status" style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
-      {% if item.review_status == 'approved' %}
-        <span class="badge badge-approved" title="由 {{ item.reviewed_by or '?' }} 采纳">✓ 已采纳</span>
-      {% elif item.review_status == 'skipped' %}
+      {% if item.review_status == 'approved' and item.reviewed_by %}
+        {# 人工已采纳 #}
+        <span class="badge badge-approved" title="由 {{ item.reviewed_by }} 采纳">✓ 已采纳</span>
+      {% elif item.review_status == 'approved' %}
+        {# 管线 AI 自动推荐（reviewed_by 为空），视为"待人工确认" #}
+        <span class="badge" style="background:rgba(99,102,241,0.12);color:#6366f1;font-weight:600;">⚡ AI推荐</span>
+      {% elif item.review_status == 'skipped' and item.reviewed_by %}
+        {# 人工已跳过 #}
         <span class="badge badge-skipped">已跳过</span>
       {% else %}
         <span class="badge badge-ai-watch">待审核</span>
@@ -118,7 +127,8 @@
     </div>
   {% if current_user %}</a>{% else %}</div>{% endif %}
   {% if current_user %}
-  {% if item.review_status == 'pending' %}
+  {% if item.review_status == 'pending' or (item.review_status == 'approved' and not item.reviewed_by) %}
+  {# pending 或管线 AI 自动推荐（未人工确认）均显示操作按钮 #}
   <div class="inline-actions">
     <button class="btn-approve" onclick="reviewTrend('{{ item.id }}', 'approve', this)" title="采纳">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
