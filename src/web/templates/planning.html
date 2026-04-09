@@ -1,0 +1,805 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Planning Calendar</p>
+    <h1>选品日历</h1>
+    <p class="page-subtitle">基于 AI 联网搜索，按地区规划未来节日、活动、文化和体育事件。</p>
+  </div>
+</section>
+
+<!-- Toolbar -->
+<div class="planning-toolbar">
+  <div class="toolbar-left">
+    <button class="btn-icon" id="prevMonth" title="上月">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <h2 class="month-title" id="monthTitle"></h2>
+    <button class="btn-icon" id="nextMonth" title="下月">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <button class="btn-icon" id="todayBtn" title="今天" style="margin-left:6px;font-size:12px;padding:4px 10px;">今天</button>
+  </div>
+  <div class="toolbar-center">
+    <div class="region-tabs" id="regionTabs">
+      <button class="region-tab active" data-region="">全部</button>
+      <button class="region-tab" data-region="us"><span class="region-dot dot-us"></span>US</button>
+      <button class="region-tab" data-region="ca"><span class="region-dot dot-ca"></span>CA</button>
+      <button class="region-tab" data-region="eu"><span class="region-dot dot-eu"></span>EU</button>
+    </div>
+  </div>
+  <div class="toolbar-right">
+    <select id="fetchRegion" class="fetch-select">
+      <option value="all">全部地区</option>
+      <option value="us">US 美国</option>
+      <option value="ca">CA 加拿大</option>
+      <option value="eu">EU 欧洲</option>
+    </select>
+    <button class="button accent" id="fetchBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      AI 抓取
+    </button>
+  </div>
+</div>
+
+<!-- Calendar + Sidebar -->
+<div class="planning-layout">
+  <div class="calendar-panel">
+    <div class="cal-header">
+      <div class="cal-day-name">日</div><div class="cal-day-name">一</div><div class="cal-day-name">二</div>
+      <div class="cal-day-name">三</div><div class="cal-day-name">四</div><div class="cal-day-name">五</div><div class="cal-day-name">六</div>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+  </div>
+  <div class="event-sidebar" id="eventSidebar">
+    <div class="sidebar-header">
+      <h3 id="sidebarTitle">本月事件</h3>
+      <span class="badge" id="eventCount">0</span>
+    </div>
+    <div class="event-list" id="eventList">
+      <div class="empty-state"><p>选择日期或抓取事件数据</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="cal-legend">
+  <span class="legend-item"><span class="legend-dot" style="background:var(--warning);"></span>节日</span>
+  <span class="legend-item"><span class="legend-dot" style="background:var(--info);"></span>活动</span>
+  <span class="legend-item"><span class="legend-dot" style="background:var(--accent);"></span>文化</span>
+  <span class="legend-item"><span class="legend-dot" style="background:var(--success);"></span>体育</span>
+  <span style="margin-left:auto;display:flex;gap:12px;">
+    <span class="legend-item"><span class="region-dot dot-us"></span>US</span>
+    <span class="legend-item"><span class="region-dot dot-ca"></span>CA</span>
+    <span class="legend-item"><span class="region-dot dot-eu"></span>EU</span>
+  </span>
+</div>
+
+<!-- Range Events (compact) -->
+<section class="range-section" id="rangePanel" style="margin-top:16px;display:none;">
+  <div style="padding:12px 14px 0;font-size:14px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px;">
+    时间段事件 <span class="badge" id="rangeCount">0</span>
+  </div>
+  <div id="rangeCategoryGroups" style="padding:8px 14px 14px;"></div>
+</section>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay" style="display:none;">
+  <div class="modal-card" style="max-width:680px;">
+    <div class="modal-header">
+      <h3 id="modalTitle"></h3>
+      <button class="btn-icon modal-close" id="modalClose">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-directions" id="modalDirections" style="display:none;">
+      <div style="padding:0 20px 16px;">
+        <button class="btn btn-primary" id="genDirectionsBtn" style="width:100%;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          AI 生成贴纸包方向
+        </button>
+        <div id="directionsLoading" style="display:none;text-align:center;padding:20px;">
+          <span class="spinner" style="border-color:var(--accent);border-top-color:transparent;width:20px;height:20px;"></span>
+          <p style="margin:8px 0 0;font-size:12px;color:var(--text-muted);">AI 正在分析事件并生成设计方向...</p>
+        </div>
+        <div id="directionsContainer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.planning-toolbar {
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-bottom:20px;flex-wrap:wrap;
+}
+.toolbar-left{display:flex;align-items:center;gap:8px;}
+.toolbar-center{display:flex;align-items:center;}
+.toolbar-right{display:flex;align-items:center;gap:8px;}
+.month-title{font-size:18px;font-weight:700;margin:0;min-width:140px;text-align:center;}
+.btn-icon{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:6px 8px;cursor:pointer;color:var(--text);transition:all .15s;
+}
+.btn-icon:hover{border-color:var(--accent);color:var(--accent);}
+
+.region-tabs{display:flex;gap:4px;background:var(--bg-subtle);border-radius:var(--radius-sm);padding:3px;}
+.region-tab{
+  padding:5px 14px;border:none;background:none;cursor:pointer;
+  border-radius:6px;font-size:13px;font-weight:500;color:var(--text-secondary);
+  display:flex;align-items:center;gap:5px;transition:all .15s;
+}
+.region-tab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow-xs);}
+.region-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+.dot-us{background:#3b82f6;}.dot-ca{background:#ef4444;}.dot-eu{background:#10b981;}
+
+.fetch-select{
+  padding:7px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  background:var(--surface);font-size:13px;color:var(--text);
+}
+.button.accent{
+  display:inline-flex;align-items:center;gap:6px;padding:7px 16px;
+  background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);
+  font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;
+}
+.button.accent:hover{background:var(--accent-dark);}
+.button.accent:disabled{opacity:.5;cursor:not-allowed;}
+
+.planning-layout{display:grid;grid-template-columns:1fr 300px;gap:20px;}
+@media(max-width:960px){.planning-layout{grid-template-columns:1fr;}}
+
+.calendar-panel{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);
+  box-shadow:var(--shadow-card);overflow:hidden;
+}
+.cal-header{display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid var(--line);background:var(--bg-subtle);}
+.cal-day-name{padding:10px 0;text-align:center;font-size:12px;font-weight:600;color:var(--text-muted);}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);}
+.cal-cell{
+  min-height:90px;border-right:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
+  padding:4px;position:relative;cursor:pointer;transition:background .1s;
+}
+.cal-cell:nth-child(7n){border-right:none;}
+.cal-cell:hover{background:var(--bg-subtle);}
+.cal-cell.today{background:var(--accent-bg);}
+.cal-cell.other-month{opacity:.3;}
+.cal-cell.selected{box-shadow:inset 0 0 0 2px var(--accent);}
+.cal-date{
+  font-size:12px;font-weight:600;color:var(--text-secondary);padding:2px 4px;
+  display:inline-block;min-width:22px;text-align:center;border-radius:4px;
+}
+.cal-cell.today .cal-date{background:var(--accent);color:#fff;border-radius:50%;}
+.cal-events{display:flex;flex-direction:column;gap:2px;margin-top:2px;}
+.cal-event-tag{
+  font-size:10px;padding:1px 5px;border-radius:3px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;cursor:pointer;font-weight:500;
+  line-height:1.6;transition:opacity .1s;
+}
+.cal-event-tag:hover{opacity:.8;}
+.cat-holiday{background:var(--warning-bg);color:#b45309;border-left:3px solid var(--warning);}
+.cat-event{background:var(--info-bg);color:#1d4ed8;border-left:3px solid var(--info);}
+.cat-cultural{background:var(--accent-bg);color:var(--accent-dark);border-left:3px solid var(--accent);}
+.cat-sports{background:var(--success-bg);color:#047857;border-left:3px solid var(--success);}
+.cal-more{font-size:10px;color:var(--text-muted);padding:0 4px;cursor:pointer;}
+
+.event-sidebar{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);
+  box-shadow:var(--shadow-card);display:flex;flex-direction:column;max-height:640px;
+}
+.sidebar-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;border-bottom:1px solid var(--line);
+}
+.sidebar-header h3{margin:0;font-size:14px;font-weight:600;}
+.event-list{overflow-y:auto;flex:1;padding:8px;}
+.event-card{
+  padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--line-soft);
+  margin-bottom:6px;cursor:pointer;transition:all .15s;
+}
+.event-card:hover{border-color:var(--accent);box-shadow:var(--shadow-xs);}
+.event-card-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;display:flex;align-items:center;gap:6px;}
+.event-card-meta{font-size:11px;color:var(--text-muted);display:flex;gap:8px;flex-wrap:wrap;}
+.event-region-badge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;text-transform:uppercase;}
+.region-us{background:rgba(59,130,246,.1);color:#3b82f6;}
+.region-ca{background:rgba(239,68,68,.1);color:#ef4444;}
+.region-eu{background:rgba(16,185,129,.1);color:#10b981;}
+
+.cal-legend{
+  display:flex;align-items:center;gap:16px;margin-top:16px;padding:10px 16px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-size:12px;color:var(--text-secondary);flex-wrap:wrap;
+}
+.legend-item{display:flex;align-items:center;gap:5px;}
+.legend-dot{width:10px;height:10px;border-radius:3px;}
+
+/* Range Events Compact */
+.range-section{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:0;box-shadow:var(--shadow-xs);
+}
+.range-header{
+  display:flex;align-items:center;gap:6px;padding:10px 14px;cursor:pointer;
+  user-select:none;transition:background .1s;
+}
+.range-header:hover{background:var(--bg-subtle);}
+.range-caret{transition:transform .2s;flex-shrink:0;}
+.range-caret.open{transform:rotate(90deg);}
+.range-chips{
+  display:flex;flex-wrap:wrap;gap:8px;padding:6px 14px 14px;
+}
+.range-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:6px 12px;
+  background:var(--bg-subtle);border:1px solid var(--line-soft);border-radius:var(--radius-sm);
+  font-size:12px;cursor:pointer;transition:all .15s;max-width:380px;
+}
+.range-chip:hover{border-color:var(--accent);box-shadow:var(--shadow-xs);}
+.range-chip-date{font-weight:600;color:var(--text-secondary);white-space:nowrap;font-size:11px;}
+.range-chip-title{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.range-chip-days{
+  font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;
+  white-space:nowrap;flex-shrink:0;
+}
+.days-holiday{background:var(--warning-bg);color:#b45309;}
+.days-event{background:var(--info-bg);color:#1d4ed8;}
+.days-cultural{background:var(--accent-bg);color:var(--accent-dark);}
+.days-sports{background:var(--success-bg);color:#047857;}
+
+.range-cat-group{margin-top:10px;}
+.range-cat-group:first-child{margin-top:0;}
+.range-cat-header{
+  display:flex;align-items:center;gap:6px;padding:6px 0;cursor:pointer;user-select:none;
+}
+.range-cat-header:hover{opacity:.8;}
+.range-cat-icon{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
+.range-cat-label{font-size:12px;font-weight:700;color:var(--text);}
+.range-cat-badge{font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;background:var(--bg-subtle);color:var(--text-muted);}
+.range-cat-caret{transition:transform .2s;flex-shrink:0;color:var(--text-muted);}
+.range-cat-caret.open{transform:rotate(90deg);}
+.range-cat-chips{display:flex;flex-wrap:wrap;gap:8px;padding:4px 0 6px;}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;}
+.modal-card{background:var(--surface);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);width:100%;max-width:520px;max-height:80vh;overflow-y:auto;}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);}
+.modal-header h3{margin:0;font-size:16px;font-weight:700;}
+.modal-close{font-size:22px;background:none;border:none;cursor:pointer;color:var(--text-muted);padding:4px 8px;}
+.modal-body{padding:16px 20px;}
+.modal-body p{margin:0 0 10px;font-size:13px;line-height:1.6;color:var(--text-secondary);}
+.modal-body .meta-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;font-size:12px;}
+.modal-body a{color:var(--accent);text-decoration:none;}
+.modal-body a:hover{text-decoration:underline;}
+
+.empty-state{padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;}
+
+/* Toast */
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;}
+.toast{
+  padding:10px 16px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;
+  box-shadow:var(--shadow-lg);animation:toastIn .3s ease;max-width:360px;
+  display:flex;align-items:center;gap:8px;
+}
+.toast.info{background:var(--info-bg);color:#1d4ed8;border:1px solid var(--info);}
+.toast.success{background:var(--success-bg);color:#047857;border:1px solid var(--success);}
+.toast.error{background:rgba(239,68,68,.1);color:#dc2626;border:1px solid #ef4444;}
+@keyframes toastIn{from{opacity:0;transform:translateX(40px);}to{opacity:1;transform:translateX(0);}}
+
+/* Direction Cards */
+.direction-card{
+  border:1px solid var(--line);border-radius:var(--radius-sm);padding:14px;
+  margin-top:12px;background:var(--bg-subtle);transition:all .15s;
+}
+.direction-card:hover{border-color:var(--accent);box-shadow:var(--shadow-xs);}
+.direction-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.direction-card-name{font-size:14px;font-weight:700;color:var(--text);}
+.direction-card-name-zh{font-size:12px;color:var(--text-muted);margin-left:6px;}
+.direction-field{margin-bottom:8px;}
+.direction-field-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin-bottom:3px;}
+.direction-tags{display:flex;flex-wrap:wrap;gap:4px;}
+.direction-tag{
+  font-size:11px;padding:2px 8px;border-radius:3px;
+  background:var(--surface);border:1px solid var(--line-soft);color:var(--text-secondary);
+}
+.direction-tag.slogan{background:var(--accent-bg);color:var(--accent-dark);border-color:var(--accent);font-weight:600;}
+.direction-actions{display:flex;gap:8px;margin-top:12px;align-items:center;}
+.direction-preview-img{
+  margin-top:10px;border-radius:var(--radius-sm);border:1px solid var(--line);
+  max-width:100%;cursor:pointer;transition:transform .2s;
+}
+.direction-preview-img:hover{transform:scale(1.02);}
+.direction-status{font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;}
+</style>
+
+<script>
+(function(){
+  const MONTH_EN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const CAT_CLASS={holiday:'cat-holiday',event:'cat-event',cultural:'cat-cultural',sports:'cat-sports'};
+  const CAT_LABEL={holiday:'节日',event:'活动',cultural:'文化',sports:'体育'};
+  const CAT_BAR={holiday:'bar-holiday',event:'bar-event',cultural:'bar-cultural',sports:'bar-sports'};
+  const REGION_LABEL={us:'US',ca:'CA',eu:'EU'};
+  const MAX_TAGS=3;
+
+  let curYear={{default_year}},curMonth={{default_month}},curRegion='',allEvents=[],selectedDate=null;
+
+  const $grid=document.getElementById('calGrid');
+  const $title=document.getElementById('monthTitle');
+  const $list=document.getElementById('eventList');
+  const $sideTitle=document.getElementById('sidebarTitle');
+  const $count=document.getElementById('eventCount');
+  const $modal=document.getElementById('modalOverlay');
+  const $rangePanel=document.getElementById('rangePanel');
+  const $rangeCatGroups=document.getElementById('rangeCategoryGroups');
+  const $rangeCount=document.getElementById('rangeCount');
+
+  function pad(n){return n<10?'0'+n:''+n;}
+  function todayStr(){const d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}
+
+  function isRangeEvent(e){
+    return e.end_date && e.end_date !== e.start_date;
+  }
+
+  function daysBetween(a,b){
+    const d1=new Date(a+'T00:00:00'),d2=new Date(b+'T00:00:00');
+    return Math.round((d2-d1)/(86400000))+1;
+  }
+
+  function singleEvents(){return allEvents.filter(e=>!isRangeEvent(e));}
+  function rangeEvents(){return allEvents.filter(e=>isRangeEvent(e));}
+
+  function singleOnDate(dateStr){
+    return singleEvents().filter(e=>e.start_date===dateStr);
+  }
+
+  function mergedSingleOnDate(dateStr){
+    const evts=singleOnDate(dateStr);
+    const map=new Map();
+    evts.forEach(e=>{
+      const key=e.title;
+      if(map.has(key)){
+        const m=map.get(key);
+        if(!m.regions.includes(e.region))m.regions.push(e.region);
+        if(!m._all)m._all=[m];
+        m._all.push(e);
+      }else{
+        map.set(key,{...e,regions:[e.region],_all:[e]});
+      }
+    });
+    return Array.from(map.values());
+  }
+
+  async function loadEvents(){
+    let url=`/api/planning/events?year=${curYear}&month=${curMonth}`;
+    if(curRegion)url+=`&region=${curRegion}`;
+    try{const r=await fetch(url);const data=await r.json();allEvents=data.events||[];}catch(e){allEvents=[];}
+    render();
+  }
+
+  function render(){
+    $title.textContent=`${MONTH_EN[curMonth-1]} ${curYear}`;
+    renderGrid();
+    renderRangeChips();
+    if(selectedDate)showDateEvents(selectedDate);
+    else showMonthOverview();
+  }
+
+  function renderGrid(){
+    $grid.innerHTML='';
+    const firstDay=new Date(curYear,curMonth-1,1).getDay();
+    const daysInMonth=new Date(curYear,curMonth,0).getDate();
+    const prevDays=new Date(curYear,curMonth-1,0).getDate();
+    const today=todayStr();
+    const totalCells=Math.ceil((firstDay+daysInMonth)/7)*7;
+
+    for(let i=0;i<totalCells;i++){
+      const cell=document.createElement('div');
+      cell.className='cal-cell';
+      let day,dateStr,isOther=false;
+      if(i<firstDay){
+        day=prevDays-firstDay+i+1;
+        const pm=curMonth===1?12:curMonth-1,py=curMonth===1?curYear-1:curYear;
+        dateStr=`${py}-${pad(pm)}-${pad(day)}`;isOther=true;
+      }else if(i-firstDay>=daysInMonth){
+        day=i-firstDay-daysInMonth+1;
+        const nm=curMonth===12?1:curMonth+1,ny=curMonth===12?curYear+1:curYear;
+        dateStr=`${ny}-${pad(nm)}-${pad(day)}`;isOther=true;
+      }else{
+        day=i-firstDay+1;
+        dateStr=`${curYear}-${pad(curMonth)}-${pad(day)}`;
+      }
+      if(isOther)cell.classList.add('other-month');
+      if(dateStr===today)cell.classList.add('today');
+      if(dateStr===selectedDate)cell.classList.add('selected');
+      cell.dataset.date=dateStr;
+      cell.innerHTML=`<span class="cal-date">${day}</span>`;
+
+      const dayEvts=mergedSingleOnDate(dateStr);
+      if(dayEvts.length>0){
+        const container=document.createElement('div');
+        container.className='cal-events';
+        dayEvts.slice(0,MAX_TAGS).forEach(ev=>{
+          const tag=document.createElement('div');
+          tag.className='cal-event-tag '+(CAT_CLASS[ev.category]||'cat-event');
+          tag.textContent=ev.title;tag.title=ev.regions.map(r=>(REGION_LABEL[r]||r)).join(' / ')+' — '+ev.title;
+          tag.addEventListener('click',e=>{e.stopPropagation();showModal(ev._all[0]);});
+          container.appendChild(tag);
+        });
+        if(dayEvts.length>MAX_TAGS){
+          const more=document.createElement('div');
+          more.className='cal-more';more.textContent=`+${dayEvts.length-MAX_TAGS} more`;
+          container.appendChild(more);
+        }
+        cell.appendChild(container);
+      }
+      cell.addEventListener('click',()=>{
+        document.querySelectorAll('.cal-cell.selected').forEach(c=>c.classList.remove('selected'));
+        cell.classList.add('selected');selectedDate=dateStr;showDateEvents(dateStr);
+      });
+      $grid.appendChild(cell);
+    }
+  }
+
+  const CAT_ICON_COLOR={holiday:'#f59e0b',event:'#3b82f6',cultural:'#8b5cf6',sports:'#10b981'};
+  const CAT_ORDER=['holiday','event','cultural','sports'];
+
+  function renderRangeChips(){
+    const raw=rangeEvents().sort((a,b)=>a.start_date.localeCompare(b.start_date));
+    const merged=mergeByTitle(raw);
+    $rangeCount.textContent=merged.length;
+    if(merged.length===0){$rangePanel.style.display='none';return;}
+    $rangePanel.style.display='block';
+
+    const groups={};
+    merged.forEach(e=>{
+      const cat=e.category||'event';
+      if(!groups[cat])groups[cat]=[];
+      groups[cat].push(e);
+    });
+
+    const daysCls={holiday:'days-holiday',event:'days-event',cultural:'days-cultural',sports:'days-sports'};
+    let html='';
+    const orderedCats=CAT_ORDER.filter(c=>groups[c]);
+    Object.keys(groups).forEach(c=>{if(!orderedCats.includes(c))orderedCats.push(c);});
+
+    orderedCats.forEach(cat=>{
+      const items=groups[cat];
+      const label=CAT_LABEL[cat]||cat;
+      const iconColor=CAT_ICON_COLOR[cat]||'#6b7280';
+      html+=`<div class="range-cat-group" data-cat="${cat}">
+        <div class="range-cat-header">
+          <svg class="range-cat-caret open" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          <span class="range-cat-icon" style="background:${iconColor};"></span>
+          <span class="range-cat-label">${label}</span>
+          <span class="range-cat-badge">${items.length}</span>
+        </div>
+        <div class="range-cat-chips">`;
+      items.forEach(e=>{
+        const days=daysBetween(e.start_date,e.end_date||e.start_date);
+        const dc=daysCls[e.category]||'days-event';
+        const regions=e.regions||[e.region];
+        const badges=regions.map(r=>`<span class="event-region-badge region-${r}" style="font-size:9px;padding:0 5px;">${REGION_LABEL[r]||r}</span>`).join('');
+        html+=`<div class="range-chip" data-id="${e.id}">
+          <span class="range-chip-days ${dc}">${days}d</span>
+          ${badges}
+          <span class="range-chip-date">${e.start_date.slice(5)} ~ ${(e.end_date||e.start_date).slice(5)}</span>
+          <span class="range-chip-title" title="${e.title}">${e.title}</span>
+        </div>`;
+      });
+      html+=`</div></div>`;
+    });
+
+    $rangeCatGroups.innerHTML=html;
+
+    // bind chip clicks
+    const allMerged=orderedCats.flatMap(c=>groups[c]);
+    $rangeCatGroups.querySelectorAll('.range-chip').forEach((chip,i)=>{
+      chip.addEventListener('click',()=>showModal(allMerged[i]));
+    });
+
+    // bind category toggle
+    $rangeCatGroups.querySelectorAll('.range-cat-header').forEach(header=>{
+      header.addEventListener('click',()=>{
+        const caret=header.querySelector('.range-cat-caret');
+        const chips=header.nextElementSibling;
+        if(chips.style.display==='none'){
+          chips.style.display='';caret.classList.add('open');
+        }else{
+          chips.style.display='none';caret.classList.remove('open');
+        }
+      });
+    });
+  }
+
+  function mergeByTitle(evts){
+    const map=new Map();
+    evts.forEach(e=>{
+      if(map.has(e.title)){
+        const m=map.get(e.title);
+        if(!m.regions.includes(e.region))m.regions.push(e.region);
+      }else{
+        map.set(e.title,{...e,regions:[e.region]});
+      }
+    });
+    return Array.from(map.values());
+  }
+
+  function showDateEvents(dateStr){
+    const events=mergeByTitle(singleOnDate(dateStr));
+    const d=new Date(dateStr+'T00:00:00');
+    $sideTitle.textContent=`${d.getMonth()+1}/${d.getDate()} 事件`;
+    $count.textContent=events.length;
+    if(events.length===0){$list.innerHTML='<div class="empty-state"><p>该日无单日事件</p></div>';return;}
+    renderSidebarCards(events);
+  }
+
+  function showMonthOverview(){
+    const sorted=mergeByTitle(singleEvents().sort((a,b)=>a.start_date.localeCompare(b.start_date)));
+    $sideTitle.textContent='本月单日事件';
+    $count.textContent=sorted.length;
+    if(sorted.length===0){$list.innerHTML='<div class="empty-state"><p>暂无数据，点击「AI 抓取」获取</p></div>';return;}
+    renderSidebarCards(sorted);
+  }
+
+  function renderSidebarCards(events){
+    $list.innerHTML=events.map(e=>eventCardHTML(e)).join('');
+    $list.querySelectorAll('.event-card').forEach((card,i)=>{
+      card.addEventListener('click',()=>showModal(events[i]));
+    });
+  }
+
+  function eventCardHTML(e){
+    const catCls=CAT_CLASS[e.category]||'';
+    const catLabel=CAT_LABEL[e.category]||e.category;
+    const regions=e.regions||[e.region];
+    const regionBadges=regions.map(r=>`<span class="event-region-badge region-${r}">${REGION_LABEL[r]||r}</span>`).join('');
+    return `<div class="event-card">
+      <div class="event-card-title">
+        <span class="cal-event-tag ${catCls}" style="font-size:10px;padding:0 6px;">${catLabel}</span>
+        ${regionBadges}
+        ${e.title}
+      </div>
+      <div class="event-card-meta">
+        <span>${e.start_date.slice(5)}</span>
+        ${e.short_description?'<span>'+e.short_description.slice(0,80)+'</span>':''}
+      </div>
+    </div>`;
+  }
+
+  let currentModalEvent=null;
+
+  function showModal(e){
+    currentModalEvent=e;
+    document.getElementById('modalTitle').textContent=e.title;
+    const dateLabel=e.end_date&&e.end_date!==e.start_date?`${e.start_date} ~ ${e.end_date}`:e.start_date;
+    const catLabel=CAT_LABEL[e.category]||e.category;
+    const regionCls='region-'+e.region;
+    let html=`<div class="meta-row">
+      <span class="cal-event-tag ${CAT_CLASS[e.category]||''}" style="font-size:11px;padding:1px 8px;">${catLabel}</span>
+      <span class="event-region-badge ${regionCls}">${REGION_LABEL[e.region]||e.region}</span>
+      <span style="color:var(--text-secondary);">${dateLabel}</span>
+    </div>`;
+    if(e.short_description)html+=`<p>${e.short_description}</p>`;
+    if(e.source)html+=`<p><a href="${e.source}" target="_blank" rel="noopener">${e.source}</a></p>`;
+    document.getElementById('modalBody').innerHTML=html;
+
+    const $dirs=document.getElementById('modalDirections');
+    const $container=document.getElementById('directionsContainer');
+    const $loading=document.getElementById('directionsLoading');
+    const $genBtn=document.getElementById('genDirectionsBtn');
+    $dirs.style.display='block';
+    $container.innerHTML='';
+    $loading.style.display='none';
+    $genBtn.style.display='';
+    $genBtn.disabled=false;
+    $genBtn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg> AI 生成贴纸包方向';
+
+    if(e.id){
+      fetch(`/api/planning/events/${e.id}/directions`).then(r=>r.json()).then(data=>{
+        if(data.directions&&data.directions.length>0){
+          $genBtn.style.display='none';
+          renderDirectionCards(data.directions);
+        }
+      }).catch(()=>{});
+    }
+
+    $modal.style.display='flex';
+  }
+
+  document.getElementById('genDirectionsBtn').addEventListener('click', async()=>{
+    if(!currentModalEvent||!currentModalEvent.id) return;
+    const $btn=document.getElementById('genDirectionsBtn');
+    const $loading=document.getElementById('directionsLoading');
+    $btn.disabled=true;
+    $btn.style.display='none';
+    $loading.style.display='block';
+    showToast('AI 正在分析事件并生成 2 个设计方向，请稍候...','info',6000);
+    try{
+      const r=await fetch(`/api/planning/events/${currentModalEvent.id}/directions`,{method:'POST'});
+      const data=await r.json();
+      $loading.style.display='none';
+      if(data.ok&&data.directions){
+        showToast('已生成 '+data.directions.length+' 个设计方向！','success');
+        renderDirectionCards(data.directions);
+      }else{
+        $btn.style.display='';$btn.disabled=false;
+        showToast('生成失败: '+(data.error||'Unknown error'),'error');
+      }
+    }catch(err){
+      $loading.style.display='none';
+      $btn.style.display='';$btn.disabled=false;
+      showToast('请求失败: '+err.message,'error');
+    }
+  });
+
+  function renderDirectionCards(dirs){
+    const $container=document.getElementById('directionsContainer');
+    $container.innerHTML=dirs.map((d,i)=>{
+      const tags=(s)=>(s||'').split(',').map(t=>t.trim()).filter(Boolean).map(t=>`<span class="direction-tag">${t}</span>`).join('');
+      const sloganTags=(s)=>(s||'').split(',').map(t=>t.trim()).filter(Boolean).map(t=>`<span class="direction-tag slogan">${t}</span>`).join('');
+      let previewHtml='';
+      if(d.preview_status==='completed'&&d.preview_path){
+        previewHtml=`<img class="direction-preview-img" src="${d.preview_path}" alt="preview" />`;
+      }else if(d.preview_status==='generating'){
+        previewHtml=`<div class="direction-status"><span class="spinner" style="border-color:var(--accent);border-top-color:transparent;"></span> 预览生成中...</div>`;
+      }
+      let genStatusHtml='';
+      if(d.gen_status==='completed'){
+        genStatusHtml=`<span class="direction-status" style="color:var(--success);">✓ 贴纸包已生成</span>`;
+        if(d.job_id) genStatusHtml+=` <a href="/jobs" style="font-size:11px;color:var(--accent);">查看任务</a>`;
+      }else if(d.gen_status==='generating'){
+        genStatusHtml=`<span class="direction-status"><span class="spinner" style="border-color:var(--accent);border-top-color:transparent;"></span> 全量生成中...</span>`;
+      }
+      return `<div class="direction-card" data-id="${d.id}" data-idx="${i}">
+        <div class="direction-card-header">
+          <span><span class="direction-card-name">${d.name_en}</span><span class="direction-card-name-zh">${d.name_zh||''}</span></span>
+          <span style="font-size:11px;color:var(--text-muted);">方向 ${i+1}</span>
+        </div>
+        <div class="direction-field">
+          <div class="direction-field-label">Keywords</div>
+          <div class="direction-tags">${tags(d.keywords)}</div>
+        </div>
+        <div class="direction-field">
+          <div class="direction-field-label">Design Elements</div>
+          <div class="direction-tags">${tags(d.design_elements)}</div>
+        </div>
+        <div class="direction-field">
+          <div class="direction-field-label">Text Slogans</div>
+          <div class="direction-tags">${sloganTags(d.text_slogans)}</div>
+        </div>
+        <div class="direction-field">
+          <div class="direction-field-label">Decorative</div>
+          <div class="direction-tags">${tags(d.decorative_elements)}</div>
+        </div>
+        ${previewHtml}
+        <div class="direction-actions">
+          ${d.preview_status!=='completed'&&d.preview_status!=='generating'?`<button class="btn btn-sm" onclick="triggerPreview('${d.id}',this)">生成预览</button>`:''}
+          ${d.gen_status!=='completed'&&d.gen_status!=='generating'?`<button class="btn btn-sm btn-primary" onclick="triggerGenerate('${d.id}',this)">全量生成贴纸包</button>`:''}
+          ${genStatusHtml}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function showToast(msg, type='info', duration=4000){
+    const c=document.getElementById('toastContainer');
+    const t=document.createElement('div');
+    t.className='toast '+type;
+    t.textContent=msg;
+    c.appendChild(t);
+    setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},duration);
+  }
+  window.showToast=showToast;
+  window.triggerPreview=triggerPreview;
+  window.triggerGenerate=triggerGenerate;
+
+  async function triggerPreview(dirId,btn){
+    btn.disabled=true;btn.textContent='生成中...';
+    showToast('预览生成已启动，Claude 设计 + Gemini 出图，预计需要 1~2 分钟...','info',6000);
+    try{
+      const r=await fetch(`/api/planning/directions/${dirId}/preview`,{method:'POST'});
+      const data=await r.json();
+      if(data.status==='completed'){
+        showToast('预览图已就绪！','success');
+        if(currentModalEvent&&currentModalEvent.id){
+          const r2=await fetch(`/api/planning/events/${currentModalEvent.id}/directions`);
+          const d2=await r2.json();
+          if(d2.directions) renderDirectionCards(d2.directions);
+        }
+      }else{
+        btn.textContent=data.status==='queued'?'排队中...':'生成中...';
+        pollDirectionStatus(dirId);
+      }
+    }catch(e){btn.disabled=false;btn.textContent='生成预览';showToast('请求失败: '+e.message,'error');}
+  }
+
+  async function triggerGenerate(dirId,btn){
+    if(!confirm('确认开始全量生成贴纸包？（需要较长时间）')) return;
+    btn.disabled=true;btn.textContent='排队中...';
+    showToast('全量生成已排队，Pipeline 运行中（Planner → Designer → PromptBuilder → 出图）...','info',8000);
+    try{
+      const r=await fetch(`/api/planning/directions/${dirId}/generate`,{method:'POST'});
+      const data=await r.json();
+      if(data.ok){
+        btn.textContent='生成中...';
+        showToast('任务 '+data.job_id+' 已创建，可在「任务」页面查看进度','success',5000);
+      }else{
+        btn.disabled=false;btn.textContent='全量生成贴纸包';
+        showToast(data.error||'生成失败','error');
+      }
+    }catch(e){btn.disabled=false;btn.textContent='全量生成贴纸包';showToast('请求失败: '+e.message,'error');}
+  }
+
+  function pollDirectionStatus(dirId){
+    const poll=async()=>{
+      try{
+        const r=await fetch(`/api/planning/directions/${dirId}`);
+        const data=await r.json();
+        if(!data.direction) return;
+        const d=data.direction;
+        if(d.preview_status==='completed'||d.preview_status==='failed'||d.gen_status==='completed'||d.gen_status==='failed'){
+          if(currentModalEvent&&currentModalEvent.id){
+            const r2=await fetch(`/api/planning/events/${currentModalEvent.id}/directions`);
+            const d2=await r2.json();
+            if(d2.directions) renderDirectionCards(d2.directions);
+          }
+          return;
+        }
+        setTimeout(poll,5000);
+      }catch(e){setTimeout(poll,10000);}
+    };
+    setTimeout(poll,5000);
+  }
+
+  document.getElementById('modalClose').addEventListener('click',()=>{$modal.style.display='none';currentModalEvent=null;});
+  $modal.addEventListener('click',e=>{if(e.target===$modal){$modal.style.display='none';currentModalEvent=null;}});
+
+  document.getElementById('prevMonth').addEventListener('click',()=>{
+    curMonth--;if(curMonth<1){curMonth=12;curYear--;}selectedDate=null;loadEvents();
+  });
+  document.getElementById('nextMonth').addEventListener('click',()=>{
+    curMonth++;if(curMonth>12){curMonth=1;curYear++;}selectedDate=null;loadEvents();
+  });
+  document.getElementById('todayBtn').addEventListener('click',()=>{
+    const d=new Date();curYear=d.getFullYear();curMonth=d.getMonth()+1;
+    selectedDate=todayStr();loadEvents();
+  });
+  document.getElementById('regionTabs').addEventListener('click',e=>{
+    const tab=e.target.closest('.region-tab');if(!tab)return;
+    document.querySelectorAll('.region-tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');curRegion=tab.dataset.region;selectedDate=null;loadEvents();
+  });
+
+  document.getElementById('fetchBtn').addEventListener('click',async()=>{
+    const btn=document.getElementById('fetchBtn');
+    const region=document.getElementById('fetchRegion').value;
+    btn.disabled=true;
+    btn.innerHTML='<span class="spinner"></span> 抓取中...';
+    try{
+      const form=new FormData();
+      form.append('region',region);
+      form.append('year',curYear);
+      form.append('month',curMonth);
+      const r=await fetch('/api/planning/fetch',{method:'POST',body:form});
+      const data=await r.json();
+      if(data.ok){
+        btn.innerHTML='&#10003; 已提交，等待抓取...';
+        const poll=setInterval(async()=>{
+          const cr=await fetch(`/api/planning/events?year=${curYear}&month=${curMonth}`);
+          const cd=await cr.json();
+          if(cd.events&&cd.events.length>0){clearInterval(poll);loadEvents();}
+        },5000);
+        setTimeout(()=>{clearInterval(poll);loadEvents();btn.disabled=false;
+          btn.innerHTML=`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> AI 抓取`;
+        },120000);
+      }else{
+        alert('抓取失败: '+(data.error||data.message));
+        btn.disabled=false;btn.innerHTML='AI 抓取';
+      }
+    }catch(e){alert('请求失败: '+e.message);btn.disabled=false;btn.innerHTML='AI 抓取';}
+  });
+
+  loadEvents();
+})();
+</script>
+{% endblock %}

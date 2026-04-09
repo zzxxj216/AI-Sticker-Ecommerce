@@ -26,6 +26,8 @@ from src.services.video.video_type_service import VideoTypeService
 from src.services.video.video_combo_service import VideoComboService
 from src.services.video.video_plan_service import VideoPlanService
 from src.services.video.video_script_service import VideoScriptService
+from src.services.ops.planning_service import PlanningService
+from src.services.ops.direction_generator import DirectionGenerator
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -75,6 +77,8 @@ video_type_svc = VideoTypeService(trend_service.db)
 video_combo_svc = VideoComboService(trend_service.db)
 video_plan_svc = VideoPlanService(trend_service.db)
 video_script_svc = VideoScriptService(trend_service.db)
+planning_svc = PlanningService(trend_service.db)
+direction_gen = DirectionGenerator(db=trend_service.db)
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -1569,6 +1573,143 @@ def video_studio_page(request: Request):
             page_title="脚本工作室",
         ),
     )
+
+
+# ── Planning Calendar ─────────────────────────────────────
+
+
+@app.get("/planning", response_class=HTMLResponse)
+def planning_page(request: Request):
+    now = datetime.now(timezone(timedelta(hours=8)))
+    stats = planning_svc.get_stats()
+    return templates.TemplateResponse(
+        request,
+        "planning.html",
+        _base_context(
+            request,
+            page_title="选品日历",
+            stats=stats,
+            default_year=now.year,
+            default_month=now.month,
+        ),
+    )
+
+
+@app.get("/api/planning/events")
+def api_planning_events(
+    region: str | None = None,
+    year: int | None = None,
+    month: int | None = None,
+):
+    if not year or not month:
+        now = datetime.now(timezone(timedelta(hours=8)))
+        year = year or now.year
+        month = month or now.month
+    events = planning_svc.get_calendar_data(year, month, region or None)
+    return {"events": events, "year": year, "month": month, "region": region}
+
+
+@app.post("/api/planning/fetch")
+def api_planning_fetch(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    region: str = Form("us"),
+    year: int = Form(0),
+    month: int = Form(0),
+):
+    if not year or not month:
+        now = datetime.now(timezone(timedelta(hours=8)))
+        year = year or now.year
+        month = month or now.month
+
+    if region == "all":
+        background_tasks.add_task(planning_svc.fetch_all_regions, year, month)
+        return {"ok": True, "message": f"Fetching all regions for {year}-{month:02d}"}
+    else:
+        background_tasks.add_task(planning_svc.fetch_events, region, year, month)
+        return {"ok": True, "message": f"Fetching {region} for {year}-{month:02d}"}
+
+
+@app.delete("/api/planning/events/{event_id}")
+def api_planning_delete_event(event_id: str):
+    ok = planning_svc.db.delete_planning_event(event_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"ok": True}
+
+
+@app.get("/api/planning/stats")
+def api_planning_stats():
+    return planning_svc.get_stats()
+
+
+@app.post("/api/planning/events/{event_id}/directions")
+def api_generate_directions(event_id: str, background_tasks: BackgroundTasks):
+    existing = trend_service.db.list_directions_by_event(event_id)
+    if existing:
+        return {"ok": True, "directions": existing, "cached": True}
+
+    import threading, queue as _q
+
+    result_q: _q.Queue = _q.Queue()
+
+    def _run():
+        try:
+            dirs = direction_gen.generate_directions(event_id)
+            result_q.put({"ok": True, "directions": dirs})
+        except Exception as exc:
+            result_q.put({"ok": False, "error": str(exc)})
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=120)
+
+    if result_q.empty():
+        return {"ok": False, "error": "Direction generation timed out"}
+    return result_q.get()
+
+
+@app.get("/api/planning/events/{event_id}/directions")
+def api_list_directions(event_id: str):
+    return {"directions": trend_service.db.list_directions_by_event(event_id)}
+
+
+@app.post("/api/planning/directions/{direction_id}/preview")
+def api_direction_preview(direction_id: str, background_tasks: BackgroundTasks):
+    d = trend_service.db.get_direction(direction_id)
+    if not d:
+        raise HTTPException(404, "Direction not found")
+    if d.get("preview_status") == "generating":
+        return {"ok": True, "status": "generating", "message": "Preview already in progress"}
+    if d.get("preview_status") == "completed" and d.get("preview_path"):
+        return {"ok": True, "status": "completed", "preview_path": d["preview_path"]}
+    background_tasks.add_task(direction_gen.generate_preview, direction_id)
+    return {"ok": True, "status": "queued", "message": "Preview generation started"}
+
+
+@app.post("/api/planning/directions/{direction_id}/generate")
+def api_direction_generate(request: Request, direction_id: str):
+    d = trend_service.db.get_direction(direction_id)
+    if not d:
+        raise HTTPException(404, "Direction not found")
+    if d.get("gen_status") in ("generating", "completed"):
+        return {"ok": True, "status": d["gen_status"], "job_id": d.get("job_id", "")}
+    created_by = (_current_user(request) or {}).get("name") or "system"
+    result = direction_gen.start_full_generation(direction_id, created_by=created_by)
+    return {"ok": True, **result}
+
+
+@app.get("/api/planning/directions/{direction_id}")
+def api_direction_detail(direction_id: str):
+    d = trend_service.db.get_direction(direction_id)
+    if not d:
+        raise HTTPException(404, "Direction not found")
+    job = None
+    if d.get("job_id"):
+        job = trend_service.db.get_job(d["job_id"])
+        if job:
+            job["outputs"] = trend_service.db.list_outputs(d["job_id"])
+    return {"direction": d, "job": job}
 
 
 @app.exception_handler(HTTPException)

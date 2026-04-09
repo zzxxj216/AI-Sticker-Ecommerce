@@ -32,7 +32,7 @@
 
           {% if current_user %}
           <!-- 热点发现 -->
-          <div class="nav-group {% if not request.url.path.startswith('/hot-news') and not request.url.path.startswith('/aggregated-topics') and not request.url.path.startswith('/tk-topics') %}collapsed{% endif %}">
+          <div class="nav-group {% if not request.url.path.startswith('/hot-news') and not request.url.path.startswith('/aggregated-topics') and not request.url.path.startswith('/tk-topics') and not request.url.path.startswith('/planning') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
                <div style="display:flex;align-items:center;">
                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="icon" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path></svg>
@@ -41,6 +41,9 @@
                <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/planning') %}active{% endif %}" href="/planning">
+                选品日历
+              </a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/hot-news') %}active{% endif %}" href="/hot-news">
                 新闻动态
               </a>

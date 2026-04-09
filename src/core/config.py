@@ -109,6 +109,13 @@ class Config:
         self._config['ai']['openai']['base_url'] = os.getenv('OPENAI_BASE_URL', '')
         self._config['ai']['openai']['model'] = os.getenv('OPENAI_MODEL', 'gpt-4o')
 
+        # AiHubMix (联网搜索)
+        if 'aihubmix' not in self._config:
+            self._config['aihubmix'] = {}
+        self._config['aihubmix']['api_key'] = os.getenv('AIHUBMIX_API_KEY', '')
+        self._config['aihubmix']['base_url'] = os.getenv('AIHUBMIX_BASE_URL', 'https://aihubmix.com/v1/chat/completions')
+        self._config['aihubmix']['model'] = os.getenv('AIHUBMIX_MODEL', 'gpt-5.4:surfing')
+
         # Feishu Bot
         if 'feishu' not in self._config:
             self._config['feishu'] = {}
@@ -331,6 +338,18 @@ class Config:
     @property
     def feishu_h5_redirect_uri(self) -> str:
         return self.get('feishu.h5_redirect_uri', '')
+
+    @property
+    def aihubmix_api_key(self) -> str:
+        return self.get('aihubmix.api_key', '')
+
+    @property
+    def aihubmix_base_url(self) -> str:
+        return self.get('aihubmix.base_url', 'https://aihubmix.com/v1/chat/completions')
+
+    @property
+    def aihubmix_model(self) -> str:
+        return self.get('aihubmix.model', 'gpt-5.4:surfing')
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
