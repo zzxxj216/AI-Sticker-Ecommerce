@@ -102,10 +102,12 @@ class VideoPlanService:
         plan_json = self._validate_plan(plan_json, combo)
 
         plan_id = f"vsp_{uuid.uuid4().hex[:12]}"
+        family_id = script_input.get("family_id", "")
         record = {
             "id": plan_id,
             "combo_id": combo_id,
             "job_id": job_id,
+            "family_id": family_id,
             "design_id": script_input.get("design_id", ""),
             "pack_id": script_input.get("pack_id", ""),
             "selected_types": combo.get("selected_types", []),

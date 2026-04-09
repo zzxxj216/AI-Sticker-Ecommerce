@@ -56,6 +56,7 @@ class VideoScriptInput(BaseModel):
 
     pack_id: str = ""
     job_id: str = ""
+    family_id: str = ""
     design_id: str = ""
     trend_topic: str = ""
     one_line_explanation: str = ""
@@ -70,6 +71,10 @@ class VideoScriptInput(BaseModel):
     collection_sheet: str = ""
     one_line_product_angle: str = ""
     platform: str = "tiktok"
+    is_family_pack: bool = False
+    family_pack_count: int = 0
+    family_subthemes: list[dict[str, Any]] = Field(default_factory=list)
+    sibling_context: str = ""
 
 
 class ShotPlan(BaseModel):

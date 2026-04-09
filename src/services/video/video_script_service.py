@@ -104,6 +104,7 @@ class VideoScriptService:
             "combo_id": combo_id,
             "plan_id": plan_id,
             "job_id": plan_record.get("job_id", ""),
+            "family_id": plan_record.get("family_id", ""),
             "design_id": plan_record.get("design_id", ""),
             "pack_id": plan_record.get("pack_id", ""),
             "hook_text": script_json.get("hook_text", ""),

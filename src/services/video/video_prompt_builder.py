@@ -107,6 +107,38 @@ Rules:
 # Builder
 # ---------------------------------------------------------------------------
 
+def _append_family_context(lines: list[str], si: dict[str, Any]) -> None:
+    """Inject family-pack or sibling context when available."""
+    if si.get("is_family_pack"):
+        lines.append("[FAMILY PACK CONTEXT]")
+        lines.append(f"This is a FAMILY PACK containing {si.get('family_pack_count', 0)} sub-packs under one theme.")
+        lines.append("The video should showcase the entire collection as a cohesive product family.")
+        subthemes = si.get("family_subthemes", [])
+        if subthemes:
+            lines.append("Sub-themes in this family:")
+            for i, st in enumerate(subthemes, 1):
+                name = st.get("subtheme_name", "")
+                stype = st.get("subtheme_type", "")
+                direction = st.get("one_line_direction", "")
+                summary = st.get("brief_summary", "")
+                entry = f"  {i}. {name}"
+                if stype:
+                    entry += f" ({stype})"
+                if direction:
+                    entry += f" — {direction}"
+                if summary:
+                    entry += f" | {summary}"
+                lines.append(entry)
+        lines.append("Strategy: Highlight the variety within the family while maintaining a unified theme.")
+        lines.append("Show how different sub-packs complement each other.")
+        lines.append("")
+    elif si.get("sibling_context"):
+        lines.append("[SIBLING PACK CONTEXT]")
+        lines.append(si["sibling_context"])
+        lines.append("Consider referencing the series in the script to encourage collecting the full set.")
+        lines.append("")
+
+
 class VideoPromptBuilder:
     """Assembles plan and script prompts from structured inputs."""
 
@@ -184,11 +216,18 @@ class VideoPromptBuilder:
             lines.append(f"Product Angle: {si['one_line_product_angle']}")
         lines.append("")
 
+        # --- Family / sibling context ---
+        _append_family_context(lines, si)
+
         # --- Brand constraints ---
         _append_brand_section(lines, brand_profile)
 
         lines.append("[TASK]")
-        lines.append("Create a script PLAN for this video. Decide type ordering, shot allocation, and intent.")
+        if si.get("is_family_pack"):
+            lines.append("Create a script PLAN for a video showcasing this sticker pack FAMILY as one cohesive product.")
+            lines.append("The video should highlight the variety of sub-themes while emphasizing they belong together.")
+        else:
+            lines.append("Create a script PLAN for this video. Decide type ordering, shot allocation, and intent.")
         lines.append("Output ONLY a valid JSON object following the schema described in your instructions.")
 
         return "\n".join(lines)
@@ -276,11 +315,16 @@ class VideoPromptBuilder:
             lines.append(f"Product Angle: {si['one_line_product_angle']}")
         lines.append("")
 
+        # --- Family / sibling context ---
+        _append_family_context(lines, si)
+
         _append_brand_section(lines, brand_profile)
 
         lines.append("[TASK]")
         lines.append("Based on the approved plan above, generate the full production-ready storyboard script.")
         lines.append("Follow the shot plan exactly (same number of shots, same type assignments).")
+        if si.get("is_family_pack"):
+            lines.append("This is a FAMILY PACK video — make sure to showcase stickers from multiple sub-themes.")
         lines.append("Output ONLY a valid JSON object following the schema described in your instructions.")
 
         return "\n".join(lines)

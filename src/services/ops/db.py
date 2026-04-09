@@ -274,6 +274,7 @@ class OpsDatabase:
                 design_id TEXT DEFAULT '',
                 pack_id TEXT DEFAULT '',
                 job_id TEXT DEFAULT '',
+                family_id TEXT DEFAULT '',
                 combo_id TEXT NOT NULL,
                 selected_types_json TEXT DEFAULT '[]',
                 input_json TEXT DEFAULT '{}',
@@ -290,6 +291,7 @@ class OpsDatabase:
                 design_id TEXT DEFAULT '',
                 pack_id TEXT DEFAULT '',
                 job_id TEXT DEFAULT '',
+                family_id TEXT DEFAULT '',
                 combo_id TEXT NOT NULL,
                 plan_id TEXT DEFAULT '',
                 hook_text TEXT DEFAULT '',
@@ -327,6 +329,8 @@ class OpsDatabase:
             ("generation_jobs", "subtheme_id INTEGER"),
             ("generation_jobs", "variant_label TEXT"),
             ("trend_items", "family_status TEXT DEFAULT 'pending'"),
+            ("video_script_plans_v2", "family_id TEXT DEFAULT ''"),
+            ("video_scripts", "family_id TEXT DEFAULT ''"),
             ("trend_items", "allocation_status TEXT DEFAULT 'pending'"),
         ]
         for table, column_def in migrations:
@@ -338,6 +342,15 @@ class OpsDatabase:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
                 except sqlite3.OperationalError:
                     pass
+        deferred_indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_vsp2_family ON video_script_plans_v2(family_id)",
+            "CREATE INDEX IF NOT EXISTS idx_vs_family ON video_scripts(family_id)",
+        ]
+        for idx_sql in deferred_indexes:
+            try:
+                c.execute(idx_sql)
+            except sqlite3.OperationalError:
+                pass
         c.commit()
 
     def upsert_trend_item(self, item: TrendItem) -> None:
@@ -1570,12 +1583,12 @@ class OpsDatabase:
         now = _now()
         self.conn.execute(
             """INSERT INTO video_script_plans_v2
-               (id, design_id, pack_id, job_id, combo_id, selected_types_json,
+               (id, design_id, pack_id, job_id, family_id, combo_id, selected_types_json,
                 input_json, plan_json, status, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 data["id"], data.get("design_id", ""), data.get("pack_id", ""),
-                data.get("job_id", ""), data["combo_id"],
+                data.get("job_id", ""), data.get("family_id", ""), data["combo_id"],
                 json.dumps(data.get("selected_types", []), ensure_ascii=False),
                 json.dumps(data.get("input_snapshot", {}), ensure_ascii=False),
                 json.dumps(data.get("plan", {}), ensure_ascii=False),
@@ -1632,13 +1645,14 @@ class OpsDatabase:
         now = _now()
         self.conn.execute(
             """INSERT INTO video_scripts
-               (id, design_id, pack_id, job_id, combo_id, plan_id,
+               (id, design_id, pack_id, job_id, family_id, combo_id, plan_id,
                 hook_text, cta_text, caption_text, title_options_json,
                 script_json, status, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 data["id"], data.get("design_id", ""), data.get("pack_id", ""),
-                data.get("job_id", ""), data["combo_id"], data.get("plan_id", ""),
+                data.get("job_id", ""), data.get("family_id", ""),
+                data["combo_id"], data.get("plan_id", ""),
                 data.get("hook_text", ""), data.get("cta_text", ""),
                 data.get("caption_text", ""),
                 json.dumps(data.get("title_options", []), ensure_ascii=False),

@@ -21,9 +21,13 @@
         <select id="sel_job">
           <option value="">-- 选择卡包 --</option>
           {% for family_id, group in (fam_jobs|sort(attribute='family_id')|groupby('family_id')) %}
-          <optgroup label="Parent Theme（家族） · {{ family_id }}">
+          {% set fg = family_groups.get(family_id, {}) %}
+          <optgroup label="🏠 {{ fg.label or family_id }}（家族）">
+            <option value="family:{{ family_id }}" data-family-id="{{ family_id }}" data-is-family="1">
+              📦 整组（{{ group|length }} 个子包，共 {{ fg.total_images|default(0) }} 张）
+            </option>
             {% for j in group %}
-            <option value="{{ j.id }}" data-family-id="{{ family_id }}">{{ (j.variant_label or j.trend_name or j.id) }} ({{ j.image_count|default(0) }} 张)</option>
+            <option value="{{ j.id }}" data-family-id="{{ family_id }}">↳ {{ (j.variant_label or j.trend_name or j.id) }} ({{ j.image_count|default(0) }} 张)</option>
             {% endfor %}
           </optgroup>
           {% endfor %}
@@ -278,55 +282,67 @@ const statusEl=document.getElementById('gen_status');
 function showStatus(msg,color){statusEl.style.display='block';statusEl.style.color=color||'var(--text-muted)';statusEl.textContent=msg;}
 
 function updateFamilySiblingNote(){
-  const sel=document.getElementById('sel_job');
-  const note=document.getElementById('vs_family_note');
+  var sel=document.getElementById('sel_job');
+  var note=document.getElementById('vs_family_note');
   if(!sel||!note)return;
-  const opt=sel.options[sel.selectedIndex];
+  var opt=sel.options[sel.selectedIndex];
   if(!opt||!opt.value){note.style.display='none';note.textContent='';return;}
-  const fid=opt.getAttribute('data-family-id');
+  var isFamily=opt.getAttribute('data-is-family')==='1';
+  var fid=opt.getAttribute('data-family-id');
+  if(isFamily){
+    note.textContent='已选择整个家族卡包，将聚合该家族下所有子包的贴纸进行脚本生成。';
+    note.style.display='block';
+    return;
+  }
   if(!fid){note.style.display='none';note.textContent='';return;}
-  const sibs=[];
-  for(let i=0;i<sel.options.length;i++){
-    const o=sel.options[i];
-    if(!o.value||o===opt)continue;
-    if(o.getAttribute('data-family-id')===fid)sibs.push(o.textContent);
+  var sibs=[];
+  for(var i=0;i<sel.options.length;i++){
+    var o=sel.options[i];
+    if(!o.value||o===opt||o.getAttribute('data-is-family')==='1')continue;
+    if(o.getAttribute('data-family-id')===fid)sibs.push(o.textContent.trim());
   }
   if(!sibs.length){note.style.display='none';note.textContent='';return;}
-  note.textContent='同家族其他卡包： '+sibs.join(' · ');
+  note.textContent='该子包属于家族系列，AI 将感知同族上下文。同族其他卡包：'+sibs.join(' · ');
   note.style.display='block';
 }
 document.getElementById('sel_job')?.addEventListener('change',updateFamilySiblingNote);
 updateFamilySiblingNote();
 
 async function startGenerate(){
-  const jobId=document.getElementById('sel_job').value;
-  const comboId=document.getElementById('sel_combo').value;
-  if(!jobId||!comboId){alert('请选择卡包和组合');return;}
+  var selVal=document.getElementById('sel_job').value;
+  var comboId=document.getElementById('sel_combo').value;
+  if(!selVal||!comboId){alert('请选择卡包和组合');return;}
 
-  const btn=document.getElementById('btn_gen');
-  const btnText=document.getElementById('btn_gen_text');
-  const spinner=document.getElementById('btn_gen_spinner');
+  var isFamily=selVal.startsWith('family:');
+  var assemblePayload=isFamily?{family_id:selVal.replace('family:','')}:{job_id:selVal};
+
+  var btn=document.getElementById('btn_gen');
+  var btnText=document.getElementById('btn_gen_text');
+  var spinner=document.getElementById('btn_gen_spinner');
   btn.disabled=true;btnText.textContent='生成中...';spinner.style.display='inline-block';
-  showStatus('第 1 步：正在汇总输入数据...');
+  showStatus('第 1 步：正在汇总输入数据' + (isFamily ? '（家族整组）' : '') + '...');
 
   try{
-    const assembleRes=await fetch('/api/v2/video-scripts/assemble-input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:jobId})});
-    if(!assembleRes.ok){const e=await assembleRes.json();throw new Error(e.detail||'汇总数据失败');}
-    const{script_input}=await assembleRes.json();
+    var assembleRes=await fetch('/api/v2/video-scripts/assemble-input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(assemblePayload)});
+    if(!assembleRes.ok){var e=await assembleRes.json();throw new Error(e.detail||'汇总数据失败');}
+    var data=await assembleRes.json();
+    var script_input=data.script_input;
 
     showStatus('第 2 步：正在生成脚本规划 (Plan)...');
-    const planRes=await fetch('/api/v2/video-plans/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({combo_id:comboId,script_input,job_id:jobId})});
-    if(!planRes.ok){const e=await planRes.json();throw new Error(e.detail||'Plan 生成失败');}
-    const plan=await planRes.json();
+    var planPayload={combo_id:comboId,script_input:script_input};
+    if(!isFamily)planPayload.job_id=selVal;
+    var planRes=await fetch('/api/v2/video-plans/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(planPayload)});
+    if(!planRes.ok){var e2=await planRes.json();throw new Error(e2.detail||'Plan 生成失败');}
+    var plan=await planRes.json();
 
     showStatus('第 3 步：正在基于 Plan 生成正式脚本 (Script)...');
-    const scriptRes=await fetch('/api/v2/video-scripts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.id})});
-    if(!scriptRes.ok){const e=await scriptRes.json();throw new Error(e.detail||'Script 生成失败');}
+    var scriptRes=await fetch('/api/v2/video-scripts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.id})});
+    if(!scriptRes.ok){var e3=await scriptRes.json();throw new Error(e3.detail||'Script 生成失败');}
 
     showStatus('生成完成！正在刷新页面...','#059669');
-    setTimeout(()=>location.reload(),800);
-  }catch(e){
-    showStatus('生成失败: '+e.message,'#dc2626');
+    setTimeout(function(){location.reload();},800);
+  }catch(err){
+    showStatus('生成失败: '+err.message,'#dc2626');
   }finally{
     btn.disabled=false;btnText.textContent='生成脚本';spinner.style.display='none';
   }
