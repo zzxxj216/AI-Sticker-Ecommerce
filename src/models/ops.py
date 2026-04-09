@@ -79,3 +79,21 @@ class GenerationOutput(BaseModel):
     preview_path: str = ""
     metadata_json: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
+
+
+PlanningRegion = Literal["us", "ca", "eu"]
+EventCategory = Literal["holiday", "event", "cultural", "sports", ""]
+
+
+class PlanningEvent(BaseModel):
+    id: str
+    title: str
+    category: EventCategory = ""
+    region: PlanningRegion
+    start_date: str
+    end_date: str | None = None
+    short_description: str = ""
+    source: str = ""
+    fetch_batch: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)

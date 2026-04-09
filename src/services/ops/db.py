@@ -306,6 +306,44 @@ class OpsDatabase:
             CREATE INDEX IF NOT EXISTS idx_vs_combo ON video_scripts(combo_id);
             CREATE INDEX IF NOT EXISTS idx_vs_plan ON video_scripts(plan_id);
             CREATE INDEX IF NOT EXISTS idx_vs_job ON video_scripts(job_id);
+
+            -- Planning Events Calendar --
+            CREATE TABLE IF NOT EXISTS planning_events (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                category TEXT DEFAULT '',
+                region TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT,
+                short_description TEXT DEFAULT '',
+                source TEXT DEFAULT '',
+                raw_json TEXT DEFAULT '{}',
+                fetch_batch TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pe_region_date ON planning_events(region, start_date);
+            CREATE INDEX IF NOT EXISTS idx_pe_batch ON planning_events(fetch_batch);
+
+            -- Planning Directions (sticker pack design directions) --
+            CREATE TABLE IF NOT EXISTS planning_directions (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                direction_index INTEGER DEFAULT 0,
+                name_en TEXT NOT NULL,
+                name_zh TEXT DEFAULT '',
+                keywords TEXT DEFAULT '',
+                design_elements TEXT DEFAULT '',
+                text_slogans TEXT DEFAULT '',
+                decorative_elements TEXT DEFAULT '',
+                preview_path TEXT DEFAULT '',
+                preview_status TEXT DEFAULT 'pending',
+                gen_status TEXT DEFAULT 'pending',
+                job_id TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (event_id) REFERENCES planning_events(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pd_event ON planning_directions(event_id);
             """
         )
         c.commit()
@@ -1704,6 +1742,128 @@ class OpsDatabase:
         cur = self.conn.execute("DELETE FROM video_scripts WHERE id = ?", (script_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    # ── Planning Events ──────────────────────────────────────
+
+    def insert_planning_events(self, events: list[dict[str, Any]]) -> int:
+        now = _now()
+        inserted = 0
+        with self._write_lock:
+            for e in events:
+                self.conn.execute(
+                    """INSERT OR REPLACE INTO planning_events
+                       (id, title, category, region, start_date, end_date,
+                        short_description, source, raw_json, fetch_batch,
+                        created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        e["id"], e["title"], e.get("category", ""),
+                        e["region"], e["start_date"], e.get("end_date"),
+                        e.get("short_description", ""), e.get("source", ""),
+                        json.dumps(e.get("raw", {}), ensure_ascii=False),
+                        e.get("fetch_batch", ""), now, now,
+                    ),
+                )
+                inserted += 1
+            self.conn.commit()
+        return inserted
+
+    def list_planning_events(
+        self,
+        region: str | None = None,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if region:
+            conditions.append("region = ?")
+            params.append(region)
+        if year and month:
+            prefix = f"{year:04d}-{month:02d}"
+            conditions.append("start_date LIKE ?")
+            params.append(f"{prefix}%")
+        sql = "SELECT * FROM planning_events"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY start_date ASC"
+        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def get_planning_event(self, event_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM planning_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete_planning_event(self, event_id: str) -> bool:
+        with self._write_lock:
+            cur = self.conn.execute(
+                "DELETE FROM planning_events WHERE id = ?", (event_id,)
+            )
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_planning_events_by_batch(self, batch: str) -> int:
+        with self._write_lock:
+            cur = self.conn.execute(
+                "DELETE FROM planning_events WHERE fetch_batch = ?", (batch,)
+            )
+            self.conn.commit()
+        return cur.rowcount
+
+    def get_planning_stats(self) -> dict[str, Any]:
+        rows = self.conn.execute(
+            "SELECT region, COUNT(*) as cnt FROM planning_events GROUP BY region"
+        ).fetchall()
+        by_region = {r["region"]: r["cnt"] for r in rows}
+        total = sum(by_region.values())
+        return {"total": total, "by_region": by_region}
+
+    # ── Planning Directions ────────────────────────────────────
+
+    def insert_planning_direction(self, d: dict[str, Any]) -> None:
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO planning_directions
+                   (id, event_id, direction_index, name_en, name_zh,
+                    keywords, design_elements, text_slogans, decorative_elements,
+                    preview_path, preview_status, gen_status, job_id, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    d["id"], d["event_id"], d.get("direction_index", 0),
+                    d["name_en"], d.get("name_zh", ""),
+                    d.get("keywords", ""), d.get("design_elements", ""),
+                    d.get("text_slogans", ""), d.get("decorative_elements", ""),
+                    d.get("preview_path", ""), d.get("preview_status", "pending"),
+                    d.get("gen_status", "pending"), d.get("job_id", ""),
+                    d.get("created_at", _now()),
+                ),
+            )
+            self.conn.commit()
+
+    def list_directions_by_event(self, event_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM planning_directions WHERE event_id = ? ORDER BY direction_index",
+            (event_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_direction(self, direction_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM planning_directions WHERE id = ?", (direction_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_direction(self, direction_id: str, **fields) -> None:
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values()) + [direction_id]
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE planning_directions SET {sets} WHERE id = ?", vals,
+            )
+            self.conn.commit()
 
     @staticmethod
     def _to_iso(value: Any) -> Any:
