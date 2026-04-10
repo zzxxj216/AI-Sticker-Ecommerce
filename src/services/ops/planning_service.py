@@ -33,10 +33,10 @@ def _build_prompt(region_name: str, year: int, month: int) -> str:
     return f"""请搜索 **{region_name}** 市场 **{year}年{month}月** 所有重要内容热点。
 请尽可能全面、详尽，覆盖以下所有类别：
 
-1. **holiday** — 公共假日、法定假日、宗教节日、文化纪念日、商业性节日（如母亲节、情人节）、趣味主题日（如National Pizza Day）
-2. **event** — 行业展会、品牌发布会、颁奖典礼、博览会、大型会议
-3. **cultural** — 电影上映、音乐节、音乐专辑发行、电视节目首播/决赛、艺术展、文学节、Heritage Month
-4. **sports** — 职业联赛（NFL/NBA/NHL/MLB/MLS/Premier League等）关键赛事、马拉松、赛车、格斗赛、高尔夫大满贯、网球赛事等
+1. **holiday** 
+2. **event**
+3. **cultural** 
+4. **sports** 
 
 规则：
 - 单日事件：end_date 设为 null
