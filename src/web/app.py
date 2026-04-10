@@ -13,7 +13,7 @@ from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -29,7 +29,6 @@ from src.services.video.video_script_service import VideoScriptService
 from src.services.ops.planning_service import PlanningService
 from src.services.ops.direction_generator import DirectionGenerator
 from src.services.blog.calendar_page_generator import generate_calendar_html
-from src.services.ops.backup_service import BackupService
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -85,7 +84,6 @@ video_plan_svc = VideoPlanService(trend_service.db)
 video_script_svc = VideoScriptService(trend_service.db)
 planning_svc = PlanningService(trend_service.db)
 direction_gen = DirectionGenerator(db=trend_service.db)
-backup_svc = BackupService(db_path=trend_service.db.db_path)
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -97,13 +95,6 @@ def start_scheduler():
         hour=6,
         minute=0,
         args=[f"cron_job_{int(datetime.now().timestamp())}"]
-    )
-    scheduler.add_job(
-        backup_svc.create_backup,
-        'cron',
-        hour=2,
-        minute=0,
-        id='daily_backup',
     )
     scheduler.start()
 
@@ -150,14 +141,24 @@ templates.env.globals["format_views"] = _format_views
 
 
 def _to_output_url(file_path: str) -> str:
-    """Convert an absolute/relative disk path under output/h5_jobs to a /outputs/ URL."""
+    """Convert an absolute/relative disk path to a web-accessible URL."""
     p = file_path.replace("\\", "/")
+
+    if p.startswith("/preview-images/") or p.startswith("/outputs/"):
+        return p
+
+    for marker in ("data/output/images/", "output/images/"):
+        idx = p.find(marker)
+        if idx >= 0:
+            return "/preview-images/" + p[idx + len(marker):]
+
     marker = "output/h5_jobs/"
     idx = p.find(marker)
     if idx >= 0:
         return "/outputs/" + p[idx + len(marker):]
     if p.startswith("output/h5_jobs"):
         return "/outputs/" + p[len("output/h5_jobs"):].lstrip("/")
+
     return p
 
 
@@ -488,10 +489,9 @@ def api_queue_subtheme(request: Request, subtheme_id: int) -> dict:
 def page_family_detail(request: Request, trend_id: str):
     trend = trend_service.get_trend(trend_id)
     if not trend:
-        return templates.TemplateResponse(request, "error.html", _base_context(request, message="Trend 不存在"), status_code=404)
+        return templates.TemplateResponse("error.html", _base_context(request, message="Trend 不存在"), status_code=404)
     family = trend_service.get_theme_family(trend_id)
     return templates.TemplateResponse(
-        request,
         "family_detail.html",
         _base_context(
             request,
@@ -1472,142 +1472,13 @@ def api_v2_delete_video_script(script_id: str):
     return {"ok": True}
 
 
-def _collect_sticker_descs(job_ids: list[str]) -> list[str]:
-    """Gather sticker descriptions from generation_outputs for one or more jobs."""
-    descs: list[str] = []
-    for jid in job_ids:
-        for out in trend_service.db.list_outputs(jid):
-            if out.get("output_type") != "image":
-                continue
-            meta = out.get("metadata_json", {})
-            name = meta.get("name", "")
-            prompt_txt = meta.get("prompt", "")
-            if name:
-                desc = name
-                if prompt_txt:
-                    desc += f" — {prompt_txt[:120]}"
-                descs.append(desc)
-            elif prompt_txt:
-                descs.append(prompt_txt[:150])
-    return descs
-
-
-def _fill_brief_context(script_input: dict[str, Any], trend_id: str) -> None:
-    """Populate brief-derived fields on script_input from the trend's brief or subtheme briefs."""
-    if not trend_id or trend_id.startswith("chat:"):
-        return
-    brief_row = trend_service.db.get_brief(trend_id)
-    if not brief_row:
-        return
-    bj = brief_row.get("brief_json", {})
-    script_input["one_line_explanation"] = bj.get("one_line_explanation", "")
-    script_input["emotional_hooks"] = bj.get("emotional_hooks", bj.get("emotional_core", []))
-    ta = bj.get("target_audience", {})
-    script_input["audience_persona"] = ta.get("profile", "")
-    script_input["visual_symbols"] = bj.get("visual_symbols", [])
-    script_input["use_cases"] = ta.get("usage_scenarios", [])
-    script_input["one_line_product_angle"] = bj.get("product_goal", "")
-
-
-def _fill_brand_context(script_input: dict[str, Any]) -> None:
-    brand = video_plan_svc.brand_profile
-    materials_cfg = brand.get("materials", {})
-    script_input["materials"] = materials_cfg.get("safe_claims", [])
-    script_input["brand_tone"] = (brand.get("brand", {}).get("voice", ""))[:200]
-
-
 @app.post("/api/v2/video-scripts/assemble-input")
 def api_v2_assemble_input(payload: dict):
-    """Assemble VideoScriptInput from a job_id or family_id.
-
-    When family_id is given, aggregates all completed jobs under the family
-    into a single "family pack" input.  When job_id is given, builds the
-    input for that single job (with sibling context if it belongs to a family).
-    """
-    family_id = payload.get("family_id", "")
+    """Helper: assemble VideoScriptInput from a job_id, pulling trend brief + sticker data."""
     job_id = payload.get("job_id", "")
+    if not job_id:
+        raise HTTPException(400, "job_id is required")
 
-    if family_id:
-        return _assemble_family_input(family_id)
-    if job_id:
-        return _assemble_single_job_input(job_id)
-    raise HTTPException(400, "job_id or family_id is required")
-
-
-def _assemble_family_input(family_id: str) -> dict:
-    """Assemble input for an entire family (all completed sub-packs)."""
-    all_jobs = trend_service.db.list_jobs_by_family(family_id)
-    completed = [j for j in all_jobs if j.get("status") == "completed"]
-    if not completed:
-        raise HTTPException(400, "该家族下没有已完成的卡包")
-
-    first_job = completed[0]
-    trend_id = first_job.get("trend_id", "")
-
-    from trend_fetcher.trend_db import TrendDB
-    tdb = TrendDB("data/ops_workbench.db")
-    fam_id_int = int(family_id) if family_id.isdigit() else 0
-    family_row = tdb.get_theme_family(fam_id_int) if fam_id_int else None
-
-    subthemes_info: list[dict[str, Any]] = []
-    if family_row:
-        subs = tdb.list_subthemes(fam_id_int)
-        for s in subs:
-            brief = tdb.get_subtheme_brief(s["id"])
-            sub_entry: dict[str, Any] = {
-                "subtheme_name": s.get("subtheme_name", ""),
-                "subtheme_type": s.get("subtheme_type", ""),
-                "one_line_direction": s.get("one_line_direction", ""),
-            }
-            if brief and brief.get("brief_json"):
-                import json as _json
-                bj = brief["brief_json"]
-                if isinstance(bj, str):
-                    try:
-                        bj = _json.loads(bj)
-                    except Exception:
-                        bj = {}
-                sub_entry["brief_summary"] = bj.get("one_line_explanation", "")
-            subthemes_info.append(sub_entry)
-
-    job_ids = [j["id"] for j in completed]
-    descs = _collect_sticker_descs(job_ids)
-
-    parent_theme = family_row.get("parent_theme", first_job.get("trend_name", "")) if family_row else first_job.get("trend_name", "")
-
-    script_input: dict[str, Any] = {
-        "job_id": "",
-        "pack_id": "",
-        "family_id": family_id,
-        "trend_topic": parent_theme,
-        "platform": "tiktok",
-        "is_family_pack": True,
-        "family_pack_count": len(completed),
-        "family_subthemes": subthemes_info,
-        "sticker_descriptions": descs,
-        "hero_sticker": descs[0] if descs else "",
-        "collection_sheet": "available" if len(descs) > 3 else "",
-    }
-
-    _fill_brief_context(script_input, trend_id)
-
-    if family_row:
-        if family_row.get("shared_emotional_core"):
-            script_input.setdefault("emotional_hooks", [])
-            if isinstance(family_row["shared_emotional_core"], str):
-                script_input["emotional_hooks"].append(family_row["shared_emotional_core"])
-        if family_row.get("shared_visual_core"):
-            script_input.setdefault("visual_symbols", [])
-            if isinstance(family_row["shared_visual_core"], str):
-                script_input["visual_symbols"].append(family_row["shared_visual_core"])
-
-    _fill_brand_context(script_input)
-
-    return {"script_input": script_input, "family_context": None}
-
-
-def _assemble_single_job_input(job_id: str) -> dict:
-    """Assemble input for a single job, with optional family sibling context."""
     job = trend_service.db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
@@ -1620,33 +1491,56 @@ def _assemble_single_job_input(job_id: str) -> dict:
     }
 
     trend_id = job.get("trend_id", "")
-    _fill_brief_context(script_input, trend_id)
-    _fill_brand_context(script_input)
+    if trend_id and not trend_id.startswith("chat:"):
+        brief_row = trend_service.db.get_brief(trend_id)
+        if brief_row:
+            bj = brief_row.get("brief_json", {})
+            script_input["one_line_explanation"] = bj.get("one_line_explanation", "")
+            script_input["emotional_hooks"] = bj.get("emotional_hooks", bj.get("emotional_core", []))
+            ta = bj.get("target_audience", {})
+            script_input["audience_persona"] = ta.get("profile", "")
+            script_input["visual_symbols"] = bj.get("visual_symbols", [])
+            script_input["use_cases"] = ta.get("usage_scenarios", [])
+            script_input["one_line_product_angle"] = bj.get("product_goal", "")
 
-    descs = _collect_sticker_descs([job_id])
+    brand = video_plan_svc.brand_profile
+    materials_cfg = brand.get("materials", {})
+    script_input["materials"] = materials_cfg.get("safe_claims", [])
+    script_input["brand_tone"] = (brand.get("brand", {}).get("voice", ""))[:200]
+
+    outputs = trend_service.db.list_outputs(job_id)
+    descs: list[str] = []
+    for out in outputs:
+        if out.get("output_type") != "image":
+            continue
+        meta = out.get("metadata_json", {})
+        name = meta.get("name", "")
+        prompt_txt = meta.get("prompt", "")
+        if name:
+            desc = name
+            if prompt_txt:
+                desc += f" — {prompt_txt[:120]}"
+            descs.append(desc)
+        elif prompt_txt:
+            descs.append(prompt_txt[:150])
     script_input["sticker_descriptions"] = descs
     if descs:
         script_input["hero_sticker"] = descs[0]
     if len(descs) > 3:
         script_input["collection_sheet"] = "available"
 
-    fid = job.get("family_id")
     family_context = None
+    fid = job.get("family_id")
     if fid:
-        script_input["family_id"] = fid
         sibling_jobs = trend_service.db.list_jobs_by_family(fid)
-        siblings = [sj for sj in sibling_jobs if sj["id"] != job_id]
         family_context = {
             "family_id": fid,
             "variant_label": job.get("variant_label", ""),
             "sibling_packs": [
                 {"job_id": sj["id"], "trend_name": sj["trend_name"], "status": sj["status"], "variant_label": sj.get("variant_label", "")}
-                for sj in siblings
+                for sj in sibling_jobs if sj["id"] != job_id
             ],
         }
-        if siblings:
-            parts = [f"{sj.get('variant_label') or sj.get('trend_name', sj['id'])} ({sj['status']})" for sj in siblings]
-            script_input["sibling_context"] = f"This pack is part of a family of {len(sibling_jobs)} sub-packs. Siblings: " + "; ".join(parts)
 
     return {"script_input": script_input, "family_context": family_context}
 
@@ -1682,20 +1576,6 @@ def video_studio_page(request: Request):
     jobs = [j for j in all_jobs if j.get("status") == "completed"]
     plans = trend_service.db.list_video_script_plans_v2()
     scripts = trend_service.db.list_video_scripts()
-
-    family_groups: dict[str, dict[str, Any]] = {}
-    for j in jobs:
-        fid = j.get("family_id")
-        if not fid:
-            continue
-        if fid not in family_groups:
-            family_groups[fid] = {"family_id": fid, "jobs": [], "total_images": 0, "label": ""}
-        family_groups[fid]["jobs"].append(j)
-        family_groups[fid]["total_images"] += j.get("image_count", 0)
-    for fg in family_groups.values():
-        first = fg["jobs"][0]
-        fg["label"] = first.get("trend_name", first.get("id", ""))
-
     return templates.TemplateResponse(
         request,
         "video_studio.html",
@@ -1705,7 +1585,6 @@ def video_studio_page(request: Request):
             jobs=jobs,
             plans=plans,
             scripts=scripts,
-            family_groups=family_groups,
             page_title="脚本工作室",
         ),
     )
@@ -1780,7 +1659,14 @@ def api_planning_stats():
 
 
 @app.post("/api/planning/events/{event_id}/directions")
-def api_generate_directions(event_id: str, background_tasks: BackgroundTasks):
+async def api_generate_directions(event_id: str, request: Request, background_tasks: BackgroundTasks):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    count = max(1, min(10, int(body.get("count", 2))))
+
     existing = trend_service.db.list_directions_by_event(event_id)
     if existing:
         return {"ok": True, "directions": existing, "cached": True}
@@ -1791,14 +1677,14 @@ def api_generate_directions(event_id: str, background_tasks: BackgroundTasks):
 
     def _run():
         try:
-            dirs = direction_gen.generate_directions(event_id)
+            dirs = direction_gen.generate_directions(event_id, count=count)
             result_q.put({"ok": True, "directions": dirs})
         except Exception as exc:
             result_q.put({"ok": False, "error": str(exc)})
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    t.join(timeout=120)
+    t.join(timeout=180)
 
     if result_q.empty():
         return {"ok": False, "error": "Direction generation timed out"}
@@ -1810,28 +1696,82 @@ def api_list_directions(event_id: str):
     return {"directions": trend_service.db.list_directions_by_event(event_id)}
 
 
+@app.post("/api/planning/events/{event_id}/directions/manual")
+async def api_create_manual_direction(event_id: str, request: Request):
+    """Create a direction from manual user input (no AI)."""
+    event = trend_service.db.get_planning_event(event_id)
+    if not event:
+        raise HTTPException(404, "Event not found")
+    body = await request.json()
+    name_en = (body.get("name_en") or "").strip()
+    if not name_en:
+        return {"ok": False, "error": "name_en is required"}
+
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    existing = trend_service.db.list_directions_by_event(event_id)
+    rec = {
+        "id": f"dir_{_uuid.uuid4().hex[:12]}",
+        "event_id": event_id,
+        "direction_index": len(existing),
+        "name_en": name_en,
+        "name_zh": (body.get("name_zh") or "").strip(),
+        "keywords": (body.get("keywords") or "").strip(),
+        "design_elements": (body.get("design_elements") or "").strip(),
+        "text_slogans": (body.get("text_slogans") or "").strip(),
+        "decorative_elements": (body.get("decorative_elements") or "").strip(),
+        "preview_path": "",
+        "preview_status": "pending",
+        "gen_status": "pending",
+        "job_id": "",
+        "sticker_count": int(body.get("sticker_count", 10)),
+        "created_at": _dt.now(_tz(_td(hours=8))).isoformat(),
+    }
+    trend_service.db.insert_planning_direction(rec)
+    return {"ok": True, "direction": rec}
+
+
+@app.patch("/api/planning/directions/{direction_id}")
+async def api_update_direction(direction_id: str, request: Request):
+    """Update direction fields (e.g. sticker_count)."""
+    d = trend_service.db.get_direction(direction_id)
+    if not d:
+        raise HTTPException(404, "Direction not found")
+    body = await request.json()
+    allowed = {"sticker_count"}
+    updates = {}
+    for k in allowed:
+        if k in body:
+            updates[k] = int(body[k])
+    if updates:
+        trend_service.db.update_direction(direction_id, **updates)
+    return {"ok": True, "updated": updates}
+
+
 @app.post("/api/planning/directions/{direction_id}/preview")
-def api_direction_preview(direction_id: str, background_tasks: BackgroundTasks):
+def api_direction_preview(request: Request, direction_id: str):
+    """Generate preview collection sheets (1 per 10 stickers), saved to gallery/pack management."""
     d = trend_service.db.get_direction(direction_id)
     if not d:
         raise HTTPException(404, "Direction not found")
     if d.get("preview_status") == "generating":
         return {"ok": True, "status": "generating", "message": "Preview already in progress"}
-    if d.get("preview_status") == "completed" and d.get("preview_path"):
-        return {"ok": True, "status": "completed", "preview_path": d["preview_path"]}
-    background_tasks.add_task(direction_gen.generate_preview, direction_id)
-    return {"ok": True, "status": "queued", "message": "Preview generation started"}
+    created_by = (_current_user(request) or {}).get("name") or "system"
+    result = direction_gen.generate_preview(direction_id, created_by=created_by)
+    return {"ok": True, **result}
 
 
 @app.post("/api/planning/directions/{direction_id}/generate")
 def api_direction_generate(request: Request, direction_id: str):
+    """Run full pipeline to generate individual sticker images, saved to gallery/pack management."""
     d = trend_service.db.get_direction(direction_id)
     if not d:
         raise HTTPException(404, "Direction not found")
-    if d.get("gen_status") in ("generating", "completed"):
-        return {"ok": True, "status": d["gen_status"], "job_id": d.get("job_id", "")}
+    if d.get("gen_status") in ("generating",):
+        return {"ok": True, "status": "generating", "job_id": d.get("job_id", "")}
     created_by = (_current_user(request) or {}).get("name") or "system"
-    result = direction_gen.start_full_generation(direction_id, created_by=created_by)
+    result = direction_gen.start_generation(direction_id, created_by=created_by)
     return {"ok": True, **result}
 
 
@@ -1921,50 +1861,6 @@ def api_delete_shopify_calendar():
         raise HTTPException(404, str(e))
 
     return {"ok": True, "deleted": True}
-
-
-# -- Database Backup --
-
-@app.get("/system/backups", response_class=HTMLResponse)
-def backups_page(request: Request):
-    return templates.TemplateResponse(
-        request, "backups.html",
-        _base_context(request, page_title="数据库备份"),
-    )
-
-
-@app.get("/api/system/backups")
-def api_list_backups():
-    return {"backups": backup_svc.list_backups()}
-
-
-@app.post("/api/system/backup")
-def api_create_backup():
-    try:
-        info = backup_svc.create_backup()
-        return {"ok": True, **info}
-    except Exception as e:
-        raise HTTPException(500, f"Backup failed: {e}")
-
-
-@app.get("/api/system/backups/{filename}/download")
-def api_download_backup(filename: str):
-    path = backup_svc.get_backup_path(filename)
-    if not path:
-        raise HTTPException(404, "Backup not found")
-    return FileResponse(
-        path=str(path),
-        filename=filename,
-        media_type="application/octet-stream",
-    )
-
-
-@app.delete("/api/system/backups/{filename}")
-def api_delete_backup(filename: str):
-    ok = backup_svc.delete_backup(filename)
-    if not ok:
-        raise HTTPException(404, "Backup not found")
-    return {"ok": True}
 
 
 @app.exception_handler(HTTPException)

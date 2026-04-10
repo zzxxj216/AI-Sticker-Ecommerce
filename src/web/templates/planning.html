@@ -114,10 +114,16 @@
     <div class="modal-body" id="modalBody"></div>
     <div class="modal-directions" id="modalDirections" style="display:none;">
       <div style="padding:0 20px 16px;">
-        <button class="btn btn-primary" id="genDirectionsBtn" style="width:100%;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-          AI 生成贴纸包方向
-        </button>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+          <button class="btn btn-primary" id="genDirectionsBtn" style="flex:1;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            AI 生成方向
+          </button>
+          <div class="direction-count-ctrl">
+            <label>数量</label>
+            <input type="number" id="directionCountInput" value="2" min="1" max="10" />
+          </div>
+        </div>
         <div id="directionsLoading" style="display:none;text-align:center;padding:20px;">
           <span class="spinner" style="border-color:var(--accent);border-top-color:transparent;width:20px;height:20px;"></span>
           <p style="margin:8px 0 0;font-size:12px;color:var(--text-muted);">AI 正在分析事件并生成设计方向...</p>
@@ -332,6 +338,20 @@
 }
 .direction-preview-img:hover{transform:scale(1.02);}
 .direction-status{font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;}
+.direction-count-ctrl{display:flex;align-items:center;gap:6px;white-space:nowrap;}
+.direction-count-ctrl label{font-size:12px;font-weight:600;color:var(--text-muted);}
+.direction-count-ctrl input{
+  width:52px;padding:6px 4px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-size:13px;text-align:center;background:var(--surface);color:var(--text);
+}
+.direction-count-ctrl input:focus{outline:none;border-color:var(--accent);}
+.direction-count-input{
+  width:60px;padding:3px 6px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-size:12px;text-align:center;background:var(--surface);color:var(--text);
+}
+.direction-count-input:focus{outline:none;border-color:var(--accent);}
+.direction-count-row{display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line-soft);}
+.direction-count-label{font-size:11px;font-weight:600;color:var(--text-muted);}
 </style>
 
 <script>
@@ -632,12 +652,17 @@
     if(!currentModalEvent||!currentModalEvent.id) return;
     const $btn=document.getElementById('genDirectionsBtn');
     const $loading=document.getElementById('directionsLoading');
+    const count=parseInt(document.getElementById('directionCountInput').value)||2;
     $btn.disabled=true;
     $btn.style.display='none';
     $loading.style.display='block';
-    showToast('AI 正在分析事件并生成 2 个设计方向，请稍候...','info',6000);
+    showToast(`AI 正在分析事件并生成 ${count} 个设计方向，请稍候...`,'info',6000);
     try{
-      const r=await fetch(`/api/planning/events/${currentModalEvent.id}/directions`,{method:'POST'});
+      const r=await fetch(`/api/planning/events/${currentModalEvent.id}/directions`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({count}),
+      });
       const data=await r.json();
       $loading.style.display='none';
       if(data.ok&&data.directions){
@@ -662,15 +687,17 @@
       let previewHtml='';
       if(d.preview_status==='completed'&&d.preview_path){
         previewHtml=`<img class="direction-preview-img" src="${d.preview_path}" alt="preview" />`;
+        previewHtml+=`<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">预览图已保存到 <a href="/stickers" style="color:var(--accent);">画廊</a></div>`;
       }else if(d.preview_status==='generating'){
-        previewHtml=`<div class="direction-status"><span class="spinner" style="border-color:var(--accent);border-top-color:transparent;"></span> 预览生成中...</div>`;
+        previewHtml=`<div class="direction-status"><span class="spinner" style="border-color:var(--accent);border-top-color:transparent;"></span> 预览图生成中...</div>`;
       }
       let genStatusHtml='';
       if(d.gen_status==='completed'){
         genStatusHtml=`<span class="direction-status" style="color:var(--success);">✓ 贴纸包已生成</span>`;
-        if(d.job_id) genStatusHtml+=` <a href="/jobs" style="font-size:11px;color:var(--accent);">查看任务</a>`;
+        genStatusHtml+=` <a href="/stickers" style="font-size:11px;color:var(--accent);">画廊</a>`;
+        genStatusHtml+=` <a href="/packs" style="font-size:11px;color:var(--accent);margin-left:4px;">卡包管理</a>`;
       }else if(d.gen_status==='generating'){
-        genStatusHtml=`<span class="direction-status"><span class="spinner" style="border-color:var(--accent);border-top-color:transparent;"></span> 全量生成中...</span>`;
+        genStatusHtml=`<span class="direction-status"><span class="spinner" style="border-color:var(--accent);border-top-color:transparent;"></span> 生成中（${d.sticker_count||10}张）...</span>`;
       }
       return `<div class="direction-card" data-id="${d.id}" data-idx="${i}">
         <div class="direction-card-header">
@@ -694,8 +721,14 @@
           <div class="direction-tags">${tags(d.decorative_elements)}</div>
         </div>
         ${previewHtml}
+        <div class="direction-count-row">
+          <span class="direction-count-label">贴纸数量:</span>
+          <input type="number" class="direction-count-input" value="${d.sticker_count||10}" min="5" max="50"
+                 data-dir-id="${d.id}" onchange="updateStickerCount('${d.id}',this.value)" />
+          <span style="font-size:11px;color:var(--text-muted);">张</span>
+        </div>
         <div class="direction-actions">
-          ${d.preview_status!=='completed'&&d.preview_status!=='generating'?`<button class="btn btn-sm" onclick="triggerPreview('${d.id}',this)">生成预览</button>`:''}
+          ${d.preview_status!=='completed'&&d.preview_status!=='generating'?`<button class="btn btn-sm" onclick="triggerPreview('${d.id}',this)">生成预览图</button>`:''}
           ${d.gen_status!=='completed'&&d.gen_status!=='generating'?`<button class="btn btn-sm btn-primary" onclick="triggerGenerate('${d.id}',this)">全量生成贴纸包</button>`:''}
           ${genStatusHtml}
         </div>
@@ -714,42 +747,58 @@
   window.showToast=showToast;
   window.triggerPreview=triggerPreview;
   window.triggerGenerate=triggerGenerate;
+  window.updateStickerCount=updateStickerCount;
 
   async function triggerPreview(dirId,btn){
+    const card=btn.closest('.direction-card');
+    const countInput=card?card.querySelector('.direction-count-input'):null;
+    const count=parseInt(countInput?countInput.value:10);
+    const previewCount=Math.max(1,Math.ceil(count/10));
+    if(!confirm(`将生成 ${previewCount} 张预览图（每张展示约10个设计），确认？`)) return;
     btn.disabled=true;btn.textContent='生成中...';
-    showToast('预览生成已启动，Claude 设计 + Gemini 出图，预计需要 1~2 分钟...','info',6000);
+    showToast(`预览生成已启动，将生成 ${previewCount} 张预览图，完成后保存到画廊...`,'info',6000);
     try{
       const r=await fetch(`/api/planning/directions/${dirId}/preview`,{method:'POST'});
       const data=await r.json();
-      if(data.status==='completed'){
-        showToast('预览图已就绪！','success');
-        if(currentModalEvent&&currentModalEvent.id){
-          const r2=await fetch(`/api/planning/events/${currentModalEvent.id}/directions`);
-          const d2=await r2.json();
-          if(d2.directions) renderDirectionCards(d2.directions);
-        }
-      }else{
-        btn.textContent=data.status==='queued'?'排队中...':'生成中...';
+      if(data.ok){
+        btn.textContent=`生成中(${previewCount}张)...`;
         pollDirectionStatus(dirId);
+      }else{
+        btn.disabled=false;btn.textContent='生成预览图';
+        showToast(data.error||'生成失败','error');
       }
-    }catch(e){btn.disabled=false;btn.textContent='生成预览';showToast('请求失败: '+e.message,'error');}
+    }catch(e){btn.disabled=false;btn.textContent='生成预览图';showToast('请求失败: '+e.message,'error');}
+  }
+
+  async function updateStickerCount(dirId,val){
+    const count=Math.max(5,Math.min(50,parseInt(val)||10));
+    try{
+      await fetch(`/api/planning/directions/${dirId}`,{
+        method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sticker_count:count}),
+      });
+    }catch(e){showToast('保存数量失败','error');}
   }
 
   async function triggerGenerate(dirId,btn){
-    if(!confirm('确认开始全量生成贴纸包？（需要较长时间）')) return;
+    const card=btn.closest('.direction-card');
+    const countInput=card?card.querySelector('.direction-count-input'):null;
+    const count=countInput?countInput.value:'?';
+    if(!confirm(`确认生成 ${count} 张贴纸？（Pipeline 全流程，需要较长时间）`)) return;
     btn.disabled=true;btn.textContent='排队中...';
-    showToast('全量生成已排队，Pipeline 运行中（Planner → Designer → PromptBuilder → 出图）...','info',8000);
+    showToast(`生成 ${count} 张贴纸已排队，Pipeline 运行中（Planner → Designer → PromptBuilder → 出图），完成后自动保存到画廊...`,'info',8000);
     try{
       const r=await fetch(`/api/planning/directions/${dirId}/generate`,{method:'POST'});
       const data=await r.json();
       if(data.ok){
         btn.textContent='生成中...';
-        showToast('任务 '+data.job_id+' 已创建，可在「任务」页面查看进度','success',5000);
+        showToast('任务 '+data.job_id+' 已创建，完成后将出现在画廊和卡包管理中','success',5000);
+        pollDirectionStatus(dirId);
       }else{
-        btn.disabled=false;btn.textContent='全量生成贴纸包';
+        btn.disabled=false;btn.textContent='生成贴纸包';
         showToast(data.error||'生成失败','error');
       }
-    }catch(e){btn.disabled=false;btn.textContent='全量生成贴纸包';showToast('请求失败: '+e.message,'error');}
+    }catch(e){btn.disabled=false;btn.textContent='生成贴纸包';showToast('请求失败: '+e.message,'error');}
   }
 
   function pollDirectionStatus(dirId){

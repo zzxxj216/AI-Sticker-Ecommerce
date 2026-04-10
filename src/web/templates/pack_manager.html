@@ -79,8 +79,8 @@
           </td>
           <td style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
             {% if job.source_type %}
-            <span class="badge {% if job.source_type == 'tiktok' %}badge-ai-watch{% elif job.source_type == 'chat' %}badge-skipped{% else %}badge-approved{% endif %}" style="font-size:11px;">
-              {% if job.source_type == 'tiktok' %}TikTok{% elif job.source_type == 'chat' %}AI 对话{% else %}News{% endif %}
+            <span class="badge {% if job.source_type == 'tiktok' %}badge-ai-watch{% elif job.source_type == 'chat' %}badge-skipped{% elif job.source_type == 'planning' %}badge-skipped{% else %}badge-approved{% endif %}" style="font-size:11px;">
+              {% if job.source_type == 'tiktok' %}TikTok{% elif job.source_type == 'chat' %}AI 对话{% elif job.source_type == 'planning' %}选品日历{% else %}News{% endif %}
             </span>
             {% else %}
             <span class="muted">—</span>

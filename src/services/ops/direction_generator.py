@@ -20,11 +20,12 @@ logger = get_logger("service.direction_gen")
 
 _CN_TZ = timezone(timedelta(hours=8))
 
-DIRECTION_SYSTEM = """\
+def _build_system_prompt(count: int = 2) -> str:
+    return f"""\
 You are a senior sticker-pack creative director for an e-commerce brand
 selling sticker packs to overseas English-speaking markets.
 
-Your job: given an event/holiday, produce **exactly 2** highly differentiated
+Your job: given an event/holiday, produce **exactly {count}** highly differentiated
 sticker-pack design directions.  Each direction must be commercially viable,
 visually distinctive, and appeal to different buyer segments.
 
@@ -34,7 +35,7 @@ IMPORTANT:
 - name_zh is the Chinese translation of name_en.
 - keywords, design_elements, text_slogans, decorative_elements are comma-separated English strings.
 - Think about what would sell on Amazon / Etsy — practical, eye-catching, gift-worthy.
-- The two directions should differ in style, mood, and target audience.
+- Each direction should differ in style, mood, and target audience.
 """
 
 DIRECTION_FEW_SHOT = """\
@@ -72,7 +73,7 @@ Here are 5 example directions for reference (style/format only — do NOT copy c
 """
 
 
-def _build_user_prompt(event: dict[str, Any]) -> str:
+def _build_user_prompt(event: dict[str, Any], count: int = 2) -> str:
     title = event.get("title", "")
     category = event.get("category", "")
     region = event.get("region", "")
@@ -84,7 +85,7 @@ def _build_user_prompt(event: dict[str, Any]) -> str:
 
     return f"""{DIRECTION_FEW_SHOT}
 
-Now generate 2 design directions for the following event.
+Now generate {count} design directions for the following event.
 
 Event title: {title}
 Category: {category}
@@ -92,7 +93,7 @@ Region: {region_label}
 Date: {start} ~ {end}
 Description: {desc}
 
-Return a JSON array with exactly 2 objects. Each object must have these fields:
+Return a JSON array with exactly {count} objects. Each object must have these fields:
 - name_en (string): English direction name, 3-6 words
 - name_zh (string): Chinese translation
 - keywords (string): comma-separated English keywords (5-8)
@@ -116,30 +117,33 @@ class DirectionGenerator:
             self._openai = OpenAIService()
         return self._openai
 
-    def generate_directions(self, event_id: str) -> list[dict[str, Any]]:
-        """Generate 2 design directions for a planning event and persist them."""
+    def generate_directions(self, event_id: str, count: int = 2) -> list[dict[str, Any]]:
+        """Generate N design directions for a planning event and persist them."""
+        count = max(1, min(10, count))
         event = self.db.get_planning_event(event_id)
         if not event:
             raise ValueError(f"Event not found: {event_id}")
 
-        logger.info("Generating directions for event: %s (%s)", event["title"], event_id)
+        logger.info("Generating %d directions for event: %s (%s)", count, event["title"], event_id)
 
-        user_prompt = _build_user_prompt(event)
+        user_prompt = _build_user_prompt(event, count=count)
+        system_prompt = _build_system_prompt(count=count)
+        max_tokens = max(4000, count * 1500)
         result = self.openai.generate(
             prompt=user_prompt,
-            system=DIRECTION_SYSTEM,
+            system=system_prompt,
             temperature=0.85,
-            max_tokens=4000,
+            max_tokens=max_tokens,
         )
 
         raw_text = result.get("text", "")
         directions = self._parse_response(raw_text)
-        if len(directions) < 2:
-            raise ValueError(f"Expected 2 directions, got {len(directions)}")
+        if len(directions) < 1:
+            raise ValueError(f"Expected {count} directions, got {len(directions)}")
 
         now = datetime.now(_CN_TZ).isoformat()
         saved: list[dict[str, Any]] = []
-        for idx, d in enumerate(directions[:2]):
+        for idx, d in enumerate(directions[:count]):
             rec = {
                 "id": f"dir_{uuid.uuid4().hex[:12]}",
                 "event_id": event_id,
@@ -154,6 +158,7 @@ class DirectionGenerator:
                 "preview_status": "pending",
                 "gen_status": "pending",
                 "job_id": "",
+                "sticker_count": 10,
                 "created_at": now,
             }
             self.db.insert_planning_direction(rec)
@@ -162,72 +167,166 @@ class DirectionGenerator:
 
         return saved
 
-    def generate_preview(self, direction_id: str) -> dict[str, Any]:
-        """Generate a collection-sheet preview image for one direction."""
-        from pathlib import Path
+    def _ensure_trend_item(self, trend_id: str, trend_name: str) -> None:
+        """Insert a placeholder trend_items row so generation_jobs FK is satisfied."""
+        existing = self.db.conn.execute(
+            "SELECT id FROM trend_items WHERE id = ?", (trend_id,)
+        ).fetchone()
+        if not existing:
+            now = datetime.now(_CN_TZ).isoformat()
+            self.db.conn.execute(
+                """INSERT OR IGNORE INTO trend_items
+                   (id, source_type, source_item_id, title, summary, trend_name,
+                    trend_type, score, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (trend_id, "planning", trend_id, trend_name, "",
+                 trend_name, "planning", 0, now, now),
+            )
+            self.db.conn.commit()
+
+    def generate_preview(self, direction_id: str, created_by: str = "system") -> dict[str, Any]:
+        """Generate preview collection sheets (1 per 10 stickers) and save to gallery."""
+        import math
 
         d = self.db.get_direction(direction_id)
         if not d:
             raise ValueError(f"Direction not found: {direction_id}")
+
+        sticker_count = d.get("sticker_count", 10) or 10
+        preview_count = max(1, math.ceil(sticker_count / 10))
 
         self.db.update_direction(direction_id, preview_status="generating")
 
-        try:
-            from src.services.sticker.pack_generator import PackGenerator
+        from src.services.ops.job_service import JobService
 
-            pack_gen = PackGenerator()
-            theme = d["name_en"]
-            pack_name = f"THE {theme.upper()} STICKER PACK"
+        job_svc = JobService(self.db)
+        event = self.db.get_planning_event(d["event_id"])
+        event_title = (event or {}).get("title", "Unknown Event")
 
-            result = pack_gen.generate_preview(
-                theme=theme,
-                pack_name=pack_name,
-                count=10,
-                use_claude_prompt=True,
-            )
+        trend_id = f"planning:{d['event_id']}"
+        trend_name = f"{event_title} — {d['name_en']} (预览)"
 
-            preview_img = result.get("preview_image", {})
-            if preview_img.get("success"):
-                img_path = str(preview_img["image_path"]).replace("\\", "/")
-                marker = "data/output/images/"
-                idx = img_path.find(marker)
-                if idx >= 0:
-                    web_path = "/preview-images/" + img_path[idx + len(marker):]
-                else:
-                    marker2 = "output/images/"
-                    idx2 = img_path.find(marker2)
-                    if idx2 >= 0:
-                        web_path = "/preview-images/" + img_path[idx2 + len(marker2):]
-                    else:
-                        web_path = img_path
+        self._ensure_trend_item(trend_id, trend_name)
+        job = job_svc.create_job(trend_id, trend_name, created_by)
+        self.db.update_direction(direction_id, job_id=job.id)
+
+        import threading
+
+        def _run():
+            try:
+                from src.services.sticker.pack_generator import PackGenerator
+
+                pack_gen = PackGenerator()
+                theme = d["name_en"]
+                pack_name = f"THE {theme.upper()} STICKER PACK"
+
+                # --- Phase 1: generate all ideas at once ---
+                logger.info(
+                    "Preview phase 1: generating %d ideas for direction %s",
+                    sticker_count, direction_id,
+                )
+                theme_content = pack_gen._theme_gen.generate(theme)
+                tc_dict = theme_content.to_dict()
+                style_guide = pack_gen._generate_style_guide(tc_dict)
+
+                text_count = int(sticker_count * 0.3)
+                element_count = int(sticker_count * 0.4)
+                combined_count = sticker_count - text_count - element_count
+
+                text_ideas = pack_gen._generate_text_ideas(style_guide, tc_dict, text_count) if text_count else []
+                element_ideas = pack_gen._generate_element_ideas(style_guide, tc_dict, element_count) if element_count else []
+                combined_ideas = pack_gen._generate_combined_ideas(style_guide, tc_dict, combined_count) if combined_count else []
+                all_ideas = pack_gen._merge_ideas(text_ideas, element_ideas, combined_ideas)
+                logger.info("Generated %d sticker ideas total", len(all_ideas))
+
+                # --- Phase 2: split into groups, each group → 1 preview image ---
+                image_paths = []
+                for i in range(preview_count):
+                    start = i * 10
+                    end = min(start + 10, len(all_ideas))
+                    group = all_ideas[start:end]
+                    if not group:
+                        break
+
+                    logger.info(
+                        "Preview phase 2: rendering sheet %d/%d (%d ideas)",
+                        i + 1, preview_count, len(group),
+                    )
+                    preview_prompt = pack_gen.generate_preview_prompt(
+                        pack_name=pack_name,
+                        sticker_ideas=group,
+                        style_guide=style_guide,
+                        use_claude=True,
+                    )
+                    result = pack_gen.generate_preview_image(preview_prompt)
+                    if result.get("success"):
+                        image_paths.append(str(result["image_path"]))
+
+                from src.models.ops import GenerationOutput
+
+                outputs = []
+                for path in image_paths:
+                    outputs.append(GenerationOutput(
+                        id=f"out_{uuid.uuid4().hex[:12]}",
+                        job_id=job.id,
+                        output_type="image",
+                        file_path=path,
+                        preview_path=path,
+                    ))
+                self.db.replace_outputs(job.id, outputs)
+
+                first_web_path = ""
+                if image_paths:
+                    p = image_paths[0].replace("\\", "/")
+                    for marker in ("data/output/images/", "output/images/"):
+                        idx = p.find(marker)
+                        if idx >= 0:
+                            first_web_path = "/preview-images/" + p[idx + len(marker):]
+                            break
+
+                self.db.update_job(
+                    job.id,
+                    status="completed",
+                    output_dir="data/output/images",
+                    image_count=len(image_paths),
+                    error_message="",
+                    finished_at=datetime.now(_CN_TZ),
+                )
                 self.db.update_direction(
                     direction_id,
-                    preview_path=web_path,
+                    preview_path=first_web_path,
                     preview_status="completed",
                 )
-                logger.info("Preview generated for direction %s: %s", direction_id, web_path)
-            else:
-                error = preview_img.get("error", "unknown")
+                logger.info(
+                    "Preview done for direction %s: %d sheets, job %s",
+                    direction_id, len(image_paths), job.id,
+                )
+            except Exception as exc:
+                logger.error("Preview generation failed: %s", exc, exc_info=True)
+                self.db.update_job(
+                    job.id, status="failed",
+                    error_message=str(exc),
+                    finished_at=datetime.now(_CN_TZ),
+                )
                 self.db.update_direction(direction_id, preview_status="failed")
-                logger.error("Preview generation failed: %s", error)
 
-            return {
-                "direction_id": direction_id,
-                "preview_image": preview_img,
-                "pack_name": pack_name,
-            }
-        except Exception as e:
-            self.db.update_direction(direction_id, preview_status="failed")
-            logger.error("Preview generation error: %s", e, exc_info=True)
-            raise
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
 
-    def start_full_generation(self, direction_id: str, created_by: str = "system") -> dict[str, Any]:
-        """Trigger full sticker pack generation via StickerPackPipeline."""
+        return {
+            "direction_id": direction_id,
+            "job_id": job.id,
+            "preview_count": preview_count,
+            "status": "queued",
+        }
+
+    def start_generation(self, direction_id: str, created_by: str = "system") -> dict[str, Any]:
+        """Run full StickerPackPipeline: generate individual stickers, save to gallery/pack management."""
         d = self.db.get_direction(direction_id)
         if not d:
             raise ValueError(f"Direction not found: {direction_id}")
 
-        self.db.update_direction(direction_id, gen_status="generating")
+        self.db.update_direction(direction_id, preview_status="generating", gen_status="generating")
 
         from src.services.ops.job_service import JobService
 
@@ -238,10 +337,14 @@ class DirectionGenerator:
         trend_id = f"planning:{d['event_id']}"
         trend_name = f"{event_title} — {d['name_en']}"
 
+        self._ensure_trend_item(trend_id, trend_name)
         job = job_svc.create_job(trend_id, trend_name, created_by)
         self.db.update_direction(direction_id, job_id=job.id)
 
+        sticker_count = d.get("sticker_count", 10) or 10
+
         extras = []
+        extras.append(f"Target sticker count: {sticker_count} stickers in this pack")
         if d.get("design_elements"):
             extras.append(f"Design elements: {d['design_elements']}")
         if d.get("text_slogans"):
@@ -272,24 +375,46 @@ class DirectionGenerator:
                 outputs = JobService._collect_outputs(job.id, Path(str(pipeline.output_dir)))
                 self.db.replace_outputs(job.id, outputs)
                 status = result.status if result.status in {"completed", "failed"} else "completed"
+                img_count = len(result.image_paths)
+
                 self.db.update_job(
                     job.id,
                     status=status,
                     output_dir=str(pipeline.output_dir),
-                    image_count=len(result.image_paths),
+                    image_count=img_count,
                     error_message=result.error or "",
                     finished_at=datetime.now(_CN_TZ),
                 )
-                self.db.update_direction(direction_id, gen_status=status)
-                logger.info("Full generation done for direction %s, job %s", direction_id, job.id)
+
+                preview_path = ""
+                if result.image_paths:
+                    first_img = str(result.image_paths[0]).replace("\\", "/")
+                    for marker in ("output/h5_jobs/", "output/"):
+                        idx = first_img.find(marker)
+                        if idx >= 0:
+                            preview_path = "/outputs/" + first_img[idx + len("output/"):]
+                            break
+
+                self.db.update_direction(
+                    direction_id,
+                    preview_status="completed",
+                    gen_status=status,
+                    preview_path=preview_path,
+                )
+                logger.info(
+                    "Generation done for direction %s, job %s: %d images",
+                    direction_id, job.id, img_count,
+                )
             except Exception as exc:
-                logger.error("Full generation failed: %s", exc, exc_info=True)
+                logger.error("Generation failed: %s", exc, exc_info=True)
                 self.db.update_job(
                     job.id, status="failed",
                     error_message=str(exc),
                     finished_at=datetime.now(_CN_TZ),
                 )
-                self.db.update_direction(direction_id, gen_status="failed")
+                self.db.update_direction(
+                    direction_id, preview_status="failed", gen_status="failed",
+                )
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
