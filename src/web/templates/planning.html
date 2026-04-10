@@ -181,12 +181,13 @@
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);
   box-shadow:var(--shadow-card);overflow:hidden;
 }
-.cal-header{display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid var(--line);background:var(--bg-subtle);}
+.cal-header{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg-subtle);}
 .cal-day-name{padding:10px 0;text-align:center;font-size:12px;font-weight:600;color:var(--text-muted);}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:100px;}
 .cal-cell{
-  min-height:90px;border-right:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
+  border-right:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
   padding:4px;position:relative;cursor:pointer;transition:background .1s;
+  overflow:hidden;min-width:0;
 }
 .cal-cell:nth-child(7n){border-right:none;}
 .cal-cell:hover{background:var(--bg-subtle);}
@@ -198,11 +199,11 @@
   display:inline-block;min-width:22px;text-align:center;border-radius:4px;
 }
 .cal-cell.today .cal-date{background:var(--accent);color:#fff;border-radius:50%;}
-.cal-events{display:flex;flex-direction:column;gap:2px;margin-top:2px;}
+.cal-events{display:flex;flex-direction:column;gap:2px;margin-top:2px;overflow:hidden;min-width:0;}
 .cal-event-tag{
   font-size:10px;padding:1px 5px;border-radius:3px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;cursor:pointer;font-weight:500;
-  line-height:1.6;transition:opacity .1s;
+  line-height:1.6;transition:opacity .1s;display:block;max-width:100%;
 }
 .cal-event-tag:hover{opacity:.8;}
 .cat-holiday{background:var(--warning-bg);color:#b45309;border-left:3px solid var(--warning);}
@@ -361,7 +362,7 @@
   const CAT_LABEL={holiday:'节日',event:'活动',cultural:'文化',sports:'体育'};
   const CAT_BAR={holiday:'bar-holiday',event:'bar-event',cultural:'bar-cultural',sports:'bar-sports'};
   const REGION_LABEL={us:'US',ca:'CA',eu:'EU'};
-  const MAX_TAGS=3;
+  const MAX_TAGS=2;
 
   let curYear={{default_year}},curMonth={{default_month}},curRegion='',allEvents=[],selectedDate=null;
 
