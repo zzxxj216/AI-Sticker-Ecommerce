@@ -1474,7 +1474,12 @@ def api_v2_delete_video_script(script_id: str):
 
 @app.post("/api/v2/video-scripts/assemble-input")
 def api_v2_assemble_input(payload: dict):
-    """Helper: assemble VideoScriptInput from a job_id, pulling trend brief + sticker data."""
+    """Assemble rich VideoScriptInput from a job_id.
+
+    Pulls trend brief, sticker data, planning direction details,
+    pack style guide, and product selling points so that the video
+    script AI has enough context to produce creative, product-specific scripts.
+    """
     job_id = payload.get("job_id", "")
     if not job_id:
         raise HTTPException(400, "job_id is required")
@@ -1491,6 +1496,8 @@ def api_v2_assemble_input(payload: dict):
     }
 
     trend_id = job.get("trend_id", "")
+
+    # --- Trend brief data ---
     if trend_id and not trend_id.startswith("chat:"):
         brief_row = trend_service.db.get_brief(trend_id)
         if brief_row:
@@ -1503,32 +1510,90 @@ def api_v2_assemble_input(payload: dict):
             script_input["use_cases"] = ta.get("usage_scenarios", [])
             script_input["one_line_product_angle"] = bj.get("product_goal", "")
 
+    # --- Planning calendar context (event + design direction) ---
+    if trend_id and trend_id.startswith("planning:"):
+        event_id = trend_id.replace("planning:", "", 1)
+        event = trend_service.db.get_planning_event(event_id)
+        if event:
+            script_input["event_context"] = {
+                "title": event.get("title", ""),
+                "category": event.get("category", ""),
+                "date": event.get("start_date", ""),
+                "end_date": event.get("end_date", ""),
+                "description": event.get("short_description", ""),
+            }
+        directions = trend_service.db.list_directions(event_id)
+        if directions:
+            matched = directions[0]
+            for d in directions:
+                if d.get("job_id") == job_id:
+                    matched = d
+                    break
+            script_input["design_direction"] = {
+                "name": matched.get("name_en", ""),
+                "name_zh": matched.get("name_zh", ""),
+                "keywords": matched.get("keywords", ""),
+                "design_elements": matched.get("design_elements", ""),
+                "text_slogans": matched.get("text_slogans", ""),
+                "decorative_elements": matched.get("decorative_elements", ""),
+            }
+
+    # --- Brand & materials ---
     brand = video_plan_svc.brand_profile
     materials_cfg = brand.get("materials", {})
     script_input["materials"] = materials_cfg.get("safe_claims", [])
     script_input["brand_tone"] = (brand.get("brand", {}).get("voice", ""))[:200]
 
+    # --- Sticker descriptions (enriched) ---
     outputs = trend_service.db.list_outputs(job_id)
     descs: list[str] = []
     for out in outputs:
         if out.get("output_type") != "image":
             continue
         meta = out.get("metadata_json", {})
+        sticker_type = meta.get("type", "")
+        concept = meta.get("concept", "")
         name = meta.get("name", "")
         prompt_txt = meta.get("prompt", "")
-        if name:
+
+        if concept:
+            prefix = f"[{sticker_type}] " if sticker_type else ""
+            desc = f"{prefix}{name} — {concept}" if name else f"{prefix}{concept}"
+            descs.append(desc)
+        elif name:
             desc = name
             if prompt_txt:
-                desc += f" — {prompt_txt[:120]}"
+                desc += f" — {prompt_txt[:80]}"
             descs.append(desc)
         elif prompt_txt:
-            descs.append(prompt_txt[:150])
+            descs.append(prompt_txt[:120])
     script_input["sticker_descriptions"] = descs
     if descs:
         script_input["hero_sticker"] = descs[0]
     if len(descs) > 3:
         script_input["collection_sheet"] = "available"
 
+    # --- Pack style guide (from sticker_packs JSON if exists) ---
+    _enrich_pack_style(script_input, job_id)
+
+    # --- Product selling points ---
+    sticker_count = len(descs) or "multiple"
+    script_input["product_selling_points"] = [
+        f"AI-designed unique sticker pack with {sticker_count} original designs",
+        "Premium waterproof vinyl — durable, vibrant colors",
+        "Perfect for laptops, water bottles, journals, phone cases",
+        "Themed around trending topics — timely and relevant",
+    ]
+    if script_input.get("design_direction"):
+        dd = script_input["design_direction"]
+        if dd.get("text_slogans"):
+            slogans = [s.strip() for s in dd["text_slogans"].split(",") if s.strip()]
+            if slogans:
+                script_input["product_selling_points"].append(
+                    f"Features bold text designs: {', '.join(slogans[:3])}"
+                )
+
+    # --- Family context ---
     family_context = None
     fid = job.get("family_id")
     if fid:
@@ -1543,6 +1608,40 @@ def api_v2_assemble_input(payload: dict):
         }
 
     return {"script_input": script_input, "family_context": family_context}
+
+
+def _enrich_pack_style(script_input: dict[str, Any], job_id: str) -> None:
+    """Try to load style_guide and theme_content from the pack JSON on disk."""
+    import glob as _glob
+
+    pack_dir = Path("data/output/sticker_packs")
+    if not pack_dir.exists():
+        return
+    for f in sorted(pack_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("id", "") != job_id and job_id not in f.name:
+            continue
+        sg = data.get("style_guide", {})
+        if sg:
+            script_input["pack_style"] = {
+                "art_style": sg.get("art_style", ""),
+                "color_palette": sg.get("color_palette", {}),
+                "mood": sg.get("mood", ""),
+                "line_style": sg.get("line_style", ""),
+                "typography_style": sg.get("typography_style", ""),
+            }
+        tc = data.get("theme_content", {})
+        if tc:
+            script_input["theme_details"] = {
+                "theme_english": tc.get("theme_english", ""),
+                "visual_keywords": tc.get("visual_keywords", []),
+                "cultural_context": tc.get("cultural_context", ""),
+                "mood_board": tc.get("mood_board", []),
+            }
+        break
 
 
 # ── V2: HTML Pages ──────────────────────────────────────────

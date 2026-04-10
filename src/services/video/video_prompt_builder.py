@@ -107,38 +107,6 @@ Rules:
 # Builder
 # ---------------------------------------------------------------------------
 
-def _append_family_context(lines: list[str], si: dict[str, Any]) -> None:
-    """Inject family-pack or sibling context when available."""
-    if si.get("is_family_pack"):
-        lines.append("[FAMILY PACK CONTEXT]")
-        lines.append(f"This is a FAMILY PACK containing {si.get('family_pack_count', 0)} sub-packs under one theme.")
-        lines.append("The video should showcase the entire collection as a cohesive product family.")
-        subthemes = si.get("family_subthemes", [])
-        if subthemes:
-            lines.append("Sub-themes in this family:")
-            for i, st in enumerate(subthemes, 1):
-                name = st.get("subtheme_name", "")
-                stype = st.get("subtheme_type", "")
-                direction = st.get("one_line_direction", "")
-                summary = st.get("brief_summary", "")
-                entry = f"  {i}. {name}"
-                if stype:
-                    entry += f" ({stype})"
-                if direction:
-                    entry += f" — {direction}"
-                if summary:
-                    entry += f" | {summary}"
-                lines.append(entry)
-        lines.append("Strategy: Highlight the variety within the family while maintaining a unified theme.")
-        lines.append("Show how different sub-packs complement each other.")
-        lines.append("")
-    elif si.get("sibling_context"):
-        lines.append("[SIBLING PACK CONTEXT]")
-        lines.append(si["sibling_context"])
-        lines.append("Consider referencing the series in the script to encourage collecting the full set.")
-        lines.append("")
-
-
 class VideoPromptBuilder:
     """Assembles plan and script prompts from structured inputs."""
 
@@ -187,47 +155,12 @@ class VideoPromptBuilder:
                 lines.append(f"    output_elements: {', '.join(elements)}")
             lines.append("")
 
-        # --- Sticker pack context ---
-        lines.append("[STICKER PACK CONTEXT]")
-        si = script_input
-        if si.get("trend_topic"):
-            lines.append(f"Trend Topic: {si['trend_topic']}")
-        if si.get("one_line_explanation"):
-            lines.append(f"Explanation: {si['one_line_explanation']}")
-        if si.get("emotional_hooks"):
-            lines.append(f"Emotional Hooks: {', '.join(si['emotional_hooks'])}")
-        if si.get("audience_persona"):
-            lines.append(f"Audience Persona: {si['audience_persona']}")
-        if si.get("visual_symbols"):
-            lines.append(f"Visual Symbols: {', '.join(si['visual_symbols'])}")
-        if si.get("use_cases"):
-            lines.append(f"Use Cases: {', '.join(si['use_cases'])}")
-        if si.get("materials"):
-            lines.append(f"Materials: {', '.join(si['materials'])}")
-        if si.get("hero_sticker"):
-            lines.append(f"Hero Sticker: {si['hero_sticker']}")
-        if si.get("collection_sheet"):
-            lines.append(f"Collection Sheet: available")
-        if si.get("sticker_descriptions"):
-            lines.append("Sticker Designs:")
-            for i, desc in enumerate(si["sticker_descriptions"][:12], 1):
-                lines.append(f"  {i}. {desc}")
-        if si.get("one_line_product_angle"):
-            lines.append(f"Product Angle: {si['one_line_product_angle']}")
-        lines.append("")
-
-        # --- Family / sibling context ---
-        _append_family_context(lines, si)
-
-        # --- Brand constraints ---
+        _append_sticker_context(lines, script_input)
         _append_brand_section(lines, brand_profile)
 
         lines.append("[TASK]")
-        if si.get("is_family_pack"):
-            lines.append("Create a script PLAN for a video showcasing this sticker pack FAMILY as one cohesive product.")
-            lines.append("The video should highlight the variety of sub-themes while emphasizing they belong together.")
-        else:
-            lines.append("Create a script PLAN for this video. Decide type ordering, shot allocation, and intent.")
+        lines.append("Create a script PLAN for this video. Decide type ordering, shot allocation, and intent.")
+        lines.append("The plan MUST reference specific sticker designs and product details from the context above.")
         lines.append("Output ONLY a valid JSON object following the schema described in your instructions.")
 
         return "\n".join(lines)
@@ -286,48 +219,114 @@ class VideoPromptBuilder:
                 lines.append(f"    outputs: {', '.join(elements)}")
         lines.append("")
 
-        # --- Sticker pack context ---
-        si = script_input
-        lines.append("[STICKER PACK CONTEXT]")
-        if si.get("trend_topic"):
-            lines.append(f"Trend Topic: {si['trend_topic']}")
-        if si.get("one_line_explanation"):
-            lines.append(f"Explanation: {si['one_line_explanation']}")
-        if si.get("emotional_hooks"):
-            lines.append(f"Emotional Hooks: {', '.join(si['emotional_hooks'])}")
-        if si.get("audience_persona"):
-            lines.append(f"Audience Persona: {si['audience_persona']}")
-        if si.get("visual_symbols"):
-            lines.append(f"Visual Symbols: {', '.join(si['visual_symbols'])}")
-        if si.get("use_cases"):
-            lines.append(f"Use Cases: {', '.join(si['use_cases'])}")
-        if si.get("materials"):
-            lines.append(f"Materials: {', '.join(si['materials'])}")
-        if si.get("hero_sticker"):
-            lines.append(f"Hero Sticker: {si['hero_sticker']}")
-        if si.get("collection_sheet"):
-            lines.append(f"Collection Sheet: available")
-        if si.get("sticker_descriptions"):
-            lines.append("Sticker Designs:")
-            for i, desc in enumerate(si["sticker_descriptions"][:12], 1):
-                lines.append(f"  {i}. {desc}")
-        if si.get("one_line_product_angle"):
-            lines.append(f"Product Angle: {si['one_line_product_angle']}")
-        lines.append("")
-
-        # --- Family / sibling context ---
-        _append_family_context(lines, si)
-
+        _append_sticker_context(lines, script_input)
         _append_brand_section(lines, brand_profile)
 
         lines.append("[TASK]")
         lines.append("Based on the approved plan above, generate the full production-ready storyboard script.")
         lines.append("Follow the shot plan exactly (same number of shots, same type assignments).")
-        if si.get("is_family_pack"):
-            lines.append("This is a FAMILY PACK video — make sure to showcase stickers from multiple sub-themes.")
+        lines.append("IMPORTANT: Every shot must reference specific sticker designs, slogans, or visual elements from the context above.")
+        lines.append("The stickers ARE the product — show them being used, admired, applied, and collected.")
         lines.append("Output ONLY a valid JSON object following the schema described in your instructions.")
 
         return "\n".join(lines)
+
+
+def _append_sticker_context(lines: list[str], si: dict[str, Any]) -> None:
+    """Render all sticker pack context sections into the prompt."""
+
+    lines.append("[STICKER PACK CONTEXT]")
+    if si.get("trend_topic"):
+        lines.append(f"Trend Topic: {si['trend_topic']}")
+    if si.get("one_line_explanation"):
+        lines.append(f"Explanation: {si['one_line_explanation']}")
+    if si.get("emotional_hooks"):
+        lines.append(f"Emotional Hooks: {', '.join(si['emotional_hooks'])}")
+    if si.get("audience_persona"):
+        lines.append(f"Audience Persona: {si['audience_persona']}")
+    if si.get("visual_symbols"):
+        lines.append(f"Visual Symbols: {', '.join(si['visual_symbols'])}")
+    if si.get("use_cases"):
+        lines.append(f"Use Cases: {', '.join(si['use_cases'])}")
+    if si.get("materials"):
+        lines.append(f"Materials: {', '.join(si['materials'])}")
+    if si.get("hero_sticker"):
+        lines.append(f"Hero Sticker: {si['hero_sticker']}")
+    if si.get("collection_sheet"):
+        lines.append("Collection Sheet: available")
+    if si.get("sticker_descriptions"):
+        lines.append("Sticker Designs:")
+        for i, desc in enumerate(si["sticker_descriptions"][:12], 1):
+            lines.append(f"  {i}. {desc}")
+    if si.get("one_line_product_angle"):
+        lines.append(f"Product Angle: {si['one_line_product_angle']}")
+    lines.append("")
+
+    ec = si.get("event_context")
+    if ec:
+        lines.append("[EVENT CONTEXT]")
+        lines.append(f"Event: {ec.get('title', '')}")
+        if ec.get("category"):
+            lines.append(f"Category: {ec['category']}")
+        if ec.get("date"):
+            date_str = ec["date"]
+            if ec.get("end_date") and ec["end_date"] != ec["date"]:
+                date_str += f" — {ec['end_date']}"
+            lines.append(f"Date: {date_str}")
+        if ec.get("description"):
+            lines.append(f"Description: {ec['description']}")
+        lines.append("")
+
+    dd = si.get("design_direction")
+    if dd:
+        lines.append("[DESIGN DIRECTION]")
+        lines.append(f"Direction Name: {dd.get('name', '')}")
+        if dd.get("name_zh"):
+            lines.append(f"Direction (Chinese): {dd['name_zh']}")
+        if dd.get("keywords"):
+            lines.append(f"Keywords: {dd['keywords']}")
+        if dd.get("design_elements"):
+            lines.append(f"Visual Elements: {dd['design_elements']}")
+        if dd.get("text_slogans"):
+            lines.append(f"Text Slogans: {dd['text_slogans']}")
+        if dd.get("decorative_elements"):
+            lines.append(f"Decorative Elements: {dd['decorative_elements']}")
+        lines.append("")
+
+    ps = si.get("pack_style")
+    if ps:
+        lines.append("[VISUAL STYLE]")
+        if ps.get("art_style"):
+            lines.append(f"Art Style: {ps['art_style']}")
+        cp = ps.get("color_palette")
+        if cp and isinstance(cp, dict):
+            colors = ", ".join(f"{k}: {v}" for k, v in list(cp.items())[:5])
+            lines.append(f"Color Palette: {colors}")
+        if ps.get("mood"):
+            lines.append(f"Mood: {ps['mood']}")
+        if ps.get("line_style"):
+            lines.append(f"Line Style: {ps['line_style']}")
+        if ps.get("typography_style"):
+            lines.append(f"Typography: {ps['typography_style']}")
+        lines.append("")
+
+    td = si.get("theme_details")
+    if td:
+        lines.append("[THEME DETAILS]")
+        if td.get("theme_english"):
+            lines.append(f"Theme: {td['theme_english']}")
+        if td.get("visual_keywords"):
+            lines.append(f"Visual Keywords: {', '.join(td['visual_keywords'][:10])}")
+        if td.get("cultural_context"):
+            lines.append(f"Cultural Context: {td['cultural_context'][:200]}")
+        lines.append("")
+
+    sp = si.get("product_selling_points")
+    if sp:
+        lines.append("[PRODUCT SELLING POINTS]")
+        for point in sp:
+            lines.append(f"- {point}")
+        lines.append("")
 
 
 def _append_brand_section(lines: list[str], brand_profile: dict[str, Any] | None) -> None:
