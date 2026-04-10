@@ -1,0 +1,130 @@
+﻿{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+  <h1>数据库备份</h1>
+  <p class="subtitle">管理 SQLite 数据库备份，支持手动备份和自动每日备份（凌晨 2:00）</p>
+</section>
+
+<div style="margin-bottom:20px;display:flex;align-items:center;gap:12px;">
+  <button class="button accent" id="createBackupBtn">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+    立即备份
+  </button>
+  <span id="backupStatus" style="font-size:12px;color:var(--text-muted);"></span>
+</div>
+
+<div class="card" style="overflow:hidden;">
+  <table class="data-table" id="backupTable">
+    <thead>
+      <tr>
+        <th>文件名</th>
+        <th>大小</th>
+        <th>创建时间</th>
+        <th style="width:160px;">操作</th>
+      </tr>
+    </thead>
+    <tbody id="backupBody">
+      <tr><td colspan="4" style="text-align:center;padding:40px;color:var(--text-muted);">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<style>
+.data-table{width:100%;border-collapse:collapse;font-size:13px;}
+.data-table th{text-align:left;padding:10px 14px;background:var(--bg-subtle);border-bottom:1px solid var(--line);font-weight:600;color:var(--text-secondary);font-size:11px;text-transform:uppercase;letter-spacing:.5px;}
+.data-table td{padding:10px 14px;border-bottom:1px solid var(--line-soft);}
+.data-table tbody tr:hover{background:var(--bg-subtle);}
+.data-table .filename{font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:var(--text);}
+.btn-sm{padding:4px 10px;font-size:11px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--surface);color:var(--text-secondary);cursor:pointer;font-weight:500;transition:all .15s;}
+.btn-sm:hover{border-color:var(--accent);color:var(--accent);}
+.btn-sm.danger{color:var(--danger);}
+.btn-sm.danger:hover{border-color:var(--danger);background:rgba(239,68,68,.05);}
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;}
+.toast{padding:10px 16px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;box-shadow:var(--shadow-md);animation:slideIn .2s ease;}
+.toast-success{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;}
+.toast-error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
+@keyframes slideIn{from{opacity:0;transform:translateY(-10px);}to{opacity:1;transform:translateY(0);}}
+</style>
+
+<script>
+(function(){
+  const tbody=document.getElementById('backupBody');
+  const statusEl=document.getElementById('backupStatus');
+
+  function showToast(msg,type){
+    const c=document.getElementById('toastContainer');
+    const t=document.createElement('div');
+    t.className='toast toast-'+type;
+    t.textContent=msg;
+    c.appendChild(t);
+    setTimeout(()=>t.remove(),4000);
+  }
+
+  async function loadBackups(){
+    try{
+      const r=await fetch('/api/system/backups');
+      const data=await r.json();
+      const list=data.backups||[];
+      if(list.length===0){
+        tbody.innerHTML='<tr><td colspan="4" style="text-align:center;padding:40px;color:var(--text-muted);">暂无备份，点击「立即备份」创建第一个备份</td></tr>';
+        return;
+      }
+      tbody.innerHTML='';
+      list.forEach(function(b){
+        const tr=document.createElement('tr');
+        tr.innerHTML='<td class="filename">'+b.filename+'</td>'
+          +'<td>'+b.size_display+'</td>'
+          +'<td>'+b.created_at+'</td>'
+          +'<td><a class="btn-sm" href="/api/system/backups/'+b.filename+'/download">下载</a> '
+          +'<button class="btn-sm danger" onclick="deleteBackup(\''+b.filename+'\')">删除</button></td>';
+        tbody.appendChild(tr);
+      });
+    }catch(e){
+      tbody.innerHTML='<tr><td colspan="4" style="text-align:center;padding:40px;color:var(--danger);">加载失败: '+e.message+'</td></tr>';
+    }
+  }
+
+  document.getElementById('createBackupBtn').addEventListener('click',async function(){
+    const btn=this;
+    btn.disabled=true;
+    btn.innerHTML='<span class="spinner"></span> 备份中...';
+    statusEl.textContent='';
+    try{
+      const r=await fetch('/api/system/backup',{method:'POST'});
+      const data=await r.json();
+      if(data.ok){
+        showToast('备份成功: '+data.filename+' ('+data.size_display+')','success');
+        loadBackups();
+      }else{
+        showToast('备份失败: '+(data.detail||'未知错误'),'error');
+      }
+    }catch(e){
+      showToast('请求失败: '+e.message,'error');
+    }finally{
+      btn.disabled=false;
+      btn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> 立即备份';
+    }
+  });
+
+  window.deleteBackup=async function(filename){
+    if(!confirm('确认删除备份 '+filename+' ？此操作不可撤销。'))return;
+    try{
+      const r=await fetch('/api/system/backups/'+filename,{method:'DELETE'});
+      const data=await r.json();
+      if(data.ok){
+        showToast('已删除: '+filename,'success');
+        loadBackups();
+      }else{
+        showToast('删除失败: '+(data.detail||'未知错误'),'error');
+      }
+    }catch(e){
+      showToast('请求失败: '+e.message,'error');
+    }
+  };
+
+  loadBackups();
+})();
+</script>
+{% endblock %}
