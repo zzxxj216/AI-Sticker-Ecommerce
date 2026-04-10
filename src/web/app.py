@@ -28,6 +28,7 @@ from src.services.video.video_plan_service import VideoPlanService
 from src.services.video.video_script_service import VideoScriptService
 from src.services.ops.planning_service import PlanningService
 from src.services.ops.direction_generator import DirectionGenerator
+from src.services.blog.calendar_page_generator import generate_calendar_html
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -68,6 +69,10 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 BLOG_OUTPUTS_DIR = Path("output/blogs")
 BLOG_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/blog-outputs", StaticFiles(directory=str(BLOG_OUTPUTS_DIR)), name="blog-outputs")
+
+PREVIEW_IMAGES_DIR = Path("data/output/images")
+PREVIEW_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/preview-images", StaticFiles(directory=str(PREVIEW_IMAGES_DIR)), name="preview-images")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 trend_service = TrendService()
@@ -1710,6 +1715,81 @@ def api_direction_detail(direction_id: str):
         if job:
             job["outputs"] = trend_service.db.list_outputs(d["job_id"])
     return {"direction": d, "job": job}
+
+
+@app.post("/api/planning/publish-shopify")
+def api_publish_shopify_calendar(
+    year: int | None = None,
+    month: int | None = None,
+):
+    """Generate static HTML calendar and push it to Shopify as a Page."""
+    from src.services.blog.shopify_publisher import ShopifyPublisher
+
+    now = datetime.now(timezone(timedelta(hours=8)))
+    year = year or now.year
+    month = month or now.month
+
+    body_html = generate_calendar_html(
+        db=planning_svc.db,
+        year=year,
+        month=month,
+        title="Upcoming Holidays & Events — Sticker Collection Calendar",
+    )
+
+    try:
+        publisher = ShopifyPublisher()
+    except ValueError as e:
+        raise HTTPException(500, f"Shopify credentials not configured: {e}")
+
+    page = publisher.publish_page(
+        title="Sticker Collection Calendar",
+        body_html=body_html,
+        handle="sticker-calendar",
+        published=True,
+    )
+
+    return {
+        "ok": True,
+        "page_id": page.get("id"),
+        "page_url": page.get("page_url", ""),
+        "handle": page.get("handle", "sticker-calendar"),
+    }
+
+
+@app.post("/api/planning/unpublish-shopify")
+def api_unpublish_shopify_calendar():
+    """Set the Shopify calendar page to draft (hidden from storefront)."""
+    from src.services.blog.shopify_publisher import ShopifyPublisher
+
+    try:
+        publisher = ShopifyPublisher()
+    except ValueError as e:
+        raise HTTPException(500, f"Shopify credentials not configured: {e}")
+
+    try:
+        page = publisher.unpublish_page(handle="sticker-calendar")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    return {"ok": True, "page_id": page.get("id"), "status": "draft"}
+
+
+@app.delete("/api/planning/delete-shopify")
+def api_delete_shopify_calendar():
+    """Permanently delete the Shopify calendar page."""
+    from src.services.blog.shopify_publisher import ShopifyPublisher
+
+    try:
+        publisher = ShopifyPublisher()
+    except ValueError as e:
+        raise HTTPException(500, f"Shopify credentials not configured: {e}")
+
+    try:
+        publisher.delete_page(handle="sticker-calendar")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    return {"ok": True, "deleted": True}
 
 
 @app.exception_handler(HTTPException)

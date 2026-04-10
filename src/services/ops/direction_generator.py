@@ -179,12 +179,6 @@ class DirectionGenerator:
             theme = d["name_en"]
             pack_name = f"THE {theme.upper()} STICKER PACK"
 
-            preview_dir = Path("output/h5_jobs/previews")
-            preview_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(_CN_TZ).strftime("%Y%m%d_%H%M%S")
-            safe_name = theme.replace(" ", "_")[:30]
-            output_path = preview_dir / f"preview_{safe_name}_{ts}.png"
-
             result = pack_gen.generate_preview(
                 theme=theme,
                 pack_name=pack_name,
@@ -194,12 +188,18 @@ class DirectionGenerator:
 
             preview_img = result.get("preview_image", {})
             if preview_img.get("success"):
-                img_path = str(preview_img["image_path"])
-                web_path = img_path.replace("\\", "/")
-                marker = "output/h5_jobs/"
-                idx = web_path.find(marker)
+                img_path = str(preview_img["image_path"]).replace("\\", "/")
+                marker = "data/output/images/"
+                idx = img_path.find(marker)
                 if idx >= 0:
-                    web_path = "/outputs/" + web_path[idx + len(marker):]
+                    web_path = "/preview-images/" + img_path[idx + len(marker):]
+                else:
+                    marker2 = "output/images/"
+                    idx2 = img_path.find(marker2)
+                    if idx2 >= 0:
+                        web_path = "/preview-images/" + img_path[idx2 + len(marker2):]
+                    else:
+                        web_path = img_path
                 self.db.update_direction(
                     direction_id,
                     preview_path=web_path,

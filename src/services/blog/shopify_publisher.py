@@ -530,6 +530,140 @@ class ShopifyPublisher:
         logger.info(f"Article {article_id} {action}: {article.get('title', '')}")
         return article
 
+    # ── Pages API ─────────────────────────────────────────────
+
+    def create_page(
+        self,
+        title: str,
+        body_html: str,
+        handle: str = "",
+        published: bool = True,
+    ) -> dict:
+        """Create a new Shopify Page."""
+        payload: dict = {
+            "page": {
+                "title": title,
+                "body_html": body_html,
+                "published": published,
+            }
+        }
+        if handle:
+            payload["page"]["handle"] = handle
+
+        r = requests.post(
+            f"{self._rest_base}/pages.json",
+            headers=self._headers,
+            json=payload,
+            timeout=30,
+        )
+        if r.status_code in (200, 201):
+            page = r.json().get("page", {})
+            logger.info(
+                "Created Shopify page: id=%s handle=%s",
+                page.get("id"), page.get("handle"),
+            )
+            return page
+
+        logger.error("Failed to create page: %s - %s", r.status_code, r.text[:500])
+        r.raise_for_status()
+        return {}
+
+    def update_page(self, page_id: int, body_html: str, title: str = "", published: bool = True) -> dict:
+        """Update an existing Shopify Page."""
+        payload: dict = {
+            "page": {
+                "id": page_id,
+                "body_html": body_html,
+                "published": published,
+            }
+        }
+        if title:
+            payload["page"]["title"] = title
+
+        r = requests.put(
+            f"{self._rest_base}/pages/{page_id}.json",
+            headers=self._headers,
+            json=payload,
+            timeout=30,
+        )
+        if r.status_code == 200:
+            page = r.json().get("page", {})
+            logger.info("Updated Shopify page: id=%s", page.get("id"))
+            return page
+
+        logger.error("Failed to update page: %s - %s", r.status_code, r.text[:500])
+        r.raise_for_status()
+        return {}
+
+    def find_page_by_handle(self, handle: str) -> dict | None:
+        """Find a page by its handle."""
+        r = requests.get(
+            f"{self._rest_base}/pages.json",
+            headers=self._headers,
+            params={"handle": handle},
+            timeout=15,
+        )
+        r.raise_for_status()
+        pages = r.json().get("pages", [])
+        for p in pages:
+            if p.get("handle") == handle:
+                return p
+        return None
+
+    def publish_page(
+        self,
+        title: str,
+        body_html: str,
+        handle: str = "sticker-calendar",
+        published: bool = True,
+    ) -> dict:
+        """Create or update a Shopify Page by handle.
+
+        Returns the page dict with id, handle, published_at, etc.
+        """
+        existing = self.find_page_by_handle(handle)
+        if existing:
+            page = self.update_page(
+                existing["id"], body_html, title=title, published=published,
+            )
+        else:
+            page = self.create_page(title, body_html, handle=handle, published=published)
+
+        page_url = f"https://{self.shop_domain}/pages/{page.get('handle', handle)}"
+        page["page_url"] = page_url
+        return page
+
+    def unpublish_page(self, handle: str = "sticker-calendar") -> dict:
+        """Set a page to draft (hidden from storefront) by handle."""
+        page = self.find_page_by_handle(handle)
+        if not page:
+            raise ValueError(f"Page with handle '{handle}' not found")
+        payload = {"page": {"id": page["id"], "published": False}}
+        r = requests.put(
+            f"{self._rest_base}/pages/{page['id']}.json",
+            headers=self._headers,
+            json=payload,
+            timeout=15,
+        )
+        r.raise_for_status()
+        result = r.json().get("page", {})
+        logger.info("Unpublished Shopify page: id=%s handle=%s", result.get("id"), handle)
+        return result
+
+    def delete_page(self, handle: str = "sticker-calendar") -> bool:
+        """Permanently delete a page by handle."""
+        page = self.find_page_by_handle(handle)
+        if not page:
+            raise ValueError(f"Page with handle '{handle}' not found")
+        r = requests.delete(
+            f"{self._rest_base}/pages/{page['id']}.json",
+            headers=self._headers,
+            timeout=15,
+        )
+        r.raise_for_status()
+        logger.info("Deleted Shopify page: id=%s handle=%s", page["id"], handle)
+        return True
+
     @staticmethod
     def _replace_image_urls(html: str, url_map: dict[str, str]) -> str:
         """Replace local image references in HTML with Shopify CDN URLs."""
