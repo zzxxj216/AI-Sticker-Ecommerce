@@ -312,7 +312,6 @@ class StickerAgentService:
                     messages=messages,
                     tools=self._openai_tools,
                     tool_choice="auto",
-                    max_tokens=1024,
                     temperature=0.4,
                 )
             except Exception as e:

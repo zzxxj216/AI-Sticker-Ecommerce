@@ -1675,6 +1675,16 @@ def video_studio_page(request: Request):
     jobs = [j for j in all_jobs if j.get("status") == "completed"]
     plans = trend_service.db.list_video_script_plans_v2()
     scripts = trend_service.db.list_video_scripts()
+
+    family_groups: dict = {}
+    for j in jobs:
+        fid = j.get("family_id")
+        if not fid:
+            continue
+        if fid not in family_groups:
+            family_groups[fid] = {"label": j.get("trend_name") or fid, "total_images": 0}
+        family_groups[fid]["total_images"] += j.get("image_count") or 0
+
     return templates.TemplateResponse(
         request,
         "video_studio.html",
@@ -1684,6 +1694,7 @@ def video_studio_page(request: Request):
             jobs=jobs,
             plans=plans,
             scripts=scripts,
+            family_groups=family_groups,
             page_title="脚本工作室",
         ),
     )
