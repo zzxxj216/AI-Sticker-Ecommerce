@@ -59,7 +59,7 @@ class ClaudeService(BaseLLMService):
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
         temperature: float = 0.7,
         system: Optional[str] = None,
         images: Optional[List[Dict[str, Any]]] = None
@@ -68,7 +68,7 @@ class ClaudeService(BaseLLMService):
         
         Args:
             prompt: 提示词
-            max_tokens: 最大 token 数
+            max_tokens: 最大 token 数（留空则由模型自行决定）
             temperature: 温度参数（0-1）
             system: 系统提示词
             images: 图片列表（多模态输入）
@@ -95,15 +95,16 @@ class ClaudeService(BaseLLMService):
             # 构建请求参数
             kwargs = {
                 "model": self.model,
-                "max_tokens": max_tokens,
                 "temperature": temperature,
                 "messages": [{"role": "user", "content": content}]
             }
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             
             if system:
                 kwargs["system"] = system
             
-            logger.debug(f"调用 Claude API - 模型: {self.model}, max_tokens: {max_tokens}")
+            logger.debug(f"调用 Claude API - 模型: {self.model}")
             
             # 调用 API
             message = self.client.messages.create(**kwargs)
@@ -155,7 +156,7 @@ class ClaudeService(BaseLLMService):
     def generate_multiturn(
         self,
         messages: List[Dict[str, str]],
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
         temperature: float = 0.7,
         system: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -163,7 +164,7 @@ class ClaudeService(BaseLLMService):
 
         Args:
             messages: 消息列表 [{"role": "user"/"assistant", "content": "..."}]
-            max_tokens: 最大 token 数
+            max_tokens: 最大 token 数（留空则由模型自行决定）
             temperature: 温度参数
             system: 系统提示词
 
@@ -173,10 +174,11 @@ class ClaudeService(BaseLLMService):
         try:
             kwargs: Dict[str, Any] = {
                 "model": self.model,
-                "max_tokens": max_tokens,
                 "temperature": temperature,
                 "messages": messages,
             }
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if system:
                 kwargs["system"] = system
 
@@ -222,7 +224,6 @@ class ClaudeService(BaseLLMService):
         image_data: str,
         prompt: str,
         media_type: str = "image/png",
-        max_tokens: int = 4096
     ) -> Dict[str, Any]:
         """分析图片
         
@@ -230,7 +231,6 @@ class ClaudeService(BaseLLMService):
             image_data: Base64 编码的图片数据
             prompt: 分析提示词
             media_type: 图片 MIME 类型
-            max_tokens: 最大 token 数
         
         Returns:
             Dict: 分析结果
@@ -244,7 +244,6 @@ class ClaudeService(BaseLLMService):
         return self.generate(
             prompt=prompt,
             images=images,
-            max_tokens=max_tokens
         )
     
     def _build_content(

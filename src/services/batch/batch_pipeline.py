@@ -905,7 +905,7 @@ class BatchPipeline:
             visual_style=pc.visual_style,
             color_mood=pc.color_mood,
         )
-        guide = self.claude.generate_json(prompt=prompt, max_tokens=2000, temperature=0.7)
+        guide = self.claude.generate_json(prompt=prompt, temperature=0.7)
 
         if not isinstance(guide, dict):
             raise GenerationError("Style guide response is not a JSON object", stage="style_guide")

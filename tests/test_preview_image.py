@@ -126,7 +126,7 @@ def main():
         print("[1/2] Generating preview prompt (Claude)...")
         claude = ClaudeService()
         meta_prompt = build_preview_prompt_via_claude(PACK_NAME, STICKER_IDEAS, STYLE_GUIDE)
-        result = claude.generate(prompt=meta_prompt, max_tokens=2000, temperature=0.7)
+        result = claude.generate(prompt=meta_prompt, temperature=0.7)
         preview_prompt = result["text"].strip()
         print(f"  Claude tokens: in={result['usage']['input_tokens']}, out={result['usage']['output_tokens']}")
         print(f"  Cost: ${result['cost']:.4f}")

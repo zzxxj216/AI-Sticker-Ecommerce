@@ -65,7 +65,13 @@ class TrendService:
         
         return job_id
 
-    def run_daily_pipelines(self, job_id: str):
+    def run_daily_pipelines(self, job_id: str | None = None):
+        if not job_id:
+            job_id = f"cron_job_{int(time.time())}"
+        try:
+            self.db.create_sys_task(job_id, "daily_pipeline")
+        except Exception:
+            pass
         try:
             self.db.log_task_step(job_id, "Starting daily unified pipeline (News + TikTok)")
             

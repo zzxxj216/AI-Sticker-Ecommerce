@@ -94,7 +94,6 @@ def start_scheduler():
         'cron',
         hour=6,
         minute=0,
-        args=[f"cron_job_{int(datetime.now().timestamp())}"]
     )
     scheduler.start()
 

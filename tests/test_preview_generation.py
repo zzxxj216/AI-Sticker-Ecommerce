@@ -72,7 +72,6 @@ def _run_prompt_only(generator: PackGenerator, args):
     from src.services.ai import build_pack_style_guide_prompt
     style_guide = generator.claude.generate_json(
         prompt=build_pack_style_guide_prompt(tc_dict),
-        max_tokens=2000,
         temperature=0.7,
     )
     print(f"  → Art style: {style_guide.get('art_style', 'N/A')}")
@@ -92,7 +91,7 @@ def _run_prompt_only(generator: PackGenerator, args):
     if text_count > 0:
         text_ideas = generator.claude.generate_json(
             prompt=build_text_sticker_prompt(style_guide, tc_dict, text_count),
-            max_tokens=4000, temperature=0.9,
+            temperature=0.9,
         )
         if isinstance(text_ideas, list):
             ideas.extend(text_ideas)
@@ -100,7 +99,7 @@ def _run_prompt_only(generator: PackGenerator, args):
     if element_count > 0:
         elem_ideas = generator.claude.generate_json(
             prompt=build_element_sticker_prompt(style_guide, tc_dict, element_count),
-            max_tokens=4000, temperature=0.9,
+            temperature=0.9,
         )
         if isinstance(elem_ideas, list):
             ideas.extend(elem_ideas)
@@ -108,7 +107,7 @@ def _run_prompt_only(generator: PackGenerator, args):
     if combined_count > 0:
         comb_ideas = generator.claude.generate_json(
             prompt=build_combined_sticker_prompt(style_guide, tc_dict, combined_count),
-            max_tokens=4000, temperature=0.9,
+            temperature=0.9,
         )
         if isinstance(comb_ideas, list):
             ideas.extend(comb_ideas)

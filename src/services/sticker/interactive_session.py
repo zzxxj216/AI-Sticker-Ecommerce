@@ -285,7 +285,6 @@ class InteractiveSession:
             result = self.claude.generate_multiturn(
                 messages=messages,
                 system=system,
-                max_tokens=1500,
                 temperature=0.7,
             )
             reply = result["text"].strip()
@@ -425,7 +424,6 @@ class InteractiveSession:
                 raw = self.claude.generate_json(
                     prompt="Generate the sticker concepts now. Return JSON only.",
                     system=system,
-                    max_tokens=2000,
                     temperature=0.8,
                 )
                 stickers = raw.get("stickers", [])
@@ -528,7 +526,6 @@ class InteractiveSession:
             result = self.claude.generate_multiturn(
                 messages=messages,
                 system=system,
-                max_tokens=2000,
                 temperature=0.7,
             )
             return result["text"].strip()
@@ -559,7 +556,6 @@ class InteractiveSession:
             raw = self.claude.generate_json(
                 prompt=user_prompt,
                 system=system,
-                max_tokens=800,
                 temperature=0.2,
             )
         except Exception as e:
@@ -665,7 +661,6 @@ class InteractiveSession:
             raw = self.claude.generate_json(
                 prompt=user_prompt,
                 system=system,
-                max_tokens=800,
                 temperature=0.2,
             )
         except Exception as e:
@@ -735,7 +730,6 @@ class InteractiveSession:
                 prompt=fallback_prompt,
                 system="You are a JSON-only extraction bot. Return valid JSON, nothing else. "
                        "Do NOT use double-quote characters inside string values.",
-                max_tokens=400,
                 temperature=0.0,
             )
             logger.info("Extractor fallback succeeded")

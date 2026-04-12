@@ -515,7 +515,7 @@ class PackGenerator:
         )
 
         try:
-            guide = self.claude.generate_json(prompt=prompt, max_tokens=2000, temperature=0.7)
+            guide = self.claude.generate_json(prompt=prompt, temperature=0.7)
 
             if not isinstance(guide, dict):
                 raise GenerationError("Style guide response is not a JSON object", stage="style_guide")
@@ -548,7 +548,7 @@ class PackGenerator:
         )
 
         try:
-            ideas = self.claude.generate_json(prompt=prompt, max_tokens=4000, temperature=0.8)
+            ideas = self.claude.generate_json(prompt=prompt, temperature=0.8)
         except Exception as e:
             logger.error("Concept→prompt conversion failed: %s", e)
             raise GenerationError(f"Concept→prompt conversion failed: {e}", stage="concept_conversion")
@@ -585,7 +585,6 @@ class PackGenerator:
             prompt = build_pack_style_guide_prompt(theme_content)
             guide = self.claude.generate_json(
                 prompt=prompt,
-                max_tokens=2000,
                 temperature=0.7,
             )
 
@@ -631,7 +630,6 @@ class PackGenerator:
             prompt = build_text_sticker_prompt(style_guide, theme_content, count)
             ideas = self.claude.generate_json(
                 prompt=prompt,
-                max_tokens=4000,
                 temperature=0.9,
             )
             return self._validate_ideas(ideas, "text", count)
@@ -659,7 +657,6 @@ class PackGenerator:
             prompt = build_element_sticker_prompt(style_guide, theme_content, count)
             ideas = self.claude.generate_json(
                 prompt=prompt,
-                max_tokens=4000,
                 temperature=0.9,
             )
             return self._validate_ideas(ideas, "element", count)
@@ -687,7 +684,6 @@ class PackGenerator:
             prompt = build_combined_sticker_prompt(style_guide, theme_content, count)
             ideas = self.claude.generate_json(
                 prompt=prompt,
-                max_tokens=4000,
                 temperature=0.9,
             )
             return self._validate_ideas(ideas, "combined", count)
@@ -866,7 +862,6 @@ class PackGenerator:
         try:
             result = self.claude.generate(
                 prompt=meta_prompt,
-                max_tokens=2000,
                 temperature=0.7,
             )
             preview_prompt = result["text"].strip()

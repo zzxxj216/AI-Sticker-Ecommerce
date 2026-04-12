@@ -63,7 +63,7 @@ class BatchPlanner:
             user_extra=user_extra,
         )
 
-        raw = self.claude.generate_json(prompt=prompt, max_tokens=2000, temperature=0.8)
+        raw = self.claude.generate_json(prompt=prompt, temperature=0.8)
         packs_data = raw.get("packs", [])
 
         if not packs_data:
@@ -129,7 +129,7 @@ class BatchPlanner:
             per_topic=stickers_per_topic,
         )
 
-        raw = self.claude.generate_json(prompt=prompt, max_tokens=2000, temperature=0.8)
+        raw = self.claude.generate_json(prompt=prompt, temperature=0.8)
         topics_data = raw.get("topics", [])
 
         if not topics_data:
@@ -179,7 +179,7 @@ class BatchPlanner:
             sticker_count=topic.target_count,
         )
 
-        raw = self.claude.generate_json(prompt=prompt, max_tokens=2000, temperature=0.8)
+        raw = self.claude.generate_json(prompt=prompt, temperature=0.8)
         stickers_data = raw.get("stickers", [])
 
         concepts = [
@@ -221,7 +221,7 @@ class BatchPlanner:
             style_guide=style_guide,
         )
 
-        ideas = self.claude.generate_json(prompt=prompt, max_tokens=4000, temperature=0.8)
+        ideas = self.claude.generate_json(prompt=prompt, temperature=0.8)
 
         if not isinstance(ideas, list):
             logger.error("Expected list from ideas conversion, got %s", type(ideas).__name__)

@@ -47,7 +47,7 @@ class BaseLLMService(ABC):
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
         temperature: float = 0.7,
         system: Optional[str] = None,
         **kwargs,
@@ -66,7 +66,7 @@ class BaseLLMService(ABC):
     def generate_json(
         self,
         prompt: str,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
         temperature: float = 0.7,
         system: Optional[str] = None,
         _retries: int = 1,
