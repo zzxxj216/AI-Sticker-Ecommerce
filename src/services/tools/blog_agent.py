@@ -444,7 +444,6 @@ class BlogAgentService:
                     messages=messages,
                     tools=self._openai_tools,
                     tool_choice="auto",
-                    temperature=0.3,
                 )
             except Exception as e:
                 logger.error("Agent LLM call failed at step %d: %s", step, e, exc_info=True)
@@ -759,7 +758,7 @@ class BlogAgentService:
             result = llm.generate(
                 prompt=revision_prompt,
                 system="You are a professional blog editor. Apply the requested revisions precisely.",
-                max_tokens=8192, temperature=0.3,
+                max_tokens=8192,
             )
             result_text = result.get("text", "") if isinstance(result, dict) else str(result)
 

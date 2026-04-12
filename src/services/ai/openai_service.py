@@ -97,8 +97,9 @@ class OpenAIService(BaseLLMService):
             kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": temperature,
             }
+            if not self._is_beta_model():
+                kwargs["temperature"] = temperature
             if response_format:
                 kwargs["response_format"] = response_format
 
@@ -180,6 +181,13 @@ class OpenAIService(BaseLLMService):
     # ------------------------------------------------------------------
     # Internal methods
     # ------------------------------------------------------------------
+
+    _BETA_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+    def _is_beta_model(self) -> bool:
+        """Beta models forbid temperature, top_p, n, presence/frequency_penalty."""
+        m = self.model.lower()
+        return any(m.startswith(p) for p in self._BETA_MODEL_PREFIXES)
 
     def _extract_result(self, response) -> Dict[str, Any]:
         """Extract API response result"""

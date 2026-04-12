@@ -307,13 +307,15 @@ class StickerAgentService:
 
         for step in range(self.MAX_STEPS):
             try:
-                response = self._openai.client.chat.completions.create(
-                    model=self._openai.model,
-                    messages=messages,
-                    tools=self._openai_tools,
-                    tool_choice="auto",
-                    temperature=0.4,
-                )
+                create_kwargs = {
+                    "model": self._openai.model,
+                    "messages": messages,
+                    "tools": self._openai_tools,
+                    "tool_choice": "auto",
+                }
+                if not self._openai._is_beta_model():
+                    create_kwargs["temperature"] = 0.4
+                response = self._openai.client.chat.completions.create(**create_kwargs)
             except Exception as e:
                 logger.error("Sticker agent LLM failed step %d: %s", step, e, exc_info=True)
                 final_reply = "抱歉，处理消息时出现错误，请重试。"

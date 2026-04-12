@@ -109,7 +109,10 @@ class PlannerAgent:
                 content_connection=img.get("content_connection", ""),
             ))
 
-        target_word_count = int(data.get("target_word_count", 2200))
+        raw_wc = str(data.get("target_word_count", 2200))
+        import re as _re
+        nums = _re.findall(r"\d+", raw_wc)
+        target_word_count = int(nums[-1]) if nums else 2200
         raw_seo = data.get("seo_strategy", "")
         if isinstance(raw_seo, dict):
             import json
