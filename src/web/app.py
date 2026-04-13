@@ -490,9 +490,15 @@ def api_queue_subtheme(request: Request, subtheme_id: int) -> dict:
 def page_family_detail(request: Request, trend_id: str):
     trend = trend_service.get_trend(trend_id)
     if not trend:
-        return templates.TemplateResponse("error.html", _base_context(request, message="Trend 不存在"), status_code=404)
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _base_context(request, message="Trend 不存在"),
+            status_code=404,
+        )
     family = trend_service.get_theme_family(trend_id)
     return templates.TemplateResponse(
+        request,
         "family_detail.html",
         _base_context(
             request,
