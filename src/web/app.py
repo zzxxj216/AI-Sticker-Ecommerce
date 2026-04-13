@@ -13,7 +13,7 @@ from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -27,6 +27,7 @@ from src.services.video.video_combo_service import VideoComboService
 from src.services.video.video_plan_service import VideoPlanService
 from src.services.video.video_script_service import VideoScriptService
 from src.services.ops.planning_service import PlanningService
+from src.services.ops.backup_service import BackupService
 from src.services.ops.direction_generator import DirectionGenerator
 from src.services.blog.calendar_page_generator import generate_calendar_html
 from src.web.auth_middleware import AuthMiddleware
@@ -84,6 +85,7 @@ video_plan_svc = VideoPlanService(trend_service.db)
 video_script_svc = VideoScriptService(trend_service.db)
 planning_svc = PlanningService(trend_service.db)
 direction_gen = DirectionGenerator(db=trend_service.db)
+backup_svc = BackupService()
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -1154,6 +1156,49 @@ def job_detail_page(request: Request, job_id: str):
             page_title=job.get("trend_name") or job_id,
         ),
     )
+
+
+@app.get("/system/backups", response_class=HTMLResponse)
+def backups_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "backups.html",
+        _base_context(request, page_title="数据库备份"),
+    )
+
+
+@app.get("/api/system/backups")
+def api_list_backups():
+    return {"backups": backup_svc.list_backups()}
+
+
+@app.post("/api/system/backup")
+def api_create_backup():
+    try:
+        result = backup_svc.create_backup()
+        return {"ok": True, **result}
+    except Exception as exc:
+        logger.exception("Backup failed: %s", exc)
+        return JSONResponse({"ok": False, "detail": str(exc)}, status_code=500)
+
+
+@app.get("/api/system/backups/{filename}/download")
+def api_download_backup(filename: str):
+    path = backup_svc.get_backup_path(filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type="application/octet-stream",
+    )
+
+
+@app.delete("/api/system/backups/{filename}")
+def api_delete_backup(filename: str):
+    if not backup_svc.delete_backup(filename):
+        return JSONResponse({"ok": False, "detail": "备份不存在或无效"}, status_code=404)
+    return {"ok": True}
 
 
 # --- Blog Management API ---
