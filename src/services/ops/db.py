@@ -781,8 +781,17 @@ class OpsDatabase:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def skip_stale_pending_trends(self, source_type: str, current_batch_date: str) -> int:
-        """将早于本次爬取批次、且从未人工审核过的 pending 趋势标记为跳过。"""
+    def skip_stale_pending_trends(self, source_type: str, current_batch_date: str, grace_days: int = 3) -> int:
+        """将超过宽限期、且从未人工审核过的 pending 趋势标记为跳过。
+
+        Args:
+            source_type: 数据源类型 (news / tiktok)
+            current_batch_date: 当前批次日期 (YYYY-MM-DD)
+            grace_days: 宽限天数，batch_date 在此范围内的条目不会被跳过
+        """
+        from datetime import datetime as _dt, timedelta as _td
+        cutoff = (_dt.strptime(current_batch_date, "%Y-%m-%d") - _td(days=grace_days)).strftime("%Y-%m-%d")
+
         now = _now()
         cur = self.conn.execute(
             """
@@ -806,7 +815,7 @@ class OpsDatabase:
                 now,
                 now,
                 source_type,
-                current_batch_date,
+                cutoff,
             ),
         )
         self.conn.commit()

@@ -95,11 +95,14 @@ class TrendService:
             # Pass the db instance and job_id so pipeline logs to sys_task_logs and DB
             pipeline = StickerOpportunityPipeline(db=self.db, job_id=job_id)
             pipeline.run(all_raw_items)
-            stale_news = self.db.skip_stale_pending_trends("news", batch_date)
+            grace_days = 3
+            stale_news = self.db.skip_stale_pending_trends("news", batch_date, grace_days=grace_days)
             if job_id:
+                from datetime import timedelta
+                cutoff = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=grace_days)).strftime("%Y-%m-%d")
                 self.db.log_task_step(
                     job_id,
-                    f"[Stage 1] Auto-skipped {stale_news} stale pending news (batch_date < {batch_date})",
+                    f"[Stage 1] Auto-skipped {stale_news} stale pending news (batch_date < {cutoff}, grace={grace_days}d)",
                 )
             self.db.log_task_step(job_id, "[Stage 1] News Pipeline completed successfully")
             
@@ -191,11 +194,13 @@ class TrendService:
         from datetime import datetime, timezone, timedelta
         _cn = timezone(timedelta(hours=8))
         tk_batch = datetime.now(_cn).strftime("%Y-%m-%d")
-        stale_tk = self.db.skip_stale_pending_trends("tiktok", tk_batch)
+        tk_grace = 3
+        stale_tk = self.db.skip_stale_pending_trends("tiktok", tk_batch, grace_days=tk_grace)
         if job_id:
+            tk_cutoff = (datetime.now(_cn) - timedelta(days=tk_grace)).strftime("%Y-%m-%d")
             self.db.log_task_step(
                 job_id,
-                f"[TikTok] Auto-skipped {stale_tk} stale pending (batch_date < {tk_batch})",
+                f"[TikTok] Auto-skipped {stale_tk} stale pending (batch_date < {tk_cutoff}, grace={tk_grace}d)",
             )
 
         return {
