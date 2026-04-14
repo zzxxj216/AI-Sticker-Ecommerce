@@ -12,7 +12,11 @@ from anthropic.types import Message
 from src.core.config import config
 from src.core.logger import get_logger
 from src.core.exceptions import APIError, TimeoutError, RateLimitError
-from src.core.constants import DEFAULT_TIMEOUT, DEFAULT_MAX_RETRIES
+from src.core.constants import (
+    CLAUDE_DEFAULT_MAX_TOKENS,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT,
+)
 from src.services.ai.base import BaseLLMService
 
 logger = get_logger("service.claude")
@@ -92,15 +96,18 @@ class ClaudeService(BaseLLMService):
             # 构建消息内容
             content = self._build_content(prompt, images)
             
+            # Anthropic API requires max_tokens on every messages.create call.
+            effective_max = (
+                max_tokens if max_tokens is not None else CLAUDE_DEFAULT_MAX_TOKENS
+            )
             # 构建请求参数
-            kwargs = {
+            kwargs: Dict[str, Any] = {
                 "model": self.model,
+                "max_tokens": effective_max,
                 "temperature": temperature,
-                "messages": [{"role": "user", "content": content}]
+                "messages": [{"role": "user", "content": content}],
             }
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-            
+
             if system:
                 kwargs["system"] = system
             
@@ -172,13 +179,15 @@ class ClaudeService(BaseLLMService):
             Dict: 与 generate() 返回格式相同
         """
         try:
+            effective_max = (
+                max_tokens if max_tokens is not None else CLAUDE_DEFAULT_MAX_TOKENS
+            )
             kwargs: Dict[str, Any] = {
                 "model": self.model,
+                "max_tokens": effective_max,
                 "temperature": temperature,
                 "messages": messages,
             }
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
             if system:
                 kwargs["system"] = system
 

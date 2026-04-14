@@ -59,6 +59,9 @@ DEFAULT_VARIATION_DEGREE: Final[VariationDegree] = VariationDegree.MEDIUM
 DEFAULT_TIMEOUT: Final[int] = 300
 DEFAULT_MAX_RETRIES: Final[int] = 3
 DEFAULT_RETRY_DELAY: Final[int] = 2
+# Anthropic messages.create requires max_tokens; use when callers omit it.
+# Large enough for pack style guide / long JSON; override per-call if needed.
+CLAUDE_DEFAULT_MAX_TOKENS: Final[int] = 32768
 
 # 并发配置
 DEFAULT_MAX_WORKERS: Final[int] = 5

@@ -332,7 +332,14 @@ class GeminiService(BaseLLMService):
             output_dir.mkdir(parents=True, exist_ok=True)
 
         total = len(prompts)
-        logger.info(f"Starting batch generation of {total} images (workers: {max_workers})")
+        logger.info(
+            "Starting batch generation of %d images (workers: %d). "
+            "No PNG files appear until a request finishes; first success often takes 15–120s. "
+            "Watch for '(n/%d) Calling Gemini image API' lines.",
+            total,
+            max_workers,
+            total,
+        )
 
         results_dict: Dict[int, Dict[str, Any]] = {}
 
@@ -346,9 +353,43 @@ class GeminiService(BaseLLMService):
                 filename = f"image_{idx:02d}_{safe_name}_{datetime.now().strftime('%H%M%S')}.png"
                 output_path = output_dir / filename
 
-            with _global_image_semaphore:
-                logger.debug(f"({idx}/{total}) Generating: {prompt[:50]}...")
-                result = self.generate_image(prompt, reference_image, output_path)
+            # INFO so operators see activity before the first file lands (generate_image only logs on success).
+            logger.info(
+                "(%d/%d) Waiting for Gemini concurrency slot (global max %d)...",
+                idx,
+                total,
+                _GLOBAL_IMAGE_CONCURRENCY,
+            )
+            try:
+                with _global_image_semaphore:
+                    logger.info(
+                        "(%d/%d) Calling Gemini image API (prompt ~%d chars)...",
+                        idx,
+                        total,
+                        len(prompt),
+                    )
+                    logger.debug("Prompt preview: %s...", prompt[:80])
+                    result = self.generate_image(prompt, reference_image, output_path)
+            except APIError as exc:
+                logger.error("(%d/%d) Gemini API failed: %s", idx, total, exc)
+                result = {
+                    "success": False,
+                    "image_path": None,
+                    "image_data": None,
+                    "size_kb": 0,
+                    "elapsed": 0.0,
+                    "error": str(exc),
+                }
+            except Exception as exc:
+                logger.error("(%d/%d) Image generation error: %s", idx, total, exc, exc_info=True)
+                result = {
+                    "success": False,
+                    "image_path": None,
+                    "image_data": None,
+                    "size_kb": 0,
+                    "elapsed": 0.0,
+                    "error": str(exc),
+                }
             result["index"] = idx
             result["prompt"] = prompt
             return idx, result
@@ -360,8 +401,23 @@ class GeminiService(BaseLLMService):
             }
 
             for future in as_completed(futures):
-                idx, result = future.result()
-                results_dict[idx] = result
+                try:
+                    idx, result = future.result()
+                    results_dict[idx] = result
+                except Exception as exc:
+                    hint = futures.get(future)
+                    logger.error("Batch worker crashed (idx hint %s): %s", hint, exc, exc_info=True)
+                    if hint is not None:
+                        results_dict[hint] = {
+                            "success": False,
+                            "image_path": None,
+                            "image_data": None,
+                            "size_kb": 0,
+                            "elapsed": 0.0,
+                            "error": str(exc),
+                            "index": hint,
+                            "prompt": "",
+                        }
 
         results = [results_dict[i] for i in sorted(results_dict)]
         success_count = sum(1 for r in results if r["success"])

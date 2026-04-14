@@ -222,7 +222,13 @@ class StickerPackPipeline:
 
     def _generate_images(self, prompts: List[Dict[str, Any]]) -> List[str]:
         """Generate sticker images via Gemini in batch."""
-        logger.info("Step 5: generating images (%d stickers)", len(prompts))
+        n = len(prompts)
+        logger.info(
+            "Step 5: generating images (%d stickers). "
+            "Disk stays empty until the first API call returns; see Gemini logs for (1/%d) … progress.",
+            n,
+            n,
+        )
 
         images_dir = self.output_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)

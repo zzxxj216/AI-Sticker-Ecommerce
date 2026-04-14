@@ -214,6 +214,11 @@ class DirectionGenerator:
 
         def _run():
             try:
+                self.db.update_job(
+                    job.id, status="running",
+                    started_at=datetime.now(_CN_TZ),
+                )
+
                 from src.services.sticker.pack_generator import PackGenerator
 
                 pack_gen = PackGenerator()
@@ -357,6 +362,11 @@ class DirectionGenerator:
 
         def _run():
             try:
+                self.db.update_job(
+                    job.id, status="running",
+                    started_at=datetime.now(_CN_TZ),
+                )
+
                 from src.services.batch.sticker_pipeline import StickerPackPipeline
                 from src.services.ai.gemini_service import GeminiService
 
@@ -374,8 +384,9 @@ class DirectionGenerator:
 
                 outputs = JobService._collect_outputs(job.id, Path(str(pipeline.output_dir)))
                 self.db.replace_outputs(job.id, outputs)
+                actual_images = [o for o in outputs if o.output_type == "image"]
                 status = result.status if result.status in {"completed", "failed"} else "completed"
-                img_count = len(result.image_paths)
+                img_count = len(result.image_paths) or len(actual_images)
 
                 self.db.update_job(
                     job.id,
