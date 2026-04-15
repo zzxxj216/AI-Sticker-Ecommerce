@@ -1,0 +1,488 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">TikTok Video Publishing</p>
+    <h1>TK 视频发布</h1>
+    <p class="page-subtitle">通过 Blotato API 将视频发布到 TikTok 账号。</p>
+  </div>
+</section>
+
+{% if not blotato_configured %}
+<section class="panel">
+  <div style="padding:40px 24px;text-align:center;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;opacity:.5;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <h3 style="color:var(--text);margin-bottom:8px;">Blotato API 未配置</h3>
+    <p style="color:var(--text-muted);font-size:13px;max-width:480px;margin:0 auto;">
+      请在 <code>.env</code> 文件中添加 <code>BLOTATO_API_KEY=your_key</code> 后重启服务。
+      <br>API Key 可在 <a href="https://my.blotato.com/settings" target="_blank" style="color:var(--primary);">Blotato Settings</a> 中生成。
+    </p>
+  </div>
+</section>
+{% else %}
+
+<!-- ① Account Selection -->
+<section class="panel" id="account-panel">
+  <div class="panel-header"><h2>TikTok 账号</h2></div>
+  <div style="padding:20px 24px;">
+    <div class="gen-field">
+      <label>选择发布账号</label>
+      <select id="sel_account" style="max-width:400px;">
+        <option value="">加载中...</option>
+      </select>
+      <button class="btn-secondary" onclick="loadAccounts()" style="margin-left:8px;padding:6px 12px;font-size:12px;">刷新</button>
+    </div>
+  </div>
+</section>
+
+<!-- ② Video Input -->
+<section class="panel" id="video-panel">
+  <div class="panel-header"><h2>视频来源</h2></div>
+  <div style="padding:20px 24px;">
+    <div class="tkp-tabs">
+      <button class="tkp-tab active" data-tab="url" onclick="switchTab('url')">视频 URL</button>
+      <button class="tkp-tab" data-tab="upload" onclick="switchTab('upload')">本地上传</button>
+    </div>
+
+    <!-- URL Tab -->
+    <div id="tab-url" class="tkp-tab-content">
+      <div class="gen-field" style="margin-top:12px;">
+        <label>公开可访问的视频 URL</label>
+        <input type="url" id="input_video_url" placeholder="https://example.com/video.mp4" style="width:100%;max-width:600px;padding:10px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;font-size:13px;">
+      </div>
+    </div>
+
+    <!-- Upload Tab -->
+    <div id="tab-upload" class="tkp-tab-content" style="display:none;">
+      <div class="gen-field" style="margin-top:12px;">
+        <label>选择视频文件（最大 1GB）</label>
+        <div class="tkp-upload-zone" id="upload_zone">
+          <input type="file" id="input_file" accept="video/*" style="display:none;" onchange="handleFileSelect(this)">
+          <div class="tkp-upload-placeholder" id="upload_placeholder" onclick="document.getElementById('input_file').click()">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span style="margin-top:8px;color:var(--text-muted);font-size:13px;">点击选择或拖拽视频文件</span>
+          </div>
+          <div class="tkp-upload-progress" id="upload_progress" style="display:none;">
+            <div class="tkp-progress-info">
+              <span id="upload_filename"></span>
+              <span id="upload_percent">0%</span>
+            </div>
+            <div class="tkp-progress-bar-outer">
+              <div class="tkp-progress-bar-inner" id="upload_bar" style="width:0%"></div>
+            </div>
+            <span id="upload_status_text" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></span>
+          </div>
+          <div class="tkp-upload-done" id="upload_done" style="display:none;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            <span id="upload_done_name" style="font-size:13px;font-weight:500;"></span>
+            <button class="btn-secondary" onclick="resetUpload()" style="padding:3px 10px;font-size:11px;margin-left:8px;">重选</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ③ Caption & Settings -->
+<section class="panel" id="settings-panel">
+  <div class="panel-header"><h2>发布设置</h2></div>
+  <div style="padding:20px 24px;">
+    <div class="gen-field" style="margin-bottom:16px;">
+      <label>文案 / Caption</label>
+      <textarea id="input_caption" rows="3" placeholder="输入视频文案和 #hashtags ..." style="width:100%;max-width:600px;padding:10px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;font-size:13px;resize:vertical;font-family:inherit;"></textarea>
+    </div>
+
+    <div class="tkp-settings-grid">
+      <div class="gen-field">
+        <label>隐私级别</label>
+        <select id="sel_privacy" style="width:100%;">
+          <option value="PUBLIC_TO_EVERYONE">公开 (Public)</option>
+          <option value="FOLLOWER_OF_CREATOR">仅粉丝 (Followers Only)</option>
+          <option value="MUTUAL_FOLLOW_FRIENDS">互关好友 (Friends)</option>
+          <option value="SELF_ONLY">仅自己 (Private)</option>
+        </select>
+      </div>
+      <div class="gen-field">
+        <label>视频封面时间 (ms)</label>
+        <input type="number" id="input_cover_ts" min="0" step="100" placeholder="可选，如 3000" style="width:100%;padding:10px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;font-size:13px;">
+      </div>
+    </div>
+
+    <div class="tkp-toggles">
+      <label class="tkp-toggle-row">
+        <input type="checkbox" id="chk_ai" checked>
+        <span>AI 生成内容</span>
+      </label>
+      <label class="tkp-toggle-row">
+        <input type="checkbox" id="chk_comments">
+        <span>禁用评论</span>
+      </label>
+      <label class="tkp-toggle-row">
+        <input type="checkbox" id="chk_duet">
+        <span>禁用 Duet</span>
+      </label>
+      <label class="tkp-toggle-row">
+        <input type="checkbox" id="chk_stitch">
+        <span>禁用 Stitch</span>
+      </label>
+      <label class="tkp-toggle-row">
+        <input type="checkbox" id="chk_branded">
+        <span>品牌内容</span>
+      </label>
+      <label class="tkp-toggle-row">
+        <input type="checkbox" id="chk_yourbrand">
+        <span>自有品牌</span>
+      </label>
+    </div>
+
+    <!-- Advanced / Scheduling -->
+    <details class="tkp-advanced" style="margin-top:16px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text-muted);user-select:none;">高级选项</summary>
+      <div style="margin-top:12px;" class="tkp-settings-grid">
+        <div class="gen-field">
+          <label>定时发布</label>
+          <input type="datetime-local" id="input_schedule" style="width:100%;padding:10px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;font-size:13px;">
+          <span style="font-size:11px;color:var(--text-muted);">留空则立即发布</span>
+        </div>
+        <div class="gen-field">
+          <label>&nbsp;</label>
+          <label class="tkp-toggle-row" style="margin-top:6px;">
+            <input type="checkbox" id="chk_draft">
+            <span>发布为草稿</span>
+          </label>
+          <label class="tkp-toggle-row">
+            <input type="checkbox" id="chk_nextslot">
+            <span>使用下一个空闲时段</span>
+          </label>
+        </div>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ④ Action -->
+<section class="panel" id="action-panel">
+  <div style="padding:20px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <button class="btn-primary" id="btn_publish" onclick="doPublish()" style="padding:12px 32px;font-size:14px;font-weight:600;">
+      <span id="btn_pub_text">发布到 TikTok</span>
+      <span id="btn_pub_spinner" class="spinner" style="display:none;"></span>
+    </button>
+    <div id="pub_status" style="font-size:13px;color:var(--text-muted);display:none;"></div>
+  </div>
+  <div id="pub_result" style="display:none;padding:0 24px 20px;">
+    <div class="tkp-result-card" id="pub_result_inner"></div>
+  </div>
+</section>
+
+{% endif %}
+
+<style>
+.tkp-tabs{display:flex;gap:0;border-bottom:2px solid var(--line-soft,#e5e7eb);}
+.tkp-tab{padding:8px 20px;font-size:13px;font-weight:600;color:var(--text-muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;}
+.tkp-tab.active{color:var(--primary,#7c5cfc);border-bottom-color:var(--primary,#7c5cfc);}
+.tkp-tab:hover{color:var(--text);}
+
+.tkp-upload-zone{max-width:600px;margin-top:4px;}
+.tkp-upload-placeholder{border:2px dashed var(--line-soft,#d1d5db);border-radius:12px;padding:40px 20px;display:flex;flex-direction:column;align-items:center;cursor:pointer;transition:border-color .15s,background .15s;}
+.tkp-upload-placeholder:hover{border-color:var(--primary,#7c5cfc);background:rgba(124,92,252,.03);}
+.tkp-upload-progress{padding:16px 0;}
+.tkp-progress-info{display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px;}
+.tkp-progress-bar-outer{height:6px;background:var(--line-soft,#e5e7eb);border-radius:3px;overflow:hidden;}
+.tkp-progress-bar-inner{height:100%;background:linear-gradient(90deg,#7c5cfc,#06b6d4);border-radius:3px;transition:width .3s;}
+.tkp-upload-done{display:flex;align-items:center;gap:8px;padding:12px 16px;background:rgba(5,150,105,.06);border-radius:8px;border:1px solid rgba(5,150,105,.2);}
+
+.tkp-settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:600px;}
+@media(max-width:640px){.tkp-settings-grid{grid-template-columns:1fr;}}
+
+.tkp-toggles{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:16px;}
+.tkp-toggle-row{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;user-select:none;}
+.tkp-toggle-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--primary,#7c5cfc);cursor:pointer;}
+
+.tkp-result-card{padding:16px 20px;border-radius:10px;border:1px solid var(--line-soft,#e5e7eb);}
+.tkp-result-card.success{background:rgba(5,150,105,.05);border-color:rgba(5,150,105,.3);}
+.tkp-result-card.failed{background:rgba(239,68,68,.05);border-color:rgba(239,68,68,.3);}
+
+.gen-field{margin-bottom:0;}
+.gen-field label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px;}
+.gen-field select{padding:10px 12px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;font-size:13px;background:#fff;}
+.gen-field select:focus,.gen-field input:focus,.gen-field textarea:focus{outline:none;border-color:var(--primary,#7c5cfc);}
+
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+
+<script>
+let currentTab = 'url';
+let uploadedMediaUrl = '';
+let pollTimer = null;
+
+// ── Tab switching ───────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tkp-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.getElementById('tab-url').style.display = tab === 'url' ? '' : 'none';
+  document.getElementById('tab-upload').style.display = tab === 'upload' ? '' : 'none';
+}
+
+// ── Account loading ─────────────────────
+async function loadAccounts() {
+  const sel = document.getElementById('sel_account');
+  sel.innerHTML = '<option value="">加载中...</option>';
+  try {
+    const r = await fetch('/api/blotato/accounts');
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '加载失败'); }
+    const data = await r.json();
+    const accounts = data.accounts || [];
+    if (!accounts.length) {
+      sel.innerHTML = '<option value="">未找到 TikTok 账号 — 请在 Blotato 中连接</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="">-- 选择账号 --</option>';
+    accounts.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = (a.fullname || a.username || a.id) + ' (@' + (a.username || a.id) + ')';
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    sel.innerHTML = '<option value="">加载失败: ' + e.message + '</option>';
+  }
+}
+
+// ── File upload (presigned) ─────────────
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  uploadFile(file);
+}
+
+async function uploadFile(file) {
+  const placeholder = document.getElementById('upload_placeholder');
+  const progress = document.getElementById('upload_progress');
+  const done = document.getElementById('upload_done');
+  const bar = document.getElementById('upload_bar');
+  const pct = document.getElementById('upload_percent');
+  const fname = document.getElementById('upload_filename');
+  const statusTxt = document.getElementById('upload_status_text');
+
+  placeholder.style.display = 'none';
+  done.style.display = 'none';
+  progress.style.display = 'block';
+  fname.textContent = file.name;
+  bar.style.width = '0%';
+  pct.textContent = '0%';
+  statusTxt.textContent = '正在获取上传链接...';
+  uploadedMediaUrl = '';
+
+  try {
+    const presignRes = await fetch('/api/blotato/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name }),
+    });
+    if (!presignRes.ok) { const e = await presignRes.json(); throw new Error(e.detail || '获取上传链接失败'); }
+    const presignData = await presignRes.json();
+    const presignedUrl = presignData.presignedUrl;
+    const publicUrl = presignData.publicUrl;
+
+    statusTxt.textContent = '正在上传视频到 Blotato...';
+
+    const contentTypeMap = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', avi: 'video/x-msvideo' };
+    const ext = file.name.split('.').pop().toLowerCase();
+    const contentType = contentTypeMap[ext] || 'application/octet-stream';
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', presignedUrl);
+      xhr.setRequestHeader('Content-Type', contentType);
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) {
+          const p = Math.round(ev.loaded / ev.total * 100);
+          bar.style.width = p + '%';
+          pct.textContent = p + '%';
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error('上传失败 (HTTP ' + xhr.status + ')'));
+      };
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.send(file);
+    });
+
+    uploadedMediaUrl = publicUrl;
+    progress.style.display = 'none';
+    done.style.display = 'flex';
+    document.getElementById('upload_done_name').textContent = file.name + ' — 上传完成';
+  } catch (e) {
+    statusTxt.textContent = '上传失败: ' + e.message;
+    bar.style.width = '100%';
+    bar.style.background = '#ef4444';
+  }
+}
+
+function resetUpload() {
+  uploadedMediaUrl = '';
+  document.getElementById('input_file').value = '';
+  document.getElementById('upload_placeholder').style.display = 'flex';
+  document.getElementById('upload_progress').style.display = 'none';
+  document.getElementById('upload_done').style.display = 'none';
+  document.getElementById('upload_bar').style.background = '';
+}
+
+// ── Drag & drop ─────────────────────────
+(function () {
+  const zone = document.getElementById('upload_zone');
+  if (!zone) return;
+  ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.querySelector('.tkp-upload-placeholder')?.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.querySelector('.tkp-upload-placeholder')?.classList.remove('dragover'); }));
+  zone.addEventListener('drop', e => {
+    const file = e.dataTransfer?.files?.[0];
+    if (file && file.type.startsWith('video/')) uploadFile(file);
+  });
+})();
+
+// ── Status helpers ──────────────────────
+const pubStatusEl = document.getElementById('pub_status');
+function showPubStatus(msg, color) {
+  if (!pubStatusEl) return;
+  pubStatusEl.style.display = 'block';
+  pubStatusEl.style.color = color || 'var(--text-muted)';
+  pubStatusEl.textContent = msg;
+}
+
+// ── Publish ─────────────────────────────
+async function doPublish() {
+  const accountId = document.getElementById('sel_account').value;
+  if (!accountId) { alert('请先选择 TikTok 账号'); return; }
+
+  let mediaUrl = '';
+  if (currentTab === 'url') {
+    mediaUrl = document.getElementById('input_video_url').value.trim();
+  } else {
+    mediaUrl = uploadedMediaUrl;
+  }
+  if (!mediaUrl) { alert('请提供视频 URL 或上传视频文件'); return; }
+
+  const text = document.getElementById('input_caption').value.trim();
+  const coverTs = document.getElementById('input_cover_ts').value;
+
+  const target = {
+    privacyLevel: document.getElementById('sel_privacy').value,
+    disabledComments: document.getElementById('chk_comments').checked,
+    disabledDuet: document.getElementById('chk_duet').checked,
+    disabledStitch: document.getElementById('chk_stitch').checked,
+    isBrandedContent: document.getElementById('chk_branded').checked,
+    isYourBrand: document.getElementById('chk_yourbrand').checked,
+    isAiGenerated: document.getElementById('chk_ai').checked,
+  };
+  if (document.getElementById('chk_draft').checked) target.isDraft = true;
+  if (coverTs) target.videoCoverTimestamp = parseInt(coverTs, 10);
+
+  const payload = { accountId, text, mediaUrls: [mediaUrl], target };
+
+  const scheduleVal = document.getElementById('input_schedule').value;
+  if (scheduleVal) {
+    const d = new Date(scheduleVal);
+    payload.scheduledTime = d.toISOString();
+  } else if (document.getElementById('chk_nextslot').checked) {
+    payload.useNextFreeSlot = true;
+  }
+
+  const btn = document.getElementById('btn_publish');
+  const btnText = document.getElementById('btn_pub_text');
+  const btnSpinner = document.getElementById('btn_pub_spinner');
+  btn.disabled = true;
+  btnText.textContent = '发布中...';
+  btnSpinner.style.display = 'inline-block';
+  showPubStatus('正在提交到 Blotato...');
+  document.getElementById('pub_result').style.display = 'none';
+
+  try {
+    const r = await fetch('/api/blotato/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '发布请求失败'); }
+    const data = await r.json();
+    const submissionId = data.postSubmissionId;
+    if (!submissionId) throw new Error('未返回 postSubmissionId');
+
+    showPubStatus('已提交，正在等待 TikTok 处理... (ID: ' + submissionId + ')');
+    startPolling(submissionId);
+  } catch (e) {
+    showPubStatus('发布失败: ' + e.message, '#dc2626');
+    btn.disabled = false;
+    btnText.textContent = '发布到 TikTok';
+    btnSpinner.style.display = 'none';
+  }
+}
+
+// ── Status polling ──────────────────────
+function startPolling(submissionId) {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/blotato/posts/' + submissionId);
+      if (!r.ok) return;
+      const data = await r.json();
+      const status = data.status;
+
+      if (status === 'published') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        showPubStatus('发布成功!', '#059669');
+        showResult('success', data.publicUrl);
+        resetBtn();
+      } else if (status === 'failed') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        showPubStatus('发布失败: ' + (data.errorMessage || '未知错误'), '#dc2626');
+        showResult('failed', null, data.errorMessage);
+        resetBtn();
+      } else {
+        showPubStatus('处理中... (' + status + ')');
+      }
+    } catch (e) { /* keep polling */ }
+  }, 2000);
+}
+
+function showResult(type, url, errorMsg) {
+  const container = document.getElementById('pub_result');
+  const inner = document.getElementById('pub_result_inner');
+  container.style.display = 'block';
+  inner.className = 'tkp-result-card ' + type;
+
+  if (type === 'success') {
+    inner.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
+        '<strong style="color:#059669;">发布成功</strong>' +
+      '</div>' +
+      (url ? '<a href="' + url + '" target="_blank" style="color:var(--primary);font-size:13px;word-break:break-all;">' + url + '</a>' : '<span style="font-size:13px;color:var(--text-muted);">TikTok 链接稍后可用</span>');
+  } else {
+    inner.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>' +
+        '<strong style="color:#ef4444;">发布失败</strong>' +
+      '</div>' +
+      '<span style="font-size:13px;color:var(--text-muted);">' + (errorMsg || '请检查视频格式和账号权限后重试') + '</span>';
+  }
+}
+
+function resetBtn() {
+  const btn = document.getElementById('btn_publish');
+  const btnText = document.getElementById('btn_pub_text');
+  const btnSpinner = document.getElementById('btn_pub_spinner');
+  btn.disabled = false;
+  btnText.textContent = '发布到 TikTok';
+  btnSpinner.style.display = 'none';
+}
+
+// ── Init ────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  if (document.getElementById('sel_account')) loadAccounts();
+});
+</script>
+{% endblock %}

@@ -30,6 +30,7 @@ from src.services.ops.planning_service import PlanningService
 from src.services.ops.backup_service import BackupService
 from src.services.ops.direction_generator import DirectionGenerator
 from src.services.blog.calendar_page_generator import generate_calendar_html
+from src.services.tiktok.blotato_service import BlotaToService
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -86,6 +87,7 @@ video_script_svc = VideoScriptService(trend_service.db)
 planning_svc = PlanningService(trend_service.db)
 direction_gen = DirectionGenerator(db=trend_service.db)
 backup_svc = BackupService()
+blotato_svc = BlotaToService()
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -2021,6 +2023,92 @@ def api_delete_shopify_calendar():
         raise HTTPException(404, str(e))
 
     return {"ok": True, "deleted": True}
+
+
+# ── TikTok Video Publishing (Blotato) ────────────────────
+
+
+@app.get("/tk-publish", response_class=HTMLResponse)
+def tk_publish_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "tk_publish.html",
+        _base_context(
+            request,
+            page_title="TK 视频发布",
+            blotato_configured=blotato_svc.is_configured(),
+        ),
+    )
+
+
+@app.get("/api/blotato/accounts")
+def api_blotato_accounts():
+    if not blotato_svc.is_configured():
+        raise HTTPException(400, "Blotato API Key 未配置，请在 .env 中设置 BLOTATO_API_KEY")
+    try:
+        accounts = blotato_svc.get_tiktok_accounts()
+        return {"accounts": accounts}
+    except Exception as exc:
+        logger.warning("Blotato get accounts failed: %s", exc)
+        raise HTTPException(502, f"获取 TikTok 账号失败: {exc}") from exc
+
+
+@app.post("/api/blotato/upload")
+def api_blotato_upload(payload: dict):
+    if not blotato_svc.is_configured():
+        raise HTTPException(400, "Blotato API Key 未配置")
+    filename = payload.get("filename", "")
+    if not filename:
+        raise HTTPException(400, "filename is required")
+    try:
+        result = blotato_svc.get_presigned_url(filename)
+        return result
+    except Exception as exc:
+        logger.warning("Blotato presigned upload failed: %s", exc)
+        raise HTTPException(502, f"获取上传链接失败: {exc}") from exc
+
+
+@app.post("/api/blotato/publish")
+def api_blotato_publish(payload: dict):
+    if not blotato_svc.is_configured():
+        raise HTTPException(400, "Blotato API Key 未配置")
+
+    account_id = payload.get("accountId", "")
+    text = payload.get("text", "")
+    media_urls = payload.get("mediaUrls", [])
+    target_options = payload.get("target", {})
+    scheduled_time = payload.get("scheduledTime")
+    use_next_free_slot = payload.get("useNextFreeSlot", False)
+
+    if not account_id:
+        raise HTTPException(400, "accountId is required")
+    if not media_urls:
+        raise HTTPException(400, "至少需要一个视频 URL")
+
+    try:
+        result = blotato_svc.publish_tiktok_video(
+            account_id=account_id,
+            text=text,
+            media_urls=media_urls,
+            target_options=target_options,
+            scheduled_time=scheduled_time,
+            use_next_free_slot=use_next_free_slot,
+        )
+        return result
+    except Exception as exc:
+        logger.error("Blotato publish failed: %s", exc, exc_info=True)
+        raise HTTPException(502, f"发布失败: {exc}") from exc
+
+
+@app.get("/api/blotato/posts/{post_submission_id}")
+def api_blotato_post_status(post_submission_id: str):
+    if not blotato_svc.is_configured():
+        raise HTTPException(400, "Blotato API Key 未配置")
+    try:
+        return blotato_svc.get_post_status(post_submission_id)
+    except Exception as exc:
+        logger.warning("Blotato get post status failed: %s", exc)
+        raise HTTPException(502, f"查询发布状态失败: {exc}") from exc
 
 
 @app.exception_handler(HTTPException)
