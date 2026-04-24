@@ -34,6 +34,7 @@ from src.services.tiktok.blotato_service import BlotaToService
 from src.services.tiktok.tiktok_display_service import TikTokDisplayService
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
+from src.web.v2_routes import router as v2_router
 
 logger = get_logger("web.h5")
 
@@ -76,6 +77,12 @@ app.mount("/blog-outputs", StaticFiles(directory=str(BLOG_OUTPUTS_DIR)), name="b
 PREVIEW_IMAGES_DIR = Path("data/output/images")
 PREVIEW_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/preview-images", StaticFiles(directory=str(PREVIEW_IMAGES_DIR)), name="preview-images")
+
+# V2 pipeline routes (mounted under /v2). Keeps V1 routes untouched.
+V2_OUTPUTS_DIR = Path("output/packs")
+V2_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/v2-outputs", StaticFiles(directory=str(V2_OUTPUTS_DIR)), name="v2-outputs")
+app.include_router(v2_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 trend_service = TrendService()

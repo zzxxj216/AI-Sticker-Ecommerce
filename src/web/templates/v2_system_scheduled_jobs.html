@@ -1,0 +1,69 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">System / Scheduler</p>
+    <h1>调度任务</h1>
+    <p class="page-subtitle">independent <code>scripts/scheduler.py</code> 进程，记录每次 job 运行。</p>
+  </div>
+</section>
+
+{% for j in jobs %}
+<section class="panel" style="margin-bottom:12px;">
+  <div style="padding:14px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <div>
+      <code style="font-size:14px;font-weight:600;">{{ j.name }}</code>
+      <span style="margin-left:12px;color:var(--text-muted);font-size:12px;">每 {{ j.interval_human }} 一次</span>
+    </div>
+    <div style="display:flex;gap:18px;font-size:12px;color:var(--text-muted);">
+      <div>最近执行：<span style="color:var(--text);">{{ j.last_run_human or '—' }}</span></div>
+      <div>下一次预计：<span style="color:var(--text);">{{ j.next_run_human or '—' }}</span></div>
+      <div>近 24h 成功率：<span style="color:var(--text);">{{ j.success_rate_human }}</span></div>
+    </div>
+  </div>
+</section>
+{% endfor %}
+
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">最近 {{ runs|length }} 次执行</h3>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;">
+    <table style="width:100%;font-size:13px;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);">
+          <th style="padding:8px 0;">id</th>
+          <th>job_name</th>
+          <th>started</th>
+          <th>finished</th>
+          <th>duration</th>
+          <th>状态</th>
+          <th style="text-align:right;">affected_rows</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:8px 0;color:var(--text-muted);">{{ r.id }}</td>
+          <td><code style="font-size:12px;">{{ r.job_name }}</code></td>
+          <td style="color:var(--text-muted);">{{ r.started_human }}</td>
+          <td style="color:var(--text-muted);">{{ r.finished_human or '—' }}</td>
+          <td>{{ r.duration_human or '—' }}</td>
+          <td><span class="v2-status-pill {{ r.status }}">{{ r.status }}</span></td>
+          <td style="text-align:right;">{{ r.affected_rows }}</td>
+        </tr>
+        {% if r.error %}
+        <tr style="border-top:none;">
+          <td colspan="7" style="padding:0 0 8px 24px;color:var(--danger);font-size:12px;font-family:monospace;">{{ r.error }}</td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="7" style="padding:14px 0;text-align:center;color:var(--text-muted);">暂无运行记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">{{ section_tag or 'V2' }}</p>
+    <h1>{{ title }}</h1>
+    <p class="page-subtitle">{{ subtitle or '此页面在后续 milestone 实现。' }}</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div style="padding:40px 24px;text-align:center;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;opacity:.5;">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M9 12l2 2 4-4"/>
+    </svg>
+    <h3 style="color:var(--text);margin-bottom:8px;">{{ planned_in or '后续 milestone' }} 实现</h3>
+    <p style="color:var(--text-muted);font-size:13px;max-width:520px;margin:0 auto;">
+      {{ description or '相关功能、数据表、AI 调用链已在公共底座中就绪；此页面将作为操作入口在排期内构建。' }}
+    </p>
+    {% if related_table %}
+    <p style="color:var(--text-muted);font-size:12px;margin-top:16px;">
+      关联数据表：<code>{{ related_table }}</code>
+    </p>
+    {% endif %}
+  </div>
+</section>
+
+{% endblock %}

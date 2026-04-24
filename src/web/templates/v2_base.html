@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="V2 数据链工作台 — 热点 / 卡包 / 视频 / 产品" />
+  <title>{{ page_title or 'V2 数据链工作台' }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <script src="/static/common.js" defer></script>
+  <style>
+    /* V2-specific tweaks layered on the existing app.css. */
+    .v2-section-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: var(--radius-pill);
+      background: var(--accent-bg);
+      color: var(--accent-dark);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+    .v2-status-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: var(--radius-pill);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .v2-status-pill.ok      { background: var(--success-bg);  color: var(--success); }
+    .v2-status-pill.error   { background: var(--danger-bg);   color: var(--danger);  }
+    .v2-status-pill.pending { background: var(--info-bg);     color: var(--info);    }
+    .v2-status-pill.running { background: var(--warning-bg);  color: var(--warning); }
+    .v2-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div>
+        <div class="sidebar-brand">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="url(#brand-grad-v2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px;">
+            <defs><linearGradient id="brand-grad-v2" x1="0" y1="0" x2="24" y2="24"><stop offset="0%" stop-color="#7c5cfc"/><stop offset="100%" stop-color="#06b6d4"/></linearGradient></defs>
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          数据链工作台
+          <span class="v2-section-tag" style="margin-left:6px;">V2</span>
+        </div>
+
+        <nav class="sidebar-nav" id="main-nav">
+
+          <a class="nav-link {% if request.url.path == '/v2' or request.url.path == '/v2/' %}active{% endif %}"
+             href="/v2"
+             style="display:flex;align-items:center;gap:6px;padding:10px 16px;font-weight:600;margin-bottom:14px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            工作台
+          </a>
+
+          <!-- 卡包链路 -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/hot-topics') and not request.url.path.startswith('/v2/topic-plans') and not request.url.path.startswith('/v2/packs') and not request.url.path.startswith('/v2/gallery') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+                卡包链路
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/hot-topics') %}active{% endif %}" href="/v2/hot-topics">热点池</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/topic-plans') %}active{% endif %}" href="/v2/topic-plans">题材规划</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">卡包管理</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/gallery') %}active{% endif %}" href="/v2/gallery">卡包画廊</a>
+            </div>
+          </div>
+
+          <!-- TK 视频 -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/videos') and not request.url.path.startswith('/v2/analytics') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                TK 视频
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/videos') %}active{% endif %}" href="/v2/videos">视频管理</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/analytics') %}active{% endif %}" href="/v2/analytics">数据看板</a>
+            </div>
+          </div>
+
+          <!-- TKShop -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/products') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 002 1.6h9.7a2 2 0 002-1.6L23 6H6"/></svg>
+                TKShop
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/products') %}active{% endif %}" href="/v2/products">产品管理</a>
+            </div>
+          </div>
+
+          <!-- 系统 -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/system') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                系统
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/system/ai-logs') %}active{% endif %}" href="/v2/system/ai-logs">AI 调用日志</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/system/scheduled-jobs') %}active{% endif %}" href="/v2/system/scheduled-jobs">调度任务</a>
+            </div>
+          </div>
+
+          <a class="nav-link" href="/" style="display:flex;align-items:center;gap:6px;padding:10px 16px;margin-top:14px;color:var(--text-muted);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            返回 V1
+          </a>
+
+        </nav>
+      </div>
+      <div class="sidebar-footer">
+        <div class="user-card">
+          <div class="user-label">环境</div>
+          <div class="user-name">V2 数据链 · feature/v2-pipeline</div>
+        </div>
+      </div>
+    </aside>
+    <main class="content-area">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

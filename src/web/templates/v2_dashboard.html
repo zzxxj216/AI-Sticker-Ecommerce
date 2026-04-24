@@ -1,0 +1,124 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">V2 Pipeline Workbench</p>
+    <h1>数据链工作台</h1>
+    <p class="page-subtitle">热点 → 卡包 → 视频 → 产品，端到端可追溯。</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">链路总览</h3>
+  </div>
+  <div style="padding:0 24px 24px;">
+    <div class="v2-card-grid">
+
+      <a href="/v2/hot-topics" style="text-decoration:none;color:inherit;">
+        <div class="panel" style="padding:18px;height:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="v2-section-tag">A.1</span>
+            <span style="color:var(--text-muted);font-size:12px;">{{ stats.hot_topics }} 条</span>
+          </div>
+          <h4 style="margin:0 0 4px;font-size:15px;">热点池</h4>
+          <p style="margin:0;color:var(--text-secondary);font-size:13px;">多源 web 搜索 + TikTok CC，统一入库。</p>
+        </div>
+      </a>
+
+      <a href="/v2/topic-plans" style="text-decoration:none;color:inherit;">
+        <div class="panel" style="padding:18px;height:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="v2-section-tag">A.2</span>
+            <span style="color:var(--text-muted);font-size:12px;">{{ stats.topic_plans }} 个</span>
+          </div>
+          <h4 style="margin:0 0 4px;font-size:15px;">题材规划</h4>
+          <p style="margin:0;color:var(--text-secondary);font-size:13px;">人工选热点 + 配数量，AI 出 N 套方案。</p>
+        </div>
+      </a>
+
+      <a href="/v2/packs" style="text-decoration:none;color:inherit;">
+        <div class="panel" style="padding:18px;height:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="v2-section-tag">A.3 / A.4</span>
+            <span style="color:var(--text-muted);font-size:12px;">{{ stats.packs }} 个</span>
+          </div>
+          <h4 style="margin:0 0 4px;font-size:15px;">卡包管理</h4>
+          <p style="margin:0;color:var(--text-secondary);font-size:13px;">预览图 → 切单图 → 入库 → 画廊。</p>
+        </div>
+      </a>
+
+      <a href="/v2/videos" style="text-decoration:none;color:inherit;">
+        <div class="panel" style="padding:18px;height:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="v2-section-tag">B.1</span>
+            <span style="color:var(--text-muted);font-size:12px;">{{ stats.tk_videos }} 个</span>
+          </div>
+          <h4 style="margin:0 0 4px;font-size:15px;">TK 视频</h4>
+          <p style="margin:0;color:var(--text-secondary);font-size:13px;">人工上传 + AI 文案 + 定时发送（英文）。</p>
+        </div>
+      </a>
+
+      <a href="/v2/analytics" style="text-decoration:none;color:inherit;">
+        <div class="panel" style="padding:18px;height:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="v2-section-tag">B.2 / B.3</span>
+            <span style="color:var(--text-muted);font-size:12px;">{{ stats.tk_video_metrics }} 时序点</span>
+          </div>
+          <h4 style="margin:0 0 4px;font-size:15px;">数据看板</h4>
+          <p style="margin:0;color:var(--text-secondary);font-size:13px;">2h 自动刷新，互动率排序。</p>
+        </div>
+      </a>
+
+      <a href="/v2/products" style="text-decoration:none;color:inherit;">
+        <div class="panel" style="padding:18px;height:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="v2-section-tag">C.1 / C.2 / C.3</span>
+            <span style="color:var(--text-muted);font-size:12px;">{{ stats.tkshop_products }} 个</span>
+          </div>
+          <h4 style="margin:0 0 4px;font-size:15px;">TKShop 产品</h4>
+          <p style="margin:0;color:var(--text-secondary);font-size:13px;">详情页 → 主图 → 一键发布 → 状态跟踪（英文）。</p>
+        </div>
+      </a>
+
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-top:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">最近 AI 调用</h3>
+    <a href="/v2/system/ai-logs" style="font-size:12px;color:var(--accent);text-decoration:none;">全部 →</a>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;">
+    <table style="width:100%;font-size:13px;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);">
+          <th style="padding:8px 0;">时间</th>
+          <th>service / model</th>
+          <th>task</th>
+          <th>状态</th>
+          <th style="text-align:right;">tokens</th>
+          <th style="text-align:right;">cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recent_ai_logs %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:8px 0;color:var(--text-muted);">{{ r.created_human }}</td>
+          <td>{{ r.service }} / {{ r.model }}</td>
+          <td><code style="font-size:12px;">{{ r.task }}</code></td>
+          <td><span class="v2-status-pill {{ r.status }}">{{ r.status }}</span></td>
+          <td style="text-align:right;">{{ r.prompt_tokens }} / {{ r.completion_tokens }}</td>
+          <td style="text-align:right;">${{ '%.4f'|format(r.cost_estimate) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" style="padding:14px 0;text-align:center;color:var(--text-muted);">暂无 AI 调用</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
