@@ -327,6 +327,77 @@ def _display_review(
     )
 
 
+@cli.command("shopify-export-products")
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    default="output/shopify_products_export",
+    type=click.Path(),
+    help="导出前缀路径；默认生成 _full.json、_products.csv、_variants.csv、_images.csv",
+)
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["all", "json", "tables", "summary"]),
+    default="all",
+    help="all=完整JSON+多表CSV；json=仅JSON；tables=仅CSV表；summary=仅简易链接表(单文件)",
+)
+@click.option(
+    "--storefront-base",
+    envvar="SHOPIFY_STOREFRONT_BASE_URL",
+    default=None,
+    help="前台店铺根 URL（含 https），不写则用 https://SHOPIFY_STORE_DOMAIN",
+)
+def shopify_export_products(output_path, export_format, storefront_base):
+    """从 Shopify 拉取全部产品并导出（REST 返回的完整字段）。"""
+    from pathlib import Path
+
+    from src.core.config import Config
+    from src.services.blog.shopify_publisher import ShopifyPublisher
+    from src.services.shopify.product_catalog import (
+        export_full_bundle,
+        export_products_csv,
+        fetch_all_products,
+        resolve_export_stem,
+    )
+
+    Config()
+    try:
+        publisher = ShopifyPublisher()
+    except ValueError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise SystemExit(1) from e
+
+    console.print("[dim]正在拉取完整产品数据（分页）…[/dim]")
+    rows = fetch_all_products(publisher._rest_base, publisher._headers)
+    out = Path(output_path)
+
+    if export_format == "summary":
+        csv_path = out if out.suffix.lower() == ".csv" else out.with_suffix(".csv")
+        export_products_csv(
+            rows, publisher.shop_domain, csv_path, storefront_base
+        )
+        console.print(
+            f"[green]已导出 {len(rows)} 个产品（简易表）[/green] -> "
+            f"[bold]{csv_path.resolve()}[/bold]"
+        )
+        return
+
+    stem = resolve_export_stem(out)
+    bundle = export_full_bundle(
+        rows,
+        publisher.shop_domain,
+        stem,
+        storefront_base,
+        write_json=export_format in ("all", "json"),
+        write_tables=export_format in ("all", "tables"),
+    )
+    console.print(f"[green]已导出 {len(rows)} 个产品[/green]")
+    for label, path in bundle.items():
+        console.print(f"  [bold]{label}[/bold]: {path.resolve()}")
+
+
 @cli.command()
 def version():
     """Show version information."""

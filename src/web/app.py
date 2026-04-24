@@ -31,6 +31,7 @@ from src.services.ops.backup_service import BackupService
 from src.services.ops.direction_generator import DirectionGenerator
 from src.services.blog.calendar_page_generator import generate_calendar_html
 from src.services.tiktok.blotato_service import BlotaToService
+from src.services.tiktok.tiktok_display_service import TikTokDisplayService
 from src.web.auth_middleware import AuthMiddleware
 from src.web.feishu_auth import FeishuAuthService
 
@@ -88,6 +89,7 @@ planning_svc = PlanningService(trend_service.db)
 direction_gen = DirectionGenerator(db=trend_service.db)
 backup_svc = BackupService()
 blotato_svc = BlotaToService()
+tiktok_display_svc = TikTokDisplayService()
 scheduler = BackgroundScheduler()
 
 @app.on_event("startup")
@@ -2109,6 +2111,179 @@ def api_blotato_post_status(post_submission_id: str):
     except Exception as exc:
         logger.warning("Blotato get post status failed: %s", exc)
         raise HTTPException(502, f"查询发布状态失败: {exc}") from exc
+
+
+# ── TikTok Analytics (Display API) ── multi-account ──────
+
+
+def _tk_active_open_id(request: Request) -> str | None:
+    """Return the currently active TikTok open_id from session."""
+    return request.session.get("tiktok_active_account")
+
+
+@app.get("/tk-analytics", response_class=HTMLResponse)
+def tk_analytics_page(request: Request):
+    accounts = tiktok_display_svc.list_accounts()
+    active_id = _tk_active_open_id(request)
+    if accounts and not active_id:
+        active_id = accounts[0]["open_id"]
+        request.session["tiktok_active_account"] = active_id
+    active_account = None
+    if active_id:
+        acct = tiktok_display_svc.get_account(active_id)
+        if acct:
+            active_account = acct.get("user", {})
+    return templates.TemplateResponse(
+        request,
+        "tk_analytics.html",
+        _base_context(
+            request,
+            page_title="TK 数据分析",
+            tiktok_configured=tiktok_display_svc.is_configured(),
+            tiktok_accounts=accounts,
+            tiktok_active_id=active_id,
+            tiktok_active_user=active_account,
+        ),
+    )
+
+
+@app.get("/api/tiktok/accounts")
+def api_tiktok_accounts():
+    return {"accounts": tiktok_display_svc.list_accounts()}
+
+
+@app.get("/api/tiktok/auth-url")
+def tiktok_auth_url(request: Request):
+    """Generate an OAuth authorization URL + PKCE verifier for manual flow."""
+    if not tiktok_display_svc.is_configured():
+        raise HTTPException(400, "TikTok API 未配置")
+    state = secrets.token_urlsafe(16)
+    code_verifier = tiktok_display_svc._generate_code_verifier()
+    request.session["tiktok_oauth_state"] = state
+    request.session["tiktok_code_verifier"] = code_verifier
+    auth_url = tiktok_display_svc.build_auth_url(state, code_verifier)
+    return {"auth_url": auth_url, "state": state}
+
+
+@app.post("/api/tiktok/manual-auth")
+async def tiktok_manual_auth(request: Request):
+    """Accept the redirect URL the user copied from the browser (multi-account)."""
+    body = await request.json()
+    callback_url = body.get("callback_url", "").strip()
+    if not callback_url:
+        raise HTTPException(400, "请粘贴 TikTok 授权后浏览器地址栏中的完整 URL")
+
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(callback_url)
+    params = parse_qs(parsed.query)
+
+    code = params.get("code", [""])[0]
+    state = params.get("state", [""])[0]
+    error = params.get("error", [""])[0]
+
+    if error:
+        raise HTTPException(400, f"TikTok 授权失败: {error}")
+    if not code:
+        raise HTTPException(400, "URL 中未找到授权码 (code 参数)，请确认粘贴了完整的跳转地址")
+
+    expected_state = request.session.get("tiktok_oauth_state")
+    if not state or not expected_state or state != expected_state:
+        raise HTTPException(400, "授权状态不匹配，请重新生成授权链接后再试")
+
+    code_verifier = request.session.pop("tiktok_code_verifier", "")
+    request.session.pop("tiktok_oauth_state", None)
+
+    try:
+        token_info = tiktok_display_svc.exchange_code(code, code_verifier)
+        user_info = tiktok_display_svc.get_user_info(token_info["access_token"])
+        user_info["open_id"] = token_info["open_id"]
+        tiktok_display_svc.save_account(token_info, user_info)
+        request.session["tiktok_active_account"] = token_info["open_id"]
+    except Exception as exc:
+        logger.error("TikTok manual auth failed: %s", exc, exc_info=True)
+        raise HTTPException(400, f"TikTok 授权失败: {exc}") from exc
+
+    return {"ok": True, "user": user_info}
+
+
+@app.get("/auth/tiktok/callback")
+def tiktok_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Automatic callback (works when redirect_uri points to this server)."""
+    if error:
+        logger.warning("TikTok OAuth error: %s", error)
+        raise HTTPException(400, f"TikTok 授权失败: {error}")
+    expected_state = request.session.get("tiktok_oauth_state")
+    if not state or not expected_state or state != expected_state:
+        raise HTTPException(400, "Invalid TikTok OAuth state")
+    code_verifier = request.session.pop("tiktok_code_verifier", "")
+    request.session.pop("tiktok_oauth_state", None)
+
+    try:
+        token_info = tiktok_display_svc.exchange_code(code, code_verifier)
+        user_info = tiktok_display_svc.get_user_info(token_info["access_token"])
+        user_info["open_id"] = token_info["open_id"]
+        tiktok_display_svc.save_account(token_info, user_info)
+        request.session["tiktok_active_account"] = token_info["open_id"]
+    except Exception as exc:
+        logger.error("TikTok OAuth callback failed: %s", exc, exc_info=True)
+        raise HTTPException(400, f"TikTok 授权失败: {exc}") from exc
+
+    return RedirectResponse(url="/tk-analytics", status_code=303)
+
+
+@app.post("/api/tiktok/switch-account")
+async def tiktok_switch_account(request: Request):
+    body = await request.json()
+    open_id = body.get("open_id", "")
+    if not open_id or not tiktok_display_svc.get_account(open_id):
+        raise HTTPException(400, "账号不存在")
+    request.session["tiktok_active_account"] = open_id
+    return {"ok": True, "active": open_id}
+
+
+@app.post("/api/tiktok/remove-account")
+async def tiktok_remove_account(request: Request):
+    body = await request.json()
+    open_id = body.get("open_id", "")
+    if not open_id:
+        raise HTTPException(400, "缺少 open_id")
+    tiktok_display_svc.remove_account(open_id)
+    if request.session.get("tiktok_active_account") == open_id:
+        accounts = tiktok_display_svc.list_accounts()
+        request.session["tiktok_active_account"] = accounts[0]["open_id"] if accounts else ""
+    return {"ok": True}
+
+
+@app.get("/api/tiktok/user-info")
+def api_tiktok_user_info(request: Request, open_id: str | None = None):
+    oid = open_id or _tk_active_open_id(request)
+    if not oid:
+        raise HTTPException(401, "未选择 TikTok 账号")
+    token = tiktok_display_svc.get_valid_token(oid)
+    if not token:
+        raise HTTPException(401, "Token 已过期，请重新授权")
+    try:
+        user = tiktok_display_svc.get_user_info(token["access_token"])
+        return {"user": user}
+    except Exception as exc:
+        logger.warning("TikTok get user info failed: %s", exc)
+        raise HTTPException(502, f"获取用户信息失败: {exc}") from exc
+
+
+@app.get("/api/tiktok/videos")
+def api_tiktok_videos(request: Request, cursor: int | None = None, open_id: str | None = None):
+    oid = open_id or _tk_active_open_id(request)
+    if not oid:
+        raise HTTPException(401, "未选择 TikTok 账号")
+    token = tiktok_display_svc.get_valid_token(oid)
+    if not token:
+        raise HTTPException(401, "Token 已过期，请重新授权")
+    try:
+        data = tiktok_display_svc.get_video_list(token["access_token"], max_count=20, cursor=cursor)
+        return data
+    except Exception as exc:
+        logger.warning("TikTok get videos failed: %s", exc)
+        raise HTTPException(502, f"获取视频列表失败: {exc}") from exc
 
 
 @app.exception_handler(HTTPException)

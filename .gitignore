@@ -45,6 +45,7 @@ logs/
 # Data & generated output
 data/
 output/
+export/
 tests/data/output/
 tests/stickers_analyzer/data/output/
 trend_fetcher/output/
@@ -64,6 +65,10 @@ briefs_v2/
 .coverage
 htmlcov/
 .tox/
+
+# tests/ — kept out of repo per user request (avoid leaking experimental keys/configs).
+# Already-tracked files in tests/ remain tracked; this only blocks new additions.
+tests/
 
 # OS
 .DS_Store

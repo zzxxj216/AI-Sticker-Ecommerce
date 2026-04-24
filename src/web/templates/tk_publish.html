@@ -201,6 +201,7 @@
 .tkp-result-card{padding:16px 20px;border-radius:10px;border:1px solid var(--line-soft,#e5e7eb);}
 .tkp-result-card.success{background:rgba(5,150,105,.05);border-color:rgba(5,150,105,.3);}
 .tkp-result-card.failed{background:rgba(239,68,68,.05);border-color:rgba(239,68,68,.3);}
+.tkp-result-card.timeout{background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.3);}
 
 .gen-field{margin-bottom:0;}
 .gen-field label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px;}
@@ -419,10 +420,24 @@ async function doPublish() {
   }
 }
 
-// ── Status polling ──────────────────────
+// ── Status polling (max 3 min) ──────────
+const POLL_INTERVAL_MS = 3000;
+const POLL_TIMEOUT_MS = 180000;
+
 function startPolling(submissionId) {
   if (pollTimer) clearInterval(pollTimer);
+  const startTime = Date.now();
   pollTimer = setInterval(async () => {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > POLL_TIMEOUT_MS) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      showPubStatus('轮询超时（已等待 3 分钟）。提交 ID: ' + submissionId + '，可稍后刷新页面重新查询。', '#f59e0b');
+      showResult('timeout', null, null, submissionId);
+      resetBtn();
+      return;
+    }
+    const remainSec = Math.round((POLL_TIMEOUT_MS - elapsed) / 1000);
     try {
       const r = await fetch('/api/blotato/posts/' + submissionId);
       if (!r.ok) return;
@@ -442,13 +457,13 @@ function startPolling(submissionId) {
         showResult('failed', null, data.errorMessage);
         resetBtn();
       } else {
-        showPubStatus('处理中... (' + status + ')');
+        showPubStatus('处理中... (' + status + ')  剩余等待 ' + remainSec + 's');
       }
     } catch (e) { /* keep polling */ }
-  }, 2000);
+  }, POLL_INTERVAL_MS);
 }
 
-function showResult(type, url, errorMsg) {
+function showResult(type, url, errorMsg, submissionId) {
   const container = document.getElementById('pub_result');
   const inner = document.getElementById('pub_result_inner');
   container.style.display = 'block';
@@ -461,6 +476,16 @@ function showResult(type, url, errorMsg) {
         '<strong style="color:#059669;">发布成功</strong>' +
       '</div>' +
       (url ? '<a href="' + url + '" target="_blank" style="color:var(--primary);font-size:13px;word-break:break-all;">' + url + '</a>' : '<span style="font-size:13px;color:var(--text-muted);">TikTok 链接稍后可用</span>');
+  } else if (type === 'timeout') {
+    inner.className = 'tkp-result-card timeout';
+    inner.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
+        '<strong style="color:#f59e0b;">等待超时</strong>' +
+      '</div>' +
+      '<span style="font-size:13px;color:var(--text-muted);">视频已提交，但 TikTok 仍在处理中。</span>' +
+      (submissionId ? '<br><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:inline-block;">提交 ID: <code>' + submissionId + '</code></span>' : '') +
+      '<br><span style="font-size:12px;color:var(--text-muted);">如果是草稿，请打开 TikTok App 的系统通知查看。</span>';
   } else {
     inner.innerHTML =
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +

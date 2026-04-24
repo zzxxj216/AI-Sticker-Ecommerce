@@ -1,0 +1,389 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">TikTok Video Analytics</p>
+    <h1>TK 数据分析</h1>
+    <p class="page-subtitle">查看 TikTok 账号视频的播放量、点赞、评论、分享等数据。</p>
+  </div>
+</section>
+
+{% if not tiktok_configured %}
+<section class="panel">
+  <div style="padding:40px 24px;text-align:center;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;opacity:.5;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <h3 style="color:var(--text);margin-bottom:8px;">TikTok API 未配置</h3>
+    <p style="color:var(--text-muted);font-size:13px;max-width:480px;margin:0 auto;">
+      请在 <code>.env</code> 文件中设置 <code>TIKTOK_CLIENT_KEY</code> 和 <code>TIKTOK_CLIENT_SECRET</code> 后重启服务。
+    </p>
+  </div>
+</section>
+{% else %}
+
+<!-- Account Bar -->
+<section class="panel" id="account-bar">
+  <div style="padding:14px 24px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span style="font-size:13px;font-weight:600;color:var(--text);margin-right:4px;">账号：</span>
+
+    {% for acct in tiktok_accounts %}
+    <button class="tka-acct-chip {% if acct.open_id == tiktok_active_id %}active{% endif %}"
+            onclick="switchAccount('{{ acct.open_id }}')" title="{{ acct.display_name }}">
+      {% if acct.avatar_url %}
+      <img src="{{ acct.avatar_url }}" alt="" class="tka-acct-avatar">
+      {% endif %}
+      <span>{{ acct.display_name or '未知' }}</span>
+      <span class="tka-acct-remove" onclick="event.stopPropagation();removeAccount('{{ acct.open_id }}','{{ acct.display_name }}')" title="移除此账号">&times;</span>
+    </button>
+    {% endfor %}
+
+    <button class="tka-add-btn" onclick="showAuthPanel()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      添加账号
+    </button>
+  </div>
+</section>
+
+<!-- Auth Panel (hidden by default, shown when adding a new account) -->
+<section class="panel" id="auth-panel" style="display:none;">
+  <div style="padding:28px 24px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h3 style="margin:0;font-size:15px;">添加 TikTok 账号</h3>
+      <button onclick="hideAuthPanel()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:18px;padding:4px;">&times;</button>
+    </div>
+
+    <div class="tka-step">
+      <div class="tka-step-num">1</div>
+      <div class="tka-step-body">
+        <div class="tka-step-title">生成授权链接</div>
+        <button class="btn-primary" id="btn_gen_url" onclick="generateAuthUrl()" style="padding:8px 20px;font-size:13px;border-radius:8px;margin-top:8px;">生成链接</button>
+        <div id="auth_url_box" style="display:none;margin-top:12px;">
+          <div style="display:flex;gap:8px;align-items:stretch;">
+            <input type="text" id="auth_url_input" readonly style="flex:1;padding:8px 12px;font-size:12px;border:1px solid var(--line-soft,#d1d5db);border-radius:8px;background:var(--surface-hover,#f9fafb);color:var(--text);font-family:monospace;min-width:0;">
+            <button class="btn-secondary" onclick="copyAuthUrl()" style="padding:8px 14px;font-size:12px;white-space:nowrap;">复制链接</button>
+          </div>
+          <p style="font-size:11px;color:var(--text-muted);margin-top:6px;">请在<strong>可以访问 TikTok 的浏览器</strong>中打开此链接并完成登录授权。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tka-step">
+      <div class="tka-step-num">2</div>
+      <div class="tka-step-body">
+        <div class="tka-step-title">在 TikTok 完成授权</div>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+          授权后 TikTok 会跳转到一个新页面（可能显示无法访问），<strong>不要关闭</strong>，复制浏览器地址栏中的完整 URL。
+        </p>
+      </div>
+    </div>
+
+    <div class="tka-step">
+      <div class="tka-step-num">3</div>
+      <div class="tka-step-body">
+        <div class="tka-step-title">粘贴回调 URL</div>
+        <div style="margin-top:8px;">
+          <textarea id="callback_url_input" rows="3" placeholder="将授权后浏览器地址栏中的完整 URL 粘贴到这里" style="width:100%;padding:10px 12px;font-size:12px;border:1px solid var(--line-soft,#d1d5db);border-radius:8px;background:var(--surface-hover,#f9fafb);color:var(--text);font-family:monospace;resize:vertical;box-sizing:border-box;"></textarea>
+        </div>
+        <button class="btn-primary" id="btn_submit_auth" onclick="submitManualAuth()" style="padding:10px 24px;font-size:13px;border-radius:8px;margin-top:10px;" disabled>提交授权</button>
+        <div id="auth_result" style="margin-top:12px;display:none;"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% if tiktok_active_user %}
+<!-- Profile Card for active account -->
+<section class="panel" id="profile-panel">
+  <div style="padding:20px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    {% if tiktok_active_user.avatar_url %}
+    <img src="{{ tiktok_active_user.avatar_url }}" alt="avatar" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid var(--line-soft,#e5e7eb);">
+    {% endif %}
+    <div style="flex:1;min-width:200px;">
+      <div style="font-size:16px;font-weight:700;">{{ tiktok_active_user.display_name or 'TikTok User' }}</div>
+      {% if tiktok_active_user.bio_description %}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">{{ tiktok_active_user.bio_description[:100] }}</div>
+      {% endif %}
+    </div>
+    <div class="tka-stats-row">
+      {% if tiktok_active_user.follower_count is defined %}
+      <div class="tka-stat"><span class="tka-stat-num">{{ tiktok_active_user.follower_count|default(0) }}</span><span class="tka-stat-label">粉丝</span></div>
+      {% endif %}
+      {% if tiktok_active_user.following_count is defined %}
+      <div class="tka-stat"><span class="tka-stat-num">{{ tiktok_active_user.following_count|default(0) }}</span><span class="tka-stat-label">关注</span></div>
+      {% endif %}
+      {% if tiktok_active_user.likes_count is defined %}
+      <div class="tka-stat"><span class="tka-stat-num">{{ tiktok_active_user.likes_count|default(0) }}</span><span class="tka-stat-label">获赞</span></div>
+      {% endif %}
+      {% if tiktok_active_user.video_count is defined %}
+      <div class="tka-stat"><span class="tka-stat-num">{{ tiktok_active_user.video_count|default(0) }}</span><span class="tka-stat-label">视频</span></div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<!-- Video List -->
+<section class="panel" id="videos-panel">
+  <div class="panel-header">
+    <h2>视频数据</h2>
+    <button class="btn-secondary" onclick="loadVideos()" style="padding:5px 14px;font-size:12px;">刷新</button>
+  </div>
+  <div id="videos_loading" style="padding:40px 24px;text-align:center;color:var(--text-muted);font-size:13px;">
+    正在加载视频数据...
+  </div>
+  <div id="videos_list" style="display:none;padding:8px 24px 16px;"></div>
+  <div id="videos_loadmore" style="display:none;padding:0 24px 20px;text-align:center;">
+    <button class="btn-secondary" id="btn_loadmore" onclick="loadMore()" style="padding:8px 24px;font-size:13px;">加载更多</button>
+  </div>
+</section>
+
+{% elif not tiktok_accounts %}
+<!-- No accounts at all -->
+<section class="panel">
+  <div style="padding:48px 24px;text-align:center;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--primary,#7c5cfc)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;">
+      <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M13.8 12H3"/>
+    </svg>
+    <h3 style="color:var(--text);margin-bottom:8px;">还没有 TikTok 账号</h3>
+    <p style="color:var(--text-muted);font-size:13px;max-width:400px;margin:0 auto 20px;">
+      点击上方「添加账号」按钮，通过 TikTok 官方 OAuth 授权后即可查看视频数据。
+    </p>
+    <button class="btn-primary" onclick="showAuthPanel()" style="padding:12px 28px;font-size:14px;font-weight:600;border-radius:10px;">添加 TikTok 账号</button>
+  </div>
+</section>
+{% endif %}
+
+{% endif %}
+
+<style>
+.tka-acct-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px 5px 5px;border-radius:20px;border:1.5px solid var(--line-soft,#d1d5db);background:var(--surface,#fff);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);transition:all .15s;}
+.tka-acct-chip:hover{border-color:var(--primary,#7c5cfc);background:var(--surface-hover,#f9fafb);}
+.tka-acct-chip.active{border-color:var(--primary,#7c5cfc);background:rgba(124,92,252,.08);font-weight:600;}
+.tka-acct-avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;}
+.tka-acct-remove{margin-left:2px;font-size:15px;color:var(--text-muted);opacity:.5;cursor:pointer;line-height:1;}
+.tka-acct-remove:hover{opacity:1;color:#dc2626;}
+.tka-add-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;border:1.5px dashed var(--line-soft,#d1d5db);background:none;cursor:pointer;font-size:12px;color:var(--text-muted);transition:all .15s;}
+.tka-add-btn:hover{border-color:var(--primary,#7c5cfc);color:var(--primary,#7c5cfc);}
+
+.tka-step{display:flex;gap:14px;padding:16px 0;border-bottom:1px solid var(--line-soft,#e5e7eb);}
+.tka-step:last-child{border-bottom:none;}
+.tka-step-num{width:28px;height:28px;border-radius:50%;background:var(--primary,#7c5cfc);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;margin-top:2px;}
+.tka-step-body{flex:1;min-width:0;}
+.tka-step-title{font-size:14px;font-weight:600;color:var(--text);}
+
+.tka-stats-row{display:flex;gap:20px;flex-wrap:wrap;}
+.tka-stat{text-align:center;}
+.tka-stat-num{display:block;font-size:18px;font-weight:700;color:var(--text);}
+.tka-stat-label{font-size:11px;color:var(--text-muted);}
+
+.tka-video-card{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--line-soft,#e5e7eb);align-items:flex-start;}
+.tka-video-card:last-child{border-bottom:none;}
+.tka-cover{width:90px;height:120px;border-radius:8px;object-fit:cover;background:var(--surface-hover,#f3f4f6);flex-shrink:0;}
+.tka-video-info{flex:1;min-width:0;}
+.tka-video-title{font-size:13px;font-weight:600;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.tka-video-desc{font-size:12px;color:var(--text-muted);margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.tka-video-metrics{display:flex;gap:16px;margin-top:8px;flex-wrap:wrap;}
+.tka-metric{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);}
+.tka-metric strong{color:var(--text);font-weight:600;}
+.tka-video-date{font-size:11px;color:var(--text-muted);margin-top:6px;}
+.tka-video-link{font-size:11px;color:var(--primary,#7c5cfc);text-decoration:none;margin-top:4px;display:inline-block;}
+.tka-video-link:hover{text-decoration:underline;}
+</style>
+
+<script>
+/* ── Account management ── */
+
+function showAuthPanel() {
+  document.getElementById('auth-panel').style.display = 'block';
+  document.getElementById('auth_url_box').style.display = 'none';
+  document.getElementById('auth_result').style.display = 'none';
+  document.getElementById('callback_url_input').value = '';
+  const btn = document.getElementById('btn_gen_url');
+  btn.disabled = false; btn.textContent = '生成链接';
+  document.getElementById('btn_submit_auth').disabled = true;
+}
+
+function hideAuthPanel() {
+  document.getElementById('auth-panel').style.display = 'none';
+}
+
+async function switchAccount(openId) {
+  try {
+    const r = await fetch('/api/tiktok/switch-account', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ open_id: openId }),
+    });
+    if (r.ok) window.location.reload();
+  } catch (e) { console.error(e); }
+}
+
+async function removeAccount(openId, name) {
+  if (!confirm('确定移除账号 ' + (name || openId) + '？')) return;
+  try {
+    const r = await fetch('/api/tiktok/remove-account', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ open_id: openId }),
+    });
+    if (r.ok) window.location.reload();
+  } catch (e) { console.error(e); }
+}
+
+/* ── Manual OAuth flow ── */
+
+async function generateAuthUrl() {
+  const btn = document.getElementById('btn_gen_url');
+  btn.disabled = true; btn.textContent = '生成中...';
+  try {
+    const r = await fetch('/api/tiktok/auth-url');
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '生成失败'); }
+    const data = await r.json();
+    document.getElementById('auth_url_input').value = data.auth_url;
+    document.getElementById('auth_url_box').style.display = 'block';
+    document.getElementById('btn_submit_auth').disabled = false;
+    btn.textContent = '已生成';
+  } catch (e) {
+    alert('生成授权链接失败: ' + e.message);
+    btn.disabled = false; btn.textContent = '生成链接';
+  }
+}
+
+function copyAuthUrl() {
+  const inp = document.getElementById('auth_url_input');
+  inp.select();
+  navigator.clipboard.writeText(inp.value).then(() => {
+    const btn = event.target; btn.textContent = '已复制!';
+    setTimeout(() => { btn.textContent = '复制链接'; }, 1500);
+  });
+}
+
+async function submitManualAuth() {
+  const url = document.getElementById('callback_url_input').value.trim();
+  if (!url) { alert('请粘贴授权后浏览器地址栏中的完整 URL'); return; }
+  const btn = document.getElementById('btn_submit_auth');
+  const result = document.getElementById('auth_result');
+  btn.disabled = true; btn.textContent = '验证中...';
+  result.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/tiktok/manual-auth', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ callback_url: url }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || '授权失败');
+    result.style.display = 'block';
+    result.innerHTML = '<div style="padding:12px;border-radius:8px;background:#ecfdf5;color:#065f46;font-size:13px;">授权成功! 正在刷新页面...</div>';
+    setTimeout(() => { window.location.reload(); }, 1200);
+  } catch (e) {
+    result.style.display = 'block';
+    result.innerHTML = '<div style="padding:12px;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:13px;">授权失败: ' + e.message + '</div>';
+    btn.disabled = false; btn.textContent = '提交授权';
+  }
+}
+
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'callback_url_input') {
+    document.getElementById('btn_submit_auth').disabled = !e.target.value.trim();
+  }
+});
+
+/* ── Video analytics ── */
+let nextCursor = null;
+let allVideos = [];
+
+function formatNum(n) {
+  if (n == null) return '-';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return n.toString();
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+function renderVideos(videos) {
+  const list = document.getElementById('videos_list');
+  videos.forEach(v => {
+    const card = document.createElement('div');
+    card.className = 'tka-video-card';
+    card.innerHTML =
+      (v.cover_image_url ? '<img class="tka-cover" src="'+v.cover_image_url+'" alt="cover">' : '<div class="tka-cover"></div>') +
+      '<div class="tka-video-info">' +
+        '<div class="tka-video-title">' + (v.title || v.video_description || '无标题') + '</div>' +
+        (v.video_description && v.title ? '<div class="tka-video-desc">' + v.video_description + '</div>' : '') +
+        '<div class="tka-video-metrics">' +
+          '<div class="tka-metric"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> <strong>' + formatNum(v.view_count) + '</strong> 播放</div>' +
+          '<div class="tka-metric"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg> <strong>' + formatNum(v.like_count) + '</strong> 赞</div>' +
+          '<div class="tka-metric"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg> <strong>' + formatNum(v.comment_count) + '</strong> 评论</div>' +
+          '<div class="tka-metric"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg> <strong>' + formatNum(v.share_count) + '</strong> 分享</div>' +
+          (v.duration ? '<div class="tka-metric">' + v.duration + 's</div>' : '') +
+        '</div>' +
+        '<div class="tka-video-date">' + formatDate(v.create_time) + '</div>' +
+        (v.share_url ? '<a class="tka-video-link" href="' + v.share_url + '" target="_blank">在 TikTok 查看 &rarr;</a>' : '') +
+      '</div>';
+    list.appendChild(card);
+  });
+}
+
+async function loadVideos(cursor) {
+  const loading = document.getElementById('videos_loading');
+  const list = document.getElementById('videos_list');
+  const loadmoreDiv = document.getElementById('videos_loadmore');
+  if (!loading) return;
+
+  if (!cursor) {
+    loading.style.display = 'block';
+    list.style.display = 'none';
+    list.innerHTML = '';
+    allVideos = [];
+  }
+
+  try {
+    const url = cursor ? '/api/tiktok/videos?cursor=' + cursor : '/api/tiktok/videos';
+    const r = await fetch(url);
+    if (!r.ok) {
+      const e = await r.json();
+      throw new Error(e.detail || '加载失败');
+    }
+    const data = await r.json();
+    const videos = data.videos || [];
+    allVideos = allVideos.concat(videos);
+
+    loading.style.display = 'none';
+    list.style.display = 'block';
+
+    if (!allVideos.length) {
+      list.innerHTML = '<div style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:13px;">暂无视频数据</div>';
+      loadmoreDiv.style.display = 'none';
+      return;
+    }
+
+    renderVideos(videos);
+
+    if (data.has_more && data.cursor) {
+      nextCursor = data.cursor;
+      loadmoreDiv.style.display = 'block';
+    } else {
+      nextCursor = null;
+      loadmoreDiv.style.display = 'none';
+    }
+  } catch (e) {
+    loading.style.display = 'none';
+    list.style.display = 'block';
+    list.innerHTML = '<div style="padding:20px 0;text-align:center;color:#dc2626;font-size:13px;">加载失败: ' + e.message + '</div>';
+  }
+}
+
+function loadMore() {
+  if (nextCursor) loadVideos(nextCursor);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (document.getElementById('videos_loading')) loadVideos();
+});
+</script>
+{% endblock %}

@@ -130,7 +130,7 @@
           </div>
 
           <!-- 视频脚本系统 -->
-          <div class="nav-group {% if not request.url.path.startswith('/video-types') and not request.url.path.startswith('/video-combos') and not request.url.path.startswith('/video-studio') and not request.url.path.startswith('/tk-publish') %}collapsed{% endif %}">
+          <div class="nav-group {% if not request.url.path.startswith('/video-types') and not request.url.path.startswith('/video-combos') and not request.url.path.startswith('/video-studio') and not request.url.path.startswith('/tk-publish') and not request.url.path.startswith('/tk-analytics') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
@@ -150,6 +150,9 @@
               </a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/tk-publish') %}active{% endif %}" href="/tk-publish">
                 TK 视频发布
+              </a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/tk-analytics') %}active{% endif %}" href="/tk-analytics">
+                TK 数据分析
               </a>
             </div>
           </div>

@@ -65,11 +65,11 @@ class ShopifyPublisher:
         access_token: Optional[str] = None,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
-        api_version: str = "2024-01",
+        api_version: Optional[str] = None,
         blog_handle: str = "blog",
     ):
         self.shop_domain = shop_domain or os.getenv("SHOPIFY_STORE_DOMAIN", "")
-        self.api_version = api_version
+        self.api_version = api_version or os.getenv("SHOPIFY_API_VERSION", "2024-01")
         self.blog_handle = blog_handle
 
         self._client_id = client_id or os.getenv("SHOPIFY_CLIENT_ID", "")
