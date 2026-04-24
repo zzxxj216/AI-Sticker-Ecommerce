@@ -21,6 +21,8 @@ parallelize via threads / asyncio at the call site.
 from __future__ import annotations
 
 import json
+import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -270,6 +272,10 @@ class AIRouter:
                     return provider, self._search_openai(
                         query, region, max_results, related_table, related_id
                     )
+                if provider == "aihubmix_surfing":
+                    return provider, self._search_aihubmix_surfing(
+                        query, region, max_results, related_table, related_id
+                    )
                 if provider == "tavily":
                     return provider, self._search_tavily(
                         query, region, max_results, related_table, related_id
@@ -295,22 +301,180 @@ class AIRouter:
 
         return WebSearchResponse(by_provider=by_provider, errors=errors)
 
-    # Per-provider implementations are stubs filled in by W1.7 POC.
-    def _search_openai(self, *args, **kwargs) -> list[SearchResult]:
-        raise _NotConfigured(
-            "OpenAI web_search not yet implemented (planned in W1.7 POC).",
-            service="openai_web_search",
-        )
+    # ------------------------------------------------------------------
+    # Per-provider search implementations
+    # ------------------------------------------------------------------
+
+    def _search_openai(
+        self,
+        query: str,
+        region: str,
+        max_results: int,
+        related_table: str,
+        related_id: Optional[int],
+    ) -> list[SearchResult]:
+        """OpenAI Responses API + web_search_preview tool.
+
+        Requires the configured OPENAI_BASE_URL to actually forward
+        Responses API requests. The middleman at jiekou.ai does NOT
+        (verified in W1.7 POC: 404). Kept available for the day a native
+        OpenAI key is wired in.
+        """
+        from openai import OpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        base_url = os.getenv("OPENAI_BASE_URL") or None
+        model = os.getenv("OPENAI_MODEL", "gpt-5.4")
+        if not api_key:
+            raise _NotConfigured("OPENAI_API_KEY not set", service="openai")
+
+        with AICallLog(
+            service="openai",
+            model=model,
+            task="web_search:openai",
+            related_table=related_table,
+            related_id=related_id,
+            prompt_summary=query[:500],
+        ) as log:
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
+            resp = client.responses.create(
+                model=model,
+                input=(
+                    f"Search the web for: {query}\n\n"
+                    f"Return up to {max_results} fresh sources. For each, give title, "
+                    "URL, and a one-line summary. Region preference: " + region
+                ),
+                tools=[{"type": "web_search_preview"}],
+            )
+            text = getattr(resp, "output_text", "") or ""
+            results: list[SearchResult] = []
+            try:
+                for item in resp.output or []:
+                    for c in getattr(item, "content", None) or []:
+                        for a in getattr(c, "annotations", None) or []:
+                            url = getattr(a, "url", None)
+                            if url:
+                                results.append(SearchResult(
+                                    title=getattr(a, "title", "") or "",
+                                    url=url,
+                                ))
+            except Exception:
+                pass
+            if not results:
+                for url in re.findall(r"https?://[^\s)\]]+", text):
+                    results.append(SearchResult(title="", url=url))
+            log.set_usage(cost=estimate_search_cost("openai_web_search"))
+            return results[:max_results]
+
+    def _search_aihubmix_surfing(
+        self,
+        query: str,
+        region: str,
+        max_results: int,
+        related_table: str,
+        related_id: Optional[int],
+    ) -> list[SearchResult]:
+        """AiHubMix's gpt-5.4:surfing model — verified working in W1.7 POC.
+
+        The middleman appends ':surfing' to a model name to enable web
+        search. We call it via OpenAI-compatible chat.completions, parse
+        URLs out of the freeform response text. Citation titles are
+        unreliable (the model writes them in markdown-ish prose) so we
+        only commit to the URL field; caller can re-extract titles from
+        the snippet text via extract_json if needed.
+        """
+        from openai import OpenAI
+
+        api_key = os.getenv("AIHUBMIX_API_KEY", "")
+        base_url = os.getenv("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1/chat/completions")
+        model = os.getenv("AIHUBMIX_MODEL", "gpt-5.4:surfing")
+        if not api_key:
+            raise _NotConfigured("AIHUBMIX_API_KEY not set", service="aihubmix_surfing")
+
+        # OpenAI SDK base_url should end at /v1, not at /v1/chat/completions.
+        if base_url.rstrip("/").endswith("chat/completions"):
+            base_url = base_url.rstrip("/").rsplit("/", 2)[0]
+
+        with AICallLog(
+            service="aihubmix",
+            model=model,
+            task="web_search:aihubmix_surfing",
+            related_table=related_table,
+            related_id=related_id,
+            prompt_summary=query[:500],
+        ) as log:
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": (
+                    f"Search the web for: {query}\n\n"
+                    f"Return up to {max_results} fresh sources. For each, give title, "
+                    "URL on its own line, and a one-line summary. "
+                    f"Region preference: {region}."
+                )}],
+            )
+            text = resp.choices[0].message.content or ""
+            usage = getattr(resp, "usage", None)
+            if usage:
+                log.set_usage(
+                    input_tokens=usage.prompt_tokens or 0,
+                    output_tokens=usage.completion_tokens or 0,
+                    cost=estimate_text_cost(model, usage.prompt_tokens or 0,
+                                            usage.completion_tokens or 0),
+                )
+
+            results = self._parse_search_text(text, max_results)
+            return results
+
+    def _parse_search_text(self, text: str, max_results: int) -> list[SearchResult]:
+        """Best-effort: pull title + URL + snippet out of model freeform text.
+
+        Looks for numbered list items where each item contains a URL.
+        Title is whatever precedes 'URL:' or the first line; snippet is
+        whatever follows. Handles the format from W1.7 POC verified
+        output but tolerant of variation.
+        """
+        results: list[SearchResult] = []
+        # Split into items at numbered list markers like "1.", "2." etc.
+        items = re.split(r"\n(?=\s*\d+[\.\)]\s)", text)
+        for item in items:
+            urls = re.findall(r"https?://[^\s)\]\>]+", item)
+            if not urls:
+                continue
+            url = urls[0]
+            # Title: text before the URL on the URL's line, or the first non-empty line.
+            title = ""
+            snippet = ""
+            for line in item.splitlines():
+                line_stripped = line.strip().lstrip("*-").strip()
+                if not line_stripped:
+                    continue
+                if not title and url not in line_stripped:
+                    title = re.sub(r"^\d+[\.\)]\s*", "", line_stripped)
+                    title = re.sub(r"\*+", "", title).strip()
+                if "summary" in line_stripped.lower() or line_stripped.lower().startswith("description"):
+                    snippet = line_stripped.split(":", 1)[-1].strip()
+                    break
+            results.append(SearchResult(title=title[:200], url=url, snippet=snippet[:500]))
+            if len(results) >= max_results:
+                break
+        # Fallback: if structured parse found nothing, just collect bare URLs.
+        if not results:
+            for url in re.findall(r"https?://[^\s)\]]+", text):
+                results.append(SearchResult(title="", url=url))
+                if len(results) >= max_results:
+                    break
+        return results
 
     def _search_tavily(self, *args, **kwargs) -> list[SearchResult]:
         raise _NotConfigured(
-            "Tavily provider not yet implemented (planned in W1.7 POC).",
+            "Tavily provider not yet implemented (TAVILY_API_KEY required).",
             service="tavily",
         )
 
     def _search_perplexity(self, *args, **kwargs) -> list[SearchResult]:
         raise _NotConfigured(
-            "Perplexity provider not yet implemented (planned in W1.7 POC).",
+            "Perplexity provider not yet implemented (PERPLEXITY_API_KEY required).",
             service="perplexity",
         )
 
