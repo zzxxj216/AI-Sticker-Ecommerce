@@ -18,11 +18,14 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+import json as _json
+
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.core.logger import get_logger
+from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_hot_topic_service
 
 logger = get_logger("web.v2")
 
@@ -278,16 +281,116 @@ def _placeholder(
 
 
 @router.get("/hot-topics", response_class=HTMLResponse)
-def v2_hot_topics(request: Request):
-    return _placeholder(
-        request,
-        title="热点池",
-        section_tag="A.1 · W2",
-        planned_in="W2 / A.1 任务",
-        related_table="hot_topics",
-        description="多源 web 搜索（OpenAI / Tavily / Perplexity / TikTok CC）。"
-                    "现已有 348 条历史 tk_hashtags 种入库，待 W2 接入新搜索源。",
+def v2_hot_topics_list(
+    request: Request,
+    source: str = "all",
+    status: str = "all",
+    q: str = "",
+    limit: int = 100,
+):
+    svc = get_hot_topic_service()
+    topics, total = svc.list_topics(
+        source=source if source != "all" else None,
+        status=status if status != "all" else None,
+        query_substring=q or None,
+        limit=limit,
     )
+    for t in topics:
+        t["fetched_human"] = _fmt_ts(t.get("fetched_at"))
+
+    source_stats = svc.source_stats()
+    stats_totals = {"total": sum(s["total"] for s in source_stats.values())}
+
+    # Pull last_search_summary from session-style query string (search redirects here)
+    last_search_summary = None
+    if request.query_params.get("inserted") is not None:
+        last_search_summary = {
+            "inserted_total": int(request.query_params.get("inserted", "0")),
+            "by_provider": _json.loads(request.query_params.get("by_provider", "{}") or "{}"),
+            "errors":      _json.loads(request.query_params.get("errors", "{}") or "{}"),
+        }
+
+    return templates.TemplateResponse(
+        "v2_hot_topics.html",
+        {
+            "request": request,
+            "page_title": "热点池",
+            "topics": topics,
+            "total": total,
+            "limit": limit,
+            "known_providers": HOT_TOPIC_PROVIDERS,
+            "source_stats": source_stats,
+            "stats_totals": stats_totals,
+            "source_filter": source,
+            "status_filter": status,
+            "default_query": request.query_params.get("default_query", ""),
+            "last_search_summary": last_search_summary,
+        },
+    )
+
+
+@router.post("/hot-topics/search")
+async def v2_hot_topics_search(request: Request):
+    """Run a multi-source search synchronously and redirect back to the list."""
+    form = await request.form()
+    query = (form.get("query") or "").strip()
+    region = (form.get("region") or "US").strip()
+    try:
+        max_results = int(form.get("max_results") or 10)
+    except ValueError:
+        max_results = 10
+    providers = form.getlist("providers")
+
+    if not query:
+        raise HTTPException(status_code=400, detail="query required")
+
+    svc = get_hot_topic_service()
+    summary = svc.search_and_persist(
+        query=query, providers=providers, region=region, max_results=max_results,
+    )
+    logger.info("hot_topics search '%s' inserted %d rows across %s",
+                query, summary["inserted_total"], list(summary["by_provider"].keys()))
+
+    qs = (
+        f"?inserted={summary['inserted_total']}"
+        f"&by_provider={_json.dumps(summary['by_provider'])}"
+        f"&errors={_json.dumps(summary['errors'])}"
+        f"&default_query={query}"
+    )
+    return RedirectResponse(url=f"/v2/hot-topics{qs}", status_code=303)
+
+
+@router.get("/hot-topics/{topic_id:int}", response_class=HTMLResponse)
+def v2_hot_topic_detail(request: Request, topic_id: int):
+    svc = get_hot_topic_service()
+    topic = svc.get_topic(topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="topic not found")
+    topic["fetched_human"] = _fmt_ts(topic.get("fetched_at"))
+    raw_payload_json = _json.dumps(topic.get("raw_payload") or {}, ensure_ascii=False, indent=2)
+    return templates.TemplateResponse(
+        "v2_hot_topic_detail.html",
+        {
+            "request": request,
+            "page_title": f"#{topic_id} {topic['topic_name'][:40]}",
+            "topic": topic,
+            "raw_payload_json": raw_payload_json,
+        },
+    )
+
+
+@router.post("/hot-topics/{topic_id:int}/status")
+async def v2_hot_topic_set_status(request: Request, topic_id: int):
+    form = await request.form()
+    new_status = (form.get("status") or "").strip()
+    svc = get_hot_topic_service()
+    try:
+        ok = svc.update_status(topic_id, new_status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="topic not found")
+    return RedirectResponse(url=f"/v2/hot-topics/{topic_id}", status_code=303)
 
 
 @router.get("/topic-plans", response_class=HTMLResponse)

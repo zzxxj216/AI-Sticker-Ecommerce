@@ -1,0 +1,155 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.1 · Hot Topic Pool</p>
+    <h1>热点池</h1>
+    <p class="page-subtitle">多源 web 搜索 + TikTok CC 历史，统一入库。每条结果都是一个候选题材。</p>
+  </div>
+</section>
+
+<!-- 搜索表单 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">运行新搜索</h3>
+  </div>
+  <form method="post" action="/v2/hot-topics/search" style="padding:0 24px 20px;">
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:12px;align-items:end;">
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">关键词</label>
+        <input name="query" required placeholder="graduation 2026 stickers"
+               style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;"
+               value="{{ default_query or '' }}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">区域</label>
+        <input name="region" value="US"
+               style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">每源最多</label>
+        <input name="max_results" type="number" value="10" min="1" max="20"
+               style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;">
+      </div>
+      <button type="submit" class="button"
+              style="padding:8px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        搜索
+      </button>
+    </div>
+    <div style="margin-top:14px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:6px;">数据源</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;">
+        {% for prov, label, available in known_providers %}
+          {% if prov != 'tiktok_cc' %}
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;{% if not available %}opacity:.5;{% endif %}">
+            <input type="checkbox" name="providers" value="{{ prov }}"
+                   {% if available and prov == 'aihubmix_surfing' %}checked{% endif %}
+                   {% if not available %}disabled{% endif %}>
+            {{ label }}
+            {% if not available %}<span style="color:var(--text-muted);font-size:11px;">(未配置)</span>{% endif %}
+          </label>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <p style="margin:10px 0 0;font-size:12px;color:var(--text-muted);">
+        AiHubMix Surfing 已验证可用（W1.7 POC）。其他 provider 待密钥/原生 endpoint 接入。
+      </p>
+    </div>
+  </form>
+  {% if last_search_summary %}
+  <div style="margin:0 24px 20px;padding:12px 16px;background:var(--info-bg);border-radius:8px;font-size:13px;color:var(--text);">
+    上次搜索：插入 <strong>{{ last_search_summary.inserted_total }}</strong> 条
+    {% if last_search_summary.by_provider %}
+      ({% for p, n in last_search_summary.by_provider.items() %}{{ p }}={{ n }}{% if not loop.last %}, {% endif %}{% endfor %})
+    {% endif %}
+    {% if last_search_summary.errors %}
+      <span style="color:var(--danger);">· 错误：{% for p, e in last_search_summary.errors.items() %}{{ p }}: {{ e[:80] }}{% if not loop.last %}; {% endif %}{% endfor %}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- 过滤 -->
+<section class="panel" style="margin-bottom:12px;">
+  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+    <span style="font-size:13px;font-weight:600;">来源：</span>
+    <a href="?source=all{% if status_filter %}&status={{ status_filter }}{% endif %}"
+       class="v2-status-pill {% if source_filter == 'all' or not source_filter %}ok{% else %}pending{% endif %}"
+       style="text-decoration:none;cursor:pointer;">
+       全部 ({{ stats_totals.total or 0 }})
+    </a>
+    {% for prov, label, available in known_providers %}
+      {% set s = source_stats.get(prov, {}) %}
+      {% if s.total %}
+      <a href="?source={{ prov }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+         class="v2-status-pill {% if source_filter == prov %}ok{% else %}pending{% endif %}"
+         style="text-decoration:none;cursor:pointer;">
+         {{ label }} ({{ s.total }})
+      </a>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <div style="padding:0 24px 14px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--line-soft);">
+    <span style="font-size:13px;font-weight:600;padding-top:14px;">状态：</span>
+    {% for st in ['all','pending','selected','archived'] %}
+    <a href="?{% if source_filter %}source={{ source_filter }}&{% endif %}status={{ st }}"
+       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}{{ st if st != 'all' else 'ok' }}{% else %}pending{% endif %}"
+       style="text-decoration:none;cursor:pointer;margin-top:14px;">
+       {{ {'all':'全部','pending':'待选','selected':'已选','archived':'已归档'}[st] }}
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- 列表 -->
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">{{ total }} 条候选话题</h3>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
+    <table style="width:100%;font-size:13px;min-width:900px;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);">
+          <th style="padding:8px 0;">#</th>
+          <th>topic_name</th>
+          <th>source</th>
+          <th>query</th>
+          <th>region</th>
+          <th>状态</th>
+          <th style="text-align:right;">hot_score</th>
+          <th>fetched</th>
+          <th style="text-align:right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in topics %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:8px 0;color:var(--text-muted);">{{ t.id }}</td>
+          <td><a href="/v2/hot-topics/{{ t.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ t.topic_name[:80] }}</a></td>
+          <td><code style="font-size:12px;">{{ t.source }}</code></td>
+          <td style="color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ t.query or '—' }}</td>
+          <td>{{ t.region or '—' }}</td>
+          <td><span class="v2-status-pill {{ {'pending':'pending','selected':'ok','archived':'error'}[t.status] }}">{{ t.status }}</span></td>
+          <td style="text-align:right;">{{ '%.0f'|format(t.hot_score) }}</td>
+          <td style="color:var(--text-muted);font-size:12px;">{{ t.fetched_human }}</td>
+          <td style="text-align:right;">
+            <a href="/v2/hot-topics/{{ t.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+          {% if total == 0 %}暂无热点 — 上方运行一次搜索{% else %}当前过滤无结果{% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if total > limit %}
+    <div style="padding:14px 0;text-align:center;color:var(--text-muted);font-size:12px;">
+      显示前 {{ limit }} 条 / 共 {{ total }} 条
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+{% endblock %}

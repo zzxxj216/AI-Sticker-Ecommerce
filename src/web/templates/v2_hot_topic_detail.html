@@ -1,0 +1,105 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.1 · Hot Topic Detail</p>
+    <h1>{{ topic.topic_name }}</h1>
+    <p class="page-subtitle">
+      <code>{{ topic.source }}</code> · query: <code>{{ topic.query or '—' }}</code> · region: {{ topic.region or '—' }}
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <a href="/v2/hot-topics" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:16px;">
+  <div style="padding:18px 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:18px;">
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">状态</div>
+      <div style="margin-top:4px;"><span class="v2-status-pill {{ {'pending':'pending','selected':'ok','archived':'error'}[topic.status] }}">{{ topic.status }}</span></div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">hot_score</div>
+      <div style="margin-top:4px;font-weight:600;">{{ '%.0f'|format(topic.hot_score) }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">fetched_at</div>
+      <div style="margin-top:4px;color:var(--text-muted);">{{ topic.fetched_human }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">id</div>
+      <div style="margin-top:4px;color:var(--text-muted);">#{{ topic.id }}</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">操作</h3>
+  </div>
+  <div style="padding:0 24px 20px;display:flex;gap:10px;flex-wrap:wrap;">
+
+    {% if topic.status != 'selected' %}
+    <form method="post" action="/v2/hot-topics/{{ topic.id }}/status" style="display:inline;">
+      <input type="hidden" name="status" value="selected">
+      <button type="submit" class="button"
+              style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        ✓ 选用
+      </button>
+    </form>
+    {% endif %}
+
+    {% if topic.status != 'archived' %}
+    <form method="post" action="/v2/hot-topics/{{ topic.id }}/status" style="display:inline;">
+      <input type="hidden" name="status" value="archived">
+      <button type="submit"
+              style="padding:8px 16px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:pointer;">
+        归档
+      </button>
+    </form>
+    {% endif %}
+
+    {% if topic.status != 'pending' %}
+    <form method="post" action="/v2/hot-topics/{{ topic.id }}/status" style="display:inline;">
+      <input type="hidden" name="status" value="pending">
+      <button type="submit"
+              style="padding:8px 16px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:pointer;">
+        恢复待选
+      </button>
+    </form>
+    {% endif %}
+
+    <a href="/v2/topic-plans?topic_id={{ topic.id }}"
+       style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;text-decoration:none;display:inline-block;">
+      → 进入题材规划
+    </a>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">引用 / 证据 ({{ topic.evidence_urls|length }})</h3>
+  </div>
+  <div style="padding:0 24px 20px;">
+    {% if topic.evidence_urls %}
+      <ul style="margin:0;padding-left:18px;">
+        {% for url in topic.evidence_urls %}
+          <li style="margin:6px 0;font-size:13px;"><a href="{{ url }}" target="_blank" rel="noopener" style="color:var(--accent);">{{ url }}</a></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p style="color:var(--text-muted);font-size:13px;margin:0;">无引用 URL（多见于 tiktok_cc 历史数据）。</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <details>
+    <summary style="padding:16px 24px;cursor:pointer;font-size:14px;font-weight:600;">raw_payload (折叠)</summary>
+    <pre style="padding:0 24px 20px;margin:0;font-size:12px;color:var(--text-muted);overflow-x:auto;background:var(--bg-subtle);border-radius:8px;margin:0 24px 20px;padding:14px;">{{ raw_payload_json }}</pre>
+  </details>
+</section>
+
+{% endblock %}
