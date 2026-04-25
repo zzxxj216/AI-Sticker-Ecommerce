@@ -85,7 +85,9 @@ class AIRouter:
     # Default models per task family. Override at call site if needed.
     DEFAULT_TEXT_MODEL = "gpt-5.4-pro"
     DEFAULT_EXTRACT_MODEL = "gpt-4o-mini"
-    DEFAULT_IMAGE_MODEL = "gpt-image-2"
+    # gpt-image-1 is the model name aihubmix actually exposes (W1.8 POC).
+    # When a native OpenAI key + true gpt-image-2 is wired, override at call site.
+    DEFAULT_IMAGE_MODEL = "gpt-image-1"
 
     def __init__(self) -> None:
         self._openai: Optional[OpenAIService] = None
@@ -482,6 +484,23 @@ class AIRouter:
     # image_generate / image_edit (POC in W1.8)
     # ------------------------------------------------------------------
 
+    def _make_image_client(self):
+        """OpenAI-compatible client pointed at the image-capable proxy.
+
+        Per W1.8 POC, AiHubMix exposes the image API as ``gpt-image-1`` on
+        its /v1 endpoint. When a native OpenAI key is added, switching is a
+        one-line env change.
+        """
+        from openai import OpenAI
+        api_key = os.getenv("AIHUBMIX_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        base_url = os.getenv("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1")
+        if base_url.rstrip("/").endswith("chat/completions"):
+            base_url = base_url.rstrip("/").rsplit("/", 2)[0]
+        if not api_key:
+            raise _NotConfigured("Image API key not set (AIHUBMIX_API_KEY or OPENAI_API_KEY)",
+                                 service="image")
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=180)
+
     def image_generate(
         self,
         prompt: str,
@@ -493,14 +512,46 @@ class AIRouter:
         related_table: str = "",
         related_id: Optional[int] = None,
     ) -> list[bytes]:
-        """Generate ``n`` images from a text prompt. Returns raw PNG bytes.
+        """Generate ``n`` images from a text prompt. Returns raw PNG bytes per image.
 
-        Implementation wired in W1.8 POC. Currently raises NotConfigured.
+        Verified working in W1.8 POC with model='gpt-image-1' on AiHubMix
+        (~42s for 1024x1024). Caller should retry on transient
+        APIConnectionError; split phase saw 1/3 such errors during POC.
         """
-        raise _NotConfigured(
-            "image_generate not yet implemented (planned in W1.8 POC).",
-            service="openai_image",
-        )
+        import base64
+        model = model or self.DEFAULT_IMAGE_MODEL
+        client = self._make_image_client()
+
+        with AICallLog(
+            service="aihubmix",
+            model=model,
+            task=task,
+            related_table=related_table,
+            related_id=related_id,
+            prompt_summary=prompt[:500],
+        ) as log:
+            resp = client.images.generate(
+                model=model,
+                prompt=prompt,
+                n=n,
+                size=size,
+            )
+            log.set_usage(cost=estimate_image_cost(model, n))
+            results: list[bytes] = []
+            for item in resp.data:
+                b64 = getattr(item, "b64_json", None)
+                url = getattr(item, "url", None)
+                if b64:
+                    results.append(base64.b64decode(b64))
+                elif url:
+                    import httpx
+                    results.append(httpx.get(url, timeout=60).content)
+                else:
+                    raise APIError(
+                        f"image_generate: response item had neither b64_json nor url",
+                        service=model,
+                    )
+            return results
 
     def image_edit(
         self,
@@ -516,12 +567,45 @@ class AIRouter:
         """Edit / re-render an image based on a prompt (image-to-image).
 
         Used by A.3 to extract a single sticker from a 10-sticker preview.
-        Wired in W1.8 POC.
+        Verified working in W1.8 POC with gpt-image-1 (~60s per call,
+        2/3 success in initial smoke test — caller should retry on
+        APIConnectionError).
         """
-        raise _NotConfigured(
-            "image_edit not yet implemented (planned in W1.8 POC).",
-            service="openai_image",
-        )
+        import base64
+        import io
+        model = model or self.DEFAULT_IMAGE_MODEL
+        client = self._make_image_client()
+
+        with AICallLog(
+            service="aihubmix",
+            model=model,
+            task=task,
+            related_table=related_table,
+            related_id=related_id,
+            prompt_summary=prompt[:500],
+        ) as log:
+            img_stream = io.BytesIO(source_image)
+            img_stream.name = "input.png"  # SDK requires a filename
+            resp = client.images.edit(
+                model=model,
+                image=img_stream,
+                prompt=prompt,
+                n=1,
+                size=size,
+            )
+            log.set_usage(cost=estimate_image_cost(model, 1))
+            item = resp.data[0]
+            b64 = getattr(item, "b64_json", None)
+            url = getattr(item, "url", None)
+            if b64:
+                return base64.b64decode(b64)
+            if url:
+                import httpx
+                return httpx.get(url, timeout=60).content
+            raise APIError(
+                "image_edit: response item had neither b64_json nor url",
+                service=model,
+            )
 
 
 # ----------------------------------------------------------------------
