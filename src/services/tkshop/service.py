@@ -533,6 +533,51 @@ class TKShopService:
             )
             conn.commit()
 
+    def sync_statuses(self) -> dict[str, Any]:
+        """C.4 — query the wrapper server for status of every published product.
+
+        Hits ``GET {TKSHOP_SERVER_URL}/products/{tiktok_product_id}/status``
+        and updates publish_status if the wrapper reports a state change
+        (e.g., the product went under review or got delisted).
+
+        Returns ``{'checked': n, 'updated': n, 'errors': [...]}``. When the
+        wrapper isn't reachable we return ``checked=0`` with an error
+        rather than failing — the scheduler treats this as a soft failure.
+        """
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, tiktok_product_id, publish_status
+                  FROM tkshop_products
+                 WHERE publish_status = 'published'
+                   AND tiktok_product_id != ''
+                """,
+            ).fetchall()
+        if not rows:
+            return {"checked": 0, "updated": 0, "errors": []}
+
+        updated, errors = 0, []
+        for r in rows:
+            url = f"{TKSHOP_SERVER_URL.rstrip('/')}/products/{r['tiktok_product_id']}/status"
+            try:
+                resp = requests.get(url, timeout=TKSHOP_SERVER_TIMEOUT)
+                if not resp.ok:
+                    errors.append({"product_id": r["id"], "error": f"HTTP {resp.status_code}"})
+                    continue
+                body = resp.json() if resp.text else {}
+                remote = (body.get("status") or "").strip().lower()
+                if remote and remote != r["publish_status"]:
+                    with _open_db(self.db_path) as conn:
+                        conn.execute(
+                            "UPDATE tkshop_products SET publish_status = ? WHERE id = ?",
+                            (remote, r["id"]),
+                        )
+                        conn.commit()
+                    updated += 1
+            except requests.RequestException as e:
+                errors.append({"product_id": r["id"], "error": f"{type(e).__name__}: {e}"[:200]})
+        return {"checked": len(rows), "updated": updated, "errors": errors}
+
     def list_publish_logs(self, product_id: int) -> list[dict]:
         with _open_db(self.db_path) as conn:
             rows = conn.execute(

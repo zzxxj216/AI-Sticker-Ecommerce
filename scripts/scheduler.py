@@ -248,29 +248,48 @@ class Scheduler:
 # Job stubs (real implementations land in W3 / W4)
 # ----------------------------------------------------------------------
 
-def tk_metrics_refresh_stub(ctx: JobContext) -> None:
-    """W3 / B.2 — pull TK Display metrics for every published video."""
-    logger.info("[%s] STUB — wire to TikTokDisplayService in W3 (B.2)", ctx.job_name)
-    ctx.affected_rows = 0
+def tk_metrics_refresh_job(ctx: JobContext) -> None:
+    """B.2 — pull TK Display metrics for every published video."""
+    from src.services.tk_videos import get_tk_video_service
+    result = get_tk_video_service().refresh_metrics_for_published()
+    ctx.affected_rows = result.get("appended", 0)
+    if result.get("errors"):
+        logger.warning("[%s] errors: %s", ctx.job_name, result["errors"][:3])
+    logger.info("[%s] checked=%d appended=%d errors=%d",
+                ctx.job_name, result.get("checked", 0),
+                result.get("appended", 0), len(result.get("errors", [])))
 
 
-def tk_video_publish_dispatch_stub(ctx: JobContext) -> None:
-    """W3 / B.1 — send any tk_videos with scheduled_at <= now via Blotato."""
-    logger.info("[%s] STUB — wire to BlotaToService in W3 (B.1)", ctx.job_name)
-    ctx.affected_rows = 0
+def tk_video_publish_dispatch_job(ctx: JobContext) -> None:
+    """B.1 — send any tk_videos with scheduled_at <= now via Blotato."""
+    from src.services.tk_videos import get_tk_video_service
+    result = get_tk_video_service().dispatch_due()
+    ctx.affected_rows = result.get("ok", 0)
+    if result.get("errors"):
+        logger.warning("[%s] errors: %s", ctx.job_name, result["errors"][:3])
+    if result.get("due", 0) > 0 or result.get("ok", 0) > 0:
+        logger.info("[%s] due=%d ok=%d error=%d skipped=%d",
+                    ctx.job_name, result.get("due", 0), result.get("ok", 0),
+                    result.get("error", 0), result.get("skipped", 0))
 
 
-def tkshop_status_sync_stub(ctx: JobContext) -> None:
-    """W4 / C.4 — sync TKShop product statuses from the platform."""
-    logger.info("[%s] STUB — wire to TikTok Shop API in W4 (C.4)", ctx.job_name)
-    ctx.affected_rows = 0
+def tkshop_status_sync_job(ctx: JobContext) -> None:
+    """C.4 — sync TKShop product statuses from the wrapper server."""
+    from src.services.tkshop import get_tkshop_service
+    result = get_tkshop_service().sync_statuses()
+    ctx.affected_rows = result.get("updated", 0)
+    if result.get("errors"):
+        logger.warning("[%s] errors: %s", ctx.job_name, result["errors"][:3])
+    logger.info("[%s] checked=%d updated=%d errors=%d",
+                ctx.job_name, result.get("checked", 0),
+                result.get("updated", 0), len(result.get("errors", [])))
 
 
 def build_default_scheduler(db_path: Path = DEFAULT_DB_PATH) -> Scheduler:
     s = Scheduler(db_path=db_path)
-    s.register("tk_metrics_refresh",         2 * 60 * 60, tk_metrics_refresh_stub)
-    s.register("tk_video_publish_dispatch",            60, tk_video_publish_dispatch_stub)
-    s.register("tkshop_status_sync",        30 * 60,      tkshop_status_sync_stub)
+    s.register("tk_metrics_refresh",         2 * 60 * 60, tk_metrics_refresh_job)
+    s.register("tk_video_publish_dispatch",            60, tk_video_publish_dispatch_job)
+    s.register("tkshop_status_sync",        30 * 60,      tkshop_status_sync_job)
     return s
 
 
