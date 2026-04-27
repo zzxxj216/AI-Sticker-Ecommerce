@@ -82,15 +82,19 @@ class AIRouter:
     actual call's success/failure is preserved upstream.
     """
 
-    # Default models per task family. Pulled from env so we can switch without
-    # touching code when the native OpenAI key (or another vendor) lands.
-    # Today's defaults (verified against AiHubMix middleman):
-    #   text    : gpt-5.4         (gpt-5.4-pro is not exposed on chat/completions)
-    #   extract : gpt-4o          (gpt-4o-mini may or may not be exposed)
-    #   image   : gpt-image-1     (W1.8 POC)
-    DEFAULT_TEXT_MODEL = os.getenv("V2_AI_TEXT_MODEL", "gpt-5.4")
-    DEFAULT_EXTRACT_MODEL = os.getenv("V2_AI_EXTRACT_MODEL", "gpt-4o")
-    DEFAULT_IMAGE_MODEL = os.getenv("V2_AI_IMAGE_MODEL", "gpt-image-1")
+    # Default models per task family. Pulled from env so we can switch
+    # without touching code.
+    # Current routing (after operator switched to JieKou):
+    #   text     : gpt-4o         via JIEKOU_*  (chat.completions)
+    #   extract  : gpt-4o-mini    via JIEKOU_*  (chat.completions, json_object)
+    #   image    : gpt-image-2    via JIEKOU_*  (POST /v1/images/generations)
+    #   websearch: gpt-5.4:surfing via AIHUBMIX_* (kept separate per operator
+    #              instruction "搜索相关 不切换")
+    DEFAULT_TEXT_MODEL = os.getenv("V2_AI_TEXT_MODEL", "gpt-4o")
+    DEFAULT_EXTRACT_MODEL = os.getenv("V2_AI_EXTRACT_MODEL", "gpt-4o-mini")
+    # JieKou's actual exposed model name (probed via curl) is
+    # gpt-image-1.5 — even though the docs page is titled "GPT Image 2".
+    DEFAULT_IMAGE_MODEL = os.getenv("V2_AI_IMAGE_MODEL", "gpt-image-1.5")
 
     def __init__(self) -> None:
         self._openai: Optional[OpenAIService] = None
@@ -100,13 +104,32 @@ class AIRouter:
     # ------------------------------------------------------------------
 
     def _get_openai(self, model: Optional[str] = None) -> OpenAIService:
-        """Return an OpenAIService bound to ``model`` (or the default).
+        """Return an OpenAIService pointed at JieKou (or fallback).
 
-        We instantiate per-model rather than caching a single client because
-        OpenAIService stores the model on the instance.
+        JieKou is the operator-chosen default for all non-search GPT calls
+        (text + extract). Search calls keep using AiHubMix and bypass this
+        method entirely. Fallback chain:
+          JIEKOU_API_KEY  → OPENAI_API_KEY (which today also points at JieKou)
+                          → AIHUBMIX_API_KEY (last resort)
         """
-        if self._openai is None or (model and self._openai.model != model):
-            self._openai = OpenAIService(model=model) if model else OpenAIService()
+        api_key = (os.getenv("JIEKOU_API_KEY")
+                   or os.getenv("OPENAI_API_KEY")
+                   or os.getenv("AIHUBMIX_API_KEY", ""))
+        if os.getenv("JIEKOU_API_KEY"):
+            base_url = os.getenv("JIEKOU_BASE_URL", "https://api.jiekou.ai/openai")
+        else:
+            base_url = (os.getenv("OPENAI_BASE_URL")
+                        or os.getenv("AIHUBMIX_BASE_URL"))
+            if base_url and base_url.rstrip("/").endswith("chat/completions"):
+                base_url = base_url.rstrip("/").rsplit("/", 2)[0]
+        resolved_model = model or self.DEFAULT_TEXT_MODEL
+        # Cheap re-instantiate if model changed; OpenAIService is light.
+        if (self._openai is None
+                or self._openai.model != resolved_model
+                or self._openai.api_key != api_key):
+            self._openai = OpenAIService(
+                api_key=api_key, base_url=base_url, model=resolved_model,
+            )
         return self._openai
 
     # ------------------------------------------------------------------
@@ -487,22 +510,58 @@ class AIRouter:
     # image_generate / image_edit (POC in W1.8)
     # ------------------------------------------------------------------
 
-    def _make_image_client(self):
-        """OpenAI-compatible client pointed at the image-capable proxy.
+    def _image_endpoint_config(self) -> tuple[str, str]:
+        """Resolve (api_key, base_url) for image endpoints.
 
-        Per W1.8 POC, AiHubMix exposes the image API as ``gpt-image-1`` on
-        its /v1 endpoint. When a native OpenAI key is added, switching is a
-        one-line env change.
+        On JieKou the image API is mounted at a *different* base than text:
+        text completions = ``https://api.jiekou.ai/openai/chat/completions``
+        image generation = ``https://api.jiekou.ai/v1/images/generations``
+        (probed with curl — only the /v1 base accepts the request).
+        We honor a separate JIEKOU_IMAGE_BASE_URL env var to keep them
+        decoupled.
         """
-        from openai import OpenAI
-        api_key = os.getenv("AIHUBMIX_API_KEY") or os.getenv("OPENAI_API_KEY", "")
-        base_url = os.getenv("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1")
-        if base_url.rstrip("/").endswith("chat/completions"):
-            base_url = base_url.rstrip("/").rsplit("/", 2)[0]
+        api_key = (os.getenv("JIEKOU_API_KEY")
+                   or os.getenv("OPENAI_API_KEY")
+                   or os.getenv("AIHUBMIX_API_KEY", ""))
         if not api_key:
-            raise _NotConfigured("Image API key not set (AIHUBMIX_API_KEY or OPENAI_API_KEY)",
-                                 service="image")
-        return OpenAI(api_key=api_key, base_url=base_url, timeout=180)
+            raise _NotConfigured(
+                "Image API key not set (JIEKOU_API_KEY / OPENAI_API_KEY / AIHUBMIX_API_KEY)",
+                service="image",
+            )
+        if os.getenv("JIEKOU_API_KEY"):
+            base_url = os.getenv("JIEKOU_IMAGE_BASE_URL", "https://api.jiekou.ai/v1")
+        else:
+            base_url = (os.getenv("OPENAI_BASE_URL")
+                        or os.getenv("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1"))
+            if base_url.rstrip("/").endswith("chat/completions"):
+                base_url = base_url.rstrip("/").rsplit("/", 2)[0]
+        return api_key, base_url.rstrip("/")
+
+    @staticmethod
+    def _decode_image_response(data: dict) -> list[bytes]:
+        """Parse image response in BOTH JieKou shape ({images:[url,...]}) and
+        OpenAI shape ({data:[{b64_json|url},...]})."""
+        import base64
+        import httpx
+        out: list[bytes] = []
+        # JieKou-documented shape: {"images": ["https://...", ...]}
+        if isinstance(data.get("images"), list):
+            for entry in data["images"]:
+                if isinstance(entry, str) and entry.startswith("http"):
+                    out.append(httpx.get(entry, timeout=120).content)
+                elif isinstance(entry, dict):
+                    if entry.get("b64_json"):
+                        out.append(base64.b64decode(entry["b64_json"]))
+                    elif entry.get("url"):
+                        out.append(httpx.get(entry["url"], timeout=120).content)
+        # OpenAI-compatible shape: {"data": [{"b64_json":..., "url":...}]}
+        elif isinstance(data.get("data"), list):
+            for item in data["data"]:
+                if item.get("b64_json"):
+                    out.append(base64.b64decode(item["b64_json"]))
+                elif item.get("url"):
+                    out.append(httpx.get(item["url"], timeout=120).content)
+        return out
 
     def image_generate(
         self,
@@ -511,49 +570,74 @@ class AIRouter:
         model: Optional[str] = None,
         n: int = 1,
         size: str = "1024x1024",
+        quality: Optional[str] = None,
+        background: str = "auto",
+        output_format: Optional[str] = None,
         task: str = "image_generate",
         related_table: str = "",
         related_id: Optional[int] = None,
     ) -> list[bytes]:
-        """Generate ``n`` images from a text prompt. Returns raw PNG bytes per image.
+        """Generate ``n`` images via JieKou's GPT Image 2 endpoint.
 
-        Verified working in W1.8 POC with model='gpt-image-1' on AiHubMix
-        (~42s for 1024x1024). Caller should retry on transient
-        APIConnectionError; split phase saw 1/3 such errors during POC.
+        Per https://docs.jiekou.ai/, the endpoint accepts:
+          n, size (1024x1024 / 1024x1536 / 1536x1024 / auto),
+          prompt, quality (low/medium/high), background (transparent/opaque/auto),
+          moderation (low/auto), output_format (png/jpeg), output_compression.
+
+        Returns a list of raw image bytes. Caller should retry on transient
+        connection errors.
         """
-        import base64
+        import httpx
         model = model or self.DEFAULT_IMAGE_MODEL
-        client = self._make_image_client()
+        api_key, base_url = self._image_endpoint_config()
+        endpoint = f"{base_url}/images/generations"
+        body: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "n": n,
+            "size": size,
+            "quality": quality or os.getenv("V2_IMAGE_QUALITY", "medium"),
+            "background": background,
+            "output_format": output_format or os.getenv("V2_IMAGE_OUTPUT_FORMAT", "png"),
+        }
 
         with AICallLog(
-            service="aihubmix",
+            service="jiekou",
             model=model,
             task=task,
             related_table=related_table,
             related_id=related_id,
             prompt_summary=prompt[:500],
         ) as log:
-            resp = client.images.generate(
-                model=model,
-                prompt=prompt,
-                n=n,
-                size=size,
-            )
+            try:
+                resp = httpx.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_key}",
+                             "Content-Type": "application/json"},
+                    json=body,
+                    timeout=300,
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                hint = ""
+                if e.response.status_code == 403 and "invalid character" in e.response.text:
+                    hint = (" — likely upstream returned an HTML reject page "
+                            "(JieKou couldn't parse). Most common cause: the API "
+                            "key's account doesn't have GPT-Image generation "
+                            "enabled. Check billing / model access at jiekou.ai.")
+                raise APIError(
+                    f"image_generate HTTP {e.response.status_code}: "
+                    f"{e.response.text[:300]}{hint}",
+                    service=model,
+                )
+            data = resp.json()
             log.set_usage(cost=estimate_image_cost(model, n))
-            results: list[bytes] = []
-            for item in resp.data:
-                b64 = getattr(item, "b64_json", None)
-                url = getattr(item, "url", None)
-                if b64:
-                    results.append(base64.b64decode(b64))
-                elif url:
-                    import httpx
-                    results.append(httpx.get(url, timeout=60).content)
-                else:
-                    raise APIError(
-                        f"image_generate: response item had neither b64_json nor url",
-                        service=model,
-                    )
+            results = self._decode_image_response(data)
+            if not results:
+                raise APIError(
+                    f"image_generate: response had no decodable images. body={str(data)[:300]}",
+                    service=model,
+                )
             return results
 
     def image_edit(
@@ -563,52 +647,66 @@ class AIRouter:
         *,
         model: Optional[str] = None,
         size: str = "1024x1024",
+        quality: Optional[str] = None,
         task: str = "image_edit",
         related_table: str = "",
         related_id: Optional[int] = None,
     ) -> bytes:
         """Edit / re-render an image based on a prompt (image-to-image).
 
-        Used by A.3 to extract a single sticker from a 10-sticker preview.
-        Verified working in W1.8 POC with gpt-image-1 (~60s per call,
-        2/3 success in initial smoke test — caller should retry on
-        APIConnectionError).
+        Calls JieKou's standard ``POST /v1/images/edits`` endpoint with
+        multipart/form-data per the OpenAI-compatible images.edit shape.
+        Used by A.3 to extract a single sticker from a sheet preview.
         """
-        import base64
-        import io
+        import httpx
         model = model or self.DEFAULT_IMAGE_MODEL
-        client = self._make_image_client()
+        api_key, base_url = self._image_endpoint_config()
+        endpoint = f"{base_url}/images/edits"
+
+        files = {"image": ("input.png", source_image, "image/png")}
+        form = {
+            "model": model,
+            "prompt": prompt,
+            "n": "1",
+            "size": size,
+            "quality": quality or os.getenv("V2_IMAGE_QUALITY", "medium"),
+        }
 
         with AICallLog(
-            service="aihubmix",
+            service="jiekou",
             model=model,
             task=task,
             related_table=related_table,
             related_id=related_id,
             prompt_summary=prompt[:500],
         ) as log:
-            img_stream = io.BytesIO(source_image)
-            img_stream.name = "input.png"  # SDK requires a filename
-            resp = client.images.edit(
-                model=model,
-                image=img_stream,
-                prompt=prompt,
-                n=1,
-                size=size,
-            )
+            try:
+                resp = httpx.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    data=form, files=files,
+                    timeout=300,
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                hint = ""
+                if e.response.status_code == 403 and "invalid character" in e.response.text:
+                    hint = (" — likely the API key's account lacks GPT-Image "
+                            "permission; same blocker as image_generate.")
+                raise APIError(
+                    f"image_edit HTTP {e.response.status_code}: "
+                    f"{e.response.text[:300]}{hint}",
+                    service=model,
+                )
+            data = resp.json()
             log.set_usage(cost=estimate_image_cost(model, 1))
-            item = resp.data[0]
-            b64 = getattr(item, "b64_json", None)
-            url = getattr(item, "url", None)
-            if b64:
-                return base64.b64decode(b64)
-            if url:
-                import httpx
-                return httpx.get(url, timeout=60).content
-            raise APIError(
-                "image_edit: response item had neither b64_json nor url",
-                service=model,
-            )
+            results = self._decode_image_response(data)
+            if not results:
+                raise APIError(
+                    f"image_edit: response had no decodable images. body={str(data)[:300]}",
+                    service=model,
+                )
+            return results[0]
 
 
 # ----------------------------------------------------------------------

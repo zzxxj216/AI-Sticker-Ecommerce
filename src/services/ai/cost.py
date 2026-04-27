@@ -40,11 +40,13 @@ TEXT_COST_PER_1K: dict[str, tuple[float, float]] = {
     "gemini-2.5-pro":          (1.25, 5.00),
 }
 
-# Per-image flat estimate (USD); refined later if real pricing varies by size.
+# Per-image flat estimate (USD). gpt-image-2 cost varies by quality
+# (low/medium/high); these are mid-quality 1024x1024 estimates.
 IMAGE_COST_PER_CALL: dict[str, float] = {
-    "gpt-image-1": 0.04,
-    "gpt-image-2": 0.06,
-    "dall-e-3":    0.04,
+    "gpt-image-1":   0.04,
+    "gpt-image-1.5": 0.04,   # JieKou's "GPT Image 2" doc names this gpt-image-1.5 in practice
+    "gpt-image-2":   0.05,
+    "dall-e-3":      0.04,
 }
 
 # Per-search-call surcharge (USD). For surfing models this is ON TOP OF
