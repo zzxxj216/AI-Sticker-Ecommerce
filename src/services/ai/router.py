@@ -92,9 +92,7 @@ class AIRouter:
     #              instruction "搜索相关 不切换")
     DEFAULT_TEXT_MODEL = os.getenv("V2_AI_TEXT_MODEL", "gpt-4o")
     DEFAULT_EXTRACT_MODEL = os.getenv("V2_AI_EXTRACT_MODEL", "gpt-4o-mini")
-    # JieKou's actual exposed model name (probed via curl) is
-    # gpt-image-1.5 — even though the docs page is titled "GPT Image 2".
-    DEFAULT_IMAGE_MODEL = os.getenv("V2_AI_IMAGE_MODEL", "gpt-image-1.5")
+    DEFAULT_IMAGE_MODEL = os.getenv("V2_AI_IMAGE_MODEL", "gpt-image-2")
 
     def __init__(self) -> None:
         self._openai: Optional[OpenAIService] = None
@@ -510,15 +508,13 @@ class AIRouter:
     # image_generate / image_edit (POC in W1.8)
     # ------------------------------------------------------------------
 
-    def _image_endpoint_config(self) -> tuple[str, str]:
-        """Resolve (api_key, base_url) for image endpoints.
+    def _image_endpoints(self) -> tuple[str, str, str]:
+        """Resolve (api_key, text_to_image_url, image_to_image_url).
 
-        On JieKou the image API is mounted at a *different* base than text:
-        text completions = ``https://api.jiekou.ai/openai/chat/completions``
-        image generation = ``https://api.jiekou.ai/v1/images/generations``
-        (probed with curl — only the /v1 base accepts the request).
-        We honor a separate JIEKOU_IMAGE_BASE_URL env var to keep them
-        decoupled.
+        JieKou exposes per-model image endpoints under /v3/, NOT the
+        OpenAI-compatible /images/generations route. Operator confirmed:
+        text-to-image  = https://api.jiekou.ai/v3/gpt-image-2-text-to-image
+        image-to-image = https://api.jiekou.ai/v3/gpt-image-2-image-to-image
         """
         api_key = (os.getenv("JIEKOU_API_KEY")
                    or os.getenv("OPENAI_API_KEY")
@@ -528,14 +524,15 @@ class AIRouter:
                 "Image API key not set (JIEKOU_API_KEY / OPENAI_API_KEY / AIHUBMIX_API_KEY)",
                 service="image",
             )
-        if os.getenv("JIEKOU_API_KEY"):
-            base_url = os.getenv("JIEKOU_IMAGE_BASE_URL", "https://api.jiekou.ai/v1")
-        else:
-            base_url = (os.getenv("OPENAI_BASE_URL")
-                        or os.getenv("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1"))
-            if base_url.rstrip("/").endswith("chat/completions"):
-                base_url = base_url.rstrip("/").rsplit("/", 2)[0]
-        return api_key, base_url.rstrip("/")
+        t2i = os.getenv(
+            "JIEKOU_IMAGE_T2I_URL",
+            "https://api.jiekou.ai/v3/gpt-image-2-text-to-image",
+        )
+        i2i = os.getenv(
+            "JIEKOU_IMAGE_EDIT_URL",
+            "https://api.jiekou.ai/v3/gpt-image-2-image-to-image",
+        )
+        return api_key, t2i, i2i
 
     @staticmethod
     def _decode_image_response(data: dict) -> list[bytes]:
@@ -589,10 +586,8 @@ class AIRouter:
         """
         import httpx
         model = model or self.DEFAULT_IMAGE_MODEL
-        api_key, base_url = self._image_endpoint_config()
-        endpoint = f"{base_url}/images/generations"
+        api_key, t2i_url, _ = self._image_endpoints()
         body: dict[str, Any] = {
-            "model": model,
             "prompt": prompt,
             "n": n,
             "size": size,
@@ -611,7 +606,7 @@ class AIRouter:
         ) as log:
             try:
                 resp = httpx.post(
-                    endpoint,
+                    t2i_url,
                     headers={"Authorization": f"Bearer {api_key}",
                              "Content-Type": "application/json"},
                     json=body,
@@ -621,10 +616,8 @@ class AIRouter:
             except httpx.HTTPStatusError as e:
                 hint = ""
                 if e.response.status_code == 403 and "invalid character" in e.response.text:
-                    hint = (" — likely upstream returned an HTML reject page "
-                            "(JieKou couldn't parse). Most common cause: the API "
-                            "key's account doesn't have GPT-Image generation "
-                            "enabled. Check billing / model access at jiekou.ai.")
+                    hint = (" — JieKou forwarded an HTML reject page from upstream. "
+                            "Common cause: account lacks GPT-Image permission.")
                 raise APIError(
                     f"image_generate HTTP {e.response.status_code}: "
                     f"{e.response.text[:300]}{hint}",
@@ -658,18 +651,22 @@ class AIRouter:
         multipart/form-data per the OpenAI-compatible images.edit shape.
         Used by A.3 to extract a single sticker from a sheet preview.
         """
+        import base64
         import httpx
         model = model or self.DEFAULT_IMAGE_MODEL
-        api_key, base_url = self._image_endpoint_config()
-        endpoint = f"{base_url}/images/edits"
+        api_key, _, i2i_url = self._image_endpoints()
 
-        files = {"image": ("input.png", source_image, "image/png")}
-        form = {
-            "model": model,
+        # Send source as base64-encoded data URL — common JieKou /v3
+        # image-to-image convention. If the operator's endpoint expects
+        # multipart instead we'll add a fallback once probed.
+        b64 = base64.b64encode(source_image).decode("ascii")
+        body: dict[str, Any] = {
+            "image": f"data:image/png;base64,{b64}",
             "prompt": prompt,
-            "n": "1",
+            "n": 1,
             "size": size,
             "quality": quality or os.getenv("V2_IMAGE_QUALITY", "medium"),
+            "output_format": os.getenv("V2_IMAGE_OUTPUT_FORMAT", "png"),
         }
 
         with AICallLog(
@@ -682,17 +679,17 @@ class AIRouter:
         ) as log:
             try:
                 resp = httpx.post(
-                    endpoint,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    data=form, files=files,
+                    i2i_url,
+                    headers={"Authorization": f"Bearer {api_key}",
+                             "Content-Type": "application/json"},
+                    json=body,
                     timeout=300,
                 )
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
                 hint = ""
                 if e.response.status_code == 403 and "invalid character" in e.response.text:
-                    hint = (" — likely the API key's account lacks GPT-Image "
-                            "permission; same blocker as image_generate.")
+                    hint = " — JieKou upstream returned HTML reject; likely account perm."
                 raise APIError(
                     f"image_edit HTTP {e.response.status_code}: "
                     f"{e.response.text[:300]}{hint}",
