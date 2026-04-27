@@ -273,6 +273,20 @@ def tk_video_publish_dispatch_job(ctx: JobContext) -> None:
                     result.get("error", 0), result.get("skipped", 0))
 
 
+def tk_dispatch_status_poll_job(ctx: JobContext) -> None:
+    """B.1.5 — poll Blotato for every dispatched post that still lacks a
+    tiktok_video_id, then capture it for B.2 metrics matching."""
+    from src.services.tk_videos import get_tk_video_service
+    result = get_tk_video_service().refresh_dispatch_status()
+    ctx.affected_rows = result.get("matched", 0)
+    if result.get("errors"):
+        logger.warning("[%s] errors: %s", ctx.job_name, result["errors"][:3])
+    if result.get("checked", 0) > 0 or result.get("matched", 0) > 0:
+        logger.info("[%s] checked=%d matched=%d errors=%d",
+                    ctx.job_name, result.get("checked", 0),
+                    result.get("matched", 0), len(result.get("errors", [])))
+
+
 def tkshop_status_sync_job(ctx: JobContext) -> None:
     """C.4 — sync TKShop product statuses from the wrapper server."""
     from src.services.tkshop import get_tkshop_service
@@ -289,6 +303,7 @@ def build_default_scheduler(db_path: Path = DEFAULT_DB_PATH) -> Scheduler:
     s = Scheduler(db_path=db_path)
     s.register("tk_metrics_refresh",         2 * 60 * 60, tk_metrics_refresh_job)
     s.register("tk_video_publish_dispatch",            60, tk_video_publish_dispatch_job)
+    s.register("tk_dispatch_status_poll",    5 * 60,      tk_dispatch_status_poll_job)
     s.register("tkshop_status_sync",        30 * 60,      tkshop_status_sync_job)
     return s
 

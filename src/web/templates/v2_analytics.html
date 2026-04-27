@@ -10,20 +10,24 @@
 </section>
 
 <section class="panel">
-  <div class="panel-header" style="padding:16px 24px;">
-    <h3 style="margin:0;font-size:16px;">{{ total }} 个已发布视频</h3>
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">{{ total }} 个已发布视频（按互动率排序）</h3>
+    <span style="font-size:11px;color:var(--text-muted);">互动率 = (赞+评+转) / 播放</span>
   </div>
   <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
-    <table style="width:100%;font-size:13px;min-width:900px;">
+    <table style="width:100%;font-size:13px;min-width:1000px;">
       <thead>
         <tr style="text-align:left;color:var(--text-muted);">
           <th style="padding:8px 0;width:60px;">封面</th>
           <th>pack / caption</th>
+          <th>tiktok_id</th>
           <th>published</th>
           <th style="text-align:right;">views</th>
           <th style="text-align:right;">likes</th>
           <th style="text-align:right;">comments</th>
           <th style="text-align:right;">shares</th>
+          <th style="text-align:right;">互动率</th>
+          <th style="text-align:right;">metrics 时间</th>
           <th style="text-align:right;">操作</th>
         </tr>
       </thead>
@@ -39,22 +43,27 @@
             <a href="/v2/videos/{{ v.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ v.pack_name or '—' }}</a>
             <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ (v.caption or '')[:80] }}</div>
           </td>
+          <td><code style="font-size:10px;color:var(--text-muted);">{{ (v.tiktok_video_id or '—')[:14] }}{% if v.tiktok_video_id|length > 14 %}…{% endif %}</code></td>
           <td style="color:var(--text-muted);font-size:11px;">{{ v.published_human or '—' }}</td>
-          <td style="text-align:right;">—</td>
-          <td style="text-align:right;">—</td>
-          <td style="text-align:right;">—</td>
-          <td style="text-align:right;">—</td>
+          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.view_count) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.like_count) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.comment_count) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.share_count) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right;{% if v.interaction_rate >= 0.05 %}color:var(--success);font-weight:600;{% endif %}">
+            {% if v.latest_metrics %}{{ '%.2f'|format(v.interaction_rate * 100) }}%{% else %}—{% endif %}
+          </td>
+          <td style="text-align:right;color:var(--text-muted);font-size:10px;">{{ v.metrics_fetched_human or '—' }}</td>
           <td style="text-align:right;"><a href="/v2/videos/{{ v.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a></td>
         </tr>
         {% else %}
-        <tr><td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+        <tr><td colspan="11" style="padding:30px 0;text-align:center;color:var(--text-muted);">
           暂无已发布视频。
         </td></tr>
         {% endfor %}
       </tbody>
     </table>
     <p style="padding:14px 0 0;font-size:11px;color:var(--text-muted);">
-      Metrics 列暂为 — ；待 B.2 调度任务（scripts/scheduler.py）持续 2h 抓取后会有数据。
+      Metrics 由调度任务每 2h 刷新（B.2）。tiktok_id 由 tk_dispatch_status_poll 每 5min 解析，无 ID 的视频 metrics 会显示 —。
     </p>
   </div>
 </section>

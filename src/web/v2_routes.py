@@ -107,6 +107,7 @@ def _fmt_interval(seconds: int) -> str:
 JOB_INTERVALS_S = {
     "tk_metrics_refresh":         2 * 60 * 60,
     "tk_video_publish_dispatch":          60,
+    "tk_dispatch_status_poll":    5 * 60,
     "tkshop_status_sync":        30 * 60,
 }
 
@@ -1028,12 +1029,25 @@ async def v2_video_schedule(request: Request, video_id: int):
 
 @router.get("/analytics", response_class=HTMLResponse)
 def v2_analytics(request: Request):
-    """Quick metrics view — full B.3 dashboard lands later."""
+    """Published videos with latest metrics — sortable by interaction rate."""
     svc = get_tk_video_service()
-    videos, total = svc.list_videos(publish_status="published", limit=200)
+    videos, total = svc.list_videos(
+        publish_status="published", limit=200,
+        with_latest_metrics=True,
+    )
     for v in videos:
         v["pack_cover_url"] = _path_to_v2_url(v.get("pack_cover") or "")
         v["published_human"] = _fmt_ts(v.get("published_at"))
+        m = v.get("latest_metrics") or {}
+        v["view_count"] = m.get("view_count", 0)
+        v["like_count"] = m.get("like_count", 0)
+        v["comment_count"] = m.get("comment_count", 0)
+        v["share_count"] = m.get("share_count", 0)
+        v["metrics_fetched_human"] = _fmt_ts(m.get("fetched_at")) if m else ""
+        # interaction rate = (likes + comments + shares) / max(views, 1)
+        engagements = v["like_count"] + v["comment_count"] + v["share_count"]
+        v["interaction_rate"] = (engagements / v["view_count"]) if v["view_count"] else 0.0
+    videos.sort(key=lambda x: x["interaction_rate"], reverse=True)
     return templates.TemplateResponse(
         "v2_analytics.html",
         {

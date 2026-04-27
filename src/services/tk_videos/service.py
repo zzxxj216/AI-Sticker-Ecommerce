@@ -287,6 +287,68 @@ class TKVideoService:
             conn.commit()
             return cur.rowcount > 0
 
+    def refresh_dispatch_status(self) -> dict[str, Any]:
+        """Poll Blotato for every dispatched post that doesn't have a
+        ``tiktok_video_id`` yet, parse the response, and persist the ID
+        once the post reaches a terminal state.
+
+        Blotato's GET /posts/{id} returns whatever shape they currently
+        emit; we look for a URL like ``https://www.tiktok.com/.../video/{id}``
+        in any string field and extract the numeric id.
+        """
+        import re
+        from src.services.tiktok.blotato_service import BlotaToService
+
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, blotato_post_id
+                  FROM tk_videos
+                 WHERE publish_status = 'published'
+                   AND blotato_post_id != ''
+                   AND tiktok_video_id = ''
+                """,
+            ).fetchall()
+        if not rows:
+            return {"checked": 0, "matched": 0, "errors": []}
+
+        bsvc = BlotaToService()
+        if not bsvc.is_configured():
+            return {"checked": 0, "matched": 0,
+                    "errors": ["BLOTATO_API_KEY not set"]}
+
+        url_re = re.compile(r"tiktok\.com/[^\s\"'<>]*?/video/(\d{8,25})", re.I)
+        matched, errors = 0, []
+        for r in rows:
+            try:
+                resp = bsvc.get_post_status(r["blotato_post_id"])
+                tid = ""
+                # Walk every string in the response looking for a TikTok video URL.
+                stack = [resp]
+                while stack:
+                    cur = stack.pop()
+                    if isinstance(cur, dict):
+                        stack.extend(cur.values())
+                    elif isinstance(cur, list):
+                        stack.extend(cur)
+                    elif isinstance(cur, str):
+                        m = url_re.search(cur)
+                        if m:
+                            tid = m.group(1)
+                            break
+                if tid:
+                    with _open_db(self.db_path) as conn:
+                        conn.execute(
+                            "UPDATE tk_videos SET tiktok_video_id = ? WHERE id = ?",
+                            (tid, r["id"]),
+                        )
+                        conn.commit()
+                    matched += 1
+                    logger.info("video #%d → tiktok_video_id %s", r["id"], tid)
+            except Exception as e:
+                errors.append({"video_id": r["id"], "error": f"{type(e).__name__}: {e}"[:200]})
+        return {"checked": len(rows), "matched": matched, "errors": errors}
+
     def dispatch_due(self) -> dict[str, Any]:
         """Send every tk_videos row with status='scheduled' and scheduled_at<=now.
 
@@ -435,62 +497,66 @@ class TKVideoService:
             conn.commit()
 
     def refresh_metrics_for_published(self) -> dict[str, Any]:
-        """B.2 — pull TK Display metrics for every published video, append a metrics row.
+        """B.2 — append a tk_video_metrics row for every published video that
+        has its tiktok_video_id resolved.
 
-        Skips videos whose ``account_open_id`` isn't in our token store
-        (TikTok Display API needs per-account OAuth).
+        Precise match: groups by account_open_id, paginates TikTok Display
+        get_video_list, writes a metrics row only when the API result's id
+        equals our stored tiktok_video_id. Videos still missing a
+        tiktok_video_id are reported in ``pending_id`` so the operator
+        knows to run refresh_dispatch_status first.
         """
         from src.services.tiktok.tiktok_display_service import TikTokDisplayService
         tsvc = TikTokDisplayService()
         if not tsvc.is_configured():
-            return {"checked": 0, "appended": 0, "errors": ["TikTok client key/secret not set"]}
+            return {"checked": 0, "appended": 0, "pending_id": 0,
+                    "errors": ["TikTok client key/secret not set"]}
 
         with _open_db(self.db_path) as conn:
             videos = conn.execute(
                 """
-                SELECT v.id, v.account_open_id, v.blotato_post_id, v.published_at
+                SELECT v.id, v.account_open_id, v.tiktok_video_id
                   FROM tk_videos v
                  WHERE v.publish_status = 'published'
                    AND v.account_open_id != ''
                 """,
             ).fetchall()
-        appended, errors = 0, []
-        # Group videos by account so we paginate the API once per account
+        if not videos:
+            return {"checked": 0, "appended": 0, "pending_id": 0, "errors": []}
+
+        pending_id = sum(1 for v in videos if not v["tiktok_video_id"])
+        with_id = [v for v in videos if v["tiktok_video_id"]]
+
         by_account: dict[str, list[sqlite3.Row]] = {}
-        for v in videos:
+        for v in with_id:
             by_account.setdefault(v["account_open_id"], []).append(v)
 
-        for open_id, _vs in by_account.items():
+        appended, errors = 0, []
+        for open_id, vs in by_account.items():
             try:
                 token = tsvc.get_valid_token(open_id)
                 if not token:
                     errors.append({"open_id": open_id, "error": "no valid token"})
                     continue
-                # Fetch up to 50 most recent videos for this account
-                video_list = tsvc.get_video_list(token["access_token"], max_count=50)
-                # Index by Blotato-side ID isn't possible; we match by
-                # caption-uniqueness via the embed link; for now we just
-                # write ALL items keyed by their tiktok video id and let
-                # the analytics page join on whichever id matches. Simpler
-                # fallback: append the latest video's metrics to every
-                # published video for this account that doesn't yet have
-                # a row in the last hour.
-                items = video_list.get("data", {}).get("videos", []) or []
-                for item in items:
-                    tid = str(item.get("id") or "")
-                    if not tid:
-                        continue
-                    # Best-effort match: if we ever wired tiktok_video_id
-                    # we'd join here; for now we just record per account.
-                    # The dashboard joins by post creation time proximity.
-                    pass
-                # Safer: write a "snapshot" row per published video for now
+                wanted_ids = {v["tiktok_video_id"]: v for v in vs}
+                # Paginate up to a reasonable cap to find the wanted IDs.
+                cursor = 0
+                pages = 0
+                found: dict[str, dict] = {}
+                while pages < 5 and len(found) < len(wanted_ids):
+                    page = tsvc.get_video_list(token["access_token"], max_count=20, cursor=cursor)
+                    items = page.get("videos") or []
+                    for item in items:
+                        tid = str(item.get("id") or "")
+                        if tid in wanted_ids:
+                            found[tid] = item
+                    cursor = page.get("cursor") or 0
+                    if not page.get("has_more"):
+                        break
+                    pages += 1
                 with _open_db(self.db_path) as conn:
-                    for v in _vs:
-                        # Pick the most recent items as a proxy for v
-                        if not items:
-                            continue
-                        latest = items[0]
+                    for tid, item in found.items():
+                        v = wanted_ids[tid]
                         conn.execute(
                             """
                             INSERT INTO tk_video_metrics
@@ -500,18 +566,25 @@ class TKVideoService:
                             """,
                             (
                                 v["id"],
-                                int(latest.get("view_count") or 0),
-                                int(latest.get("like_count") or 0),
-                                int(latest.get("comment_count") or 0),
-                                int(latest.get("share_count") or 0),
+                                int(item.get("view_count") or 0),
+                                int(item.get("like_count") or 0),
+                                int(item.get("comment_count") or 0),
+                                int(item.get("share_count") or 0),
                                 int(time.time()),
                             ),
                         )
                         appended += 1
                     conn.commit()
+                missing = set(wanted_ids) - set(found)
+                if missing:
+                    errors.append({
+                        "open_id": open_id,
+                        "error": f"missed in API: {sorted(missing)[:5]}",
+                    })
             except Exception as e:
                 errors.append({"open_id": open_id, "error": f"{type(e).__name__}: {e}"[:200]})
-        return {"checked": len(videos), "appended": appended, "errors": errors}
+        return {"checked": len(videos), "appended": appended,
+                "pending_id": pending_id, "errors": errors}
 
     def update_caption_manual(self, video_id: int, caption: str,
                               hashtags: list[str]) -> bool:
@@ -537,6 +610,7 @@ class TKVideoService:
         *,
         pack_id: Optional[int] = None,
         publish_status: Optional[str] = None,
+        with_latest_metrics: bool = False,
         limit: int = 100,
     ) -> tuple[list[dict], int]:
         clauses, params = [], []
@@ -555,8 +629,8 @@ class TKVideoService:
                 f"""
                 SELECT v.id, v.pack_id, v.account_open_id, v.local_video_path,
                        v.video_one_liner, v.caption, v.hashtags,
-                       v.scheduled_at, v.blotato_post_id, v.publish_status,
-                       v.published_at, v.publish_error,
+                       v.scheduled_at, v.blotato_post_id, v.tiktok_video_id,
+                       v.publish_status, v.published_at, v.publish_error,
                        p.display_name AS pack_name, p.cover_image_path AS pack_cover
                   FROM tk_videos v
              LEFT JOIN packs     p ON p.id = v.pack_id
@@ -566,14 +640,26 @@ class TKVideoService:
                 """,
                 tuple(params) + (limit,),
             ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["hashtags"] = json.loads(d.get("hashtags") or "[]")
-            except Exception:
-                d["hashtags"] = []
-            out.append(d)
+            out = []
+            for r in rows:
+                d = dict(r)
+                try:
+                    d["hashtags"] = json.loads(d.get("hashtags") or "[]")
+                except Exception:
+                    d["hashtags"] = []
+                if with_latest_metrics:
+                    m = conn.execute(
+                        """
+                        SELECT view_count, like_count, comment_count,
+                               share_count, fetched_at
+                          FROM tk_video_metrics
+                         WHERE video_id = ?
+                         ORDER BY fetched_at DESC LIMIT 1
+                        """,
+                        (d["id"],),
+                    ).fetchone()
+                    d["latest_metrics"] = dict(m) if m else None
+                out.append(d)
         return out, total
 
     def get_video(self, video_id: int) -> Optional[dict]:
