@@ -82,12 +82,15 @@ class AIRouter:
     actual call's success/failure is preserved upstream.
     """
 
-    # Default models per task family. Override at call site if needed.
-    DEFAULT_TEXT_MODEL = "gpt-5.4-pro"
-    DEFAULT_EXTRACT_MODEL = "gpt-4o-mini"
-    # gpt-image-1 is the model name aihubmix actually exposes (W1.8 POC).
-    # When a native OpenAI key + true gpt-image-2 is wired, override at call site.
-    DEFAULT_IMAGE_MODEL = "gpt-image-1"
+    # Default models per task family. Pulled from env so we can switch without
+    # touching code when the native OpenAI key (or another vendor) lands.
+    # Today's defaults (verified against AiHubMix middleman):
+    #   text    : gpt-5.4         (gpt-5.4-pro is not exposed on chat/completions)
+    #   extract : gpt-4o          (gpt-4o-mini may or may not be exposed)
+    #   image   : gpt-image-1     (W1.8 POC)
+    DEFAULT_TEXT_MODEL = os.getenv("V2_AI_TEXT_MODEL", "gpt-5.4")
+    DEFAULT_EXTRACT_MODEL = os.getenv("V2_AI_EXTRACT_MODEL", "gpt-4o")
+    DEFAULT_IMAGE_MODEL = os.getenv("V2_AI_IMAGE_MODEL", "gpt-image-1")
 
     def __init__(self) -> None:
         self._openai: Optional[OpenAIService] = None

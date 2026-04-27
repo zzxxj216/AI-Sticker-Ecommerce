@@ -1,0 +1,85 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.2 · Topic Plans</p>
+    <h1>题材规划</h1>
+    <p class="page-subtitle">从热点选一条 → 配数量（套数 / 每套预览 / 每张含 sticker）→ 两步生成（主模型自由产出 + 提取模型转 JSON）。</p>
+  </div>
+  <div>
+    <a href="/v2/topic-plans/new" class="button"
+       style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;text-decoration:none;font-weight:600;">
+      + 新建题材方案
+    </a>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:12px;">
+  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+    <span style="font-size:13px;font-weight:600;">状态：</span>
+    {% for st, label in [('all','全部'),('ready','已就绪'),('generating','生成中'),('draft_extract_failed','提取失败'),('draft_main_failed','主模型失败')] %}
+    <a href="?status={{ st }}{% if topic_id_filter %}&topic_id={{ topic_id_filter }}{% endif %}"
+       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}ok{% else %}pending{% endif %}"
+       style="text-decoration:none;cursor:pointer;">
+       {{ label }}
+    </a>
+    {% endfor %}
+    {% if topic_id_filter %}
+      <span style="font-size:12px;color:var(--text-muted);">过滤：topic #{{ topic_id_filter }}
+        <a href="?status={{ status_filter or 'all' }}" style="color:var(--accent);text-decoration:none;margin-left:6px;">清除</a>
+      </span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">{{ total }} 个方案</h3>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
+    <table style="width:100%;font-size:13px;min-width:900px;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);">
+          <th style="padding:8px 0;">#</th>
+          <th>topic</th>
+          <th style="text-align:right;">配置</th>
+          <th>状态</th>
+          <th style="text-align:right;">系列</th>
+          <th>updated</th>
+          <th style="text-align:right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in plans %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:8px 0;color:var(--text-muted);">{{ p.id }}</td>
+          <td>
+            <a href="/v2/topic-plans/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ (p.topic_name or '—')[:60] }}</a>
+            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;"><code>{{ p.topic_source or '—' }}</code> · #{{ p.topic_id }}</div>
+          </td>
+          <td style="text-align:right;color:var(--text-muted);font-size:12px;">
+            {{ p.config.get('series_count', '?') }}套×{{ p.config.get('previews_per_series', '?') }}图×{{ p.config.get('stickers_per_preview', '?') }}贴
+          </td>
+          <td>
+            <span class="v2-status-pill {% if p.status == 'ready' %}ok{% elif p.status == 'generating' %}running{% elif 'failed' in p.status %}error{% else %}pending{% endif %}">{{ p.status }}</span>
+          </td>
+          <td style="text-align:right;">
+            {% if p.series_count %}{{ p.selected_count }}/{{ p.series_count }}{% else %}—{% endif %}
+          </td>
+          <td style="color:var(--text-muted);font-size:12px;">{{ p.updated_human }}</td>
+          <td style="text-align:right;">
+            <a href="/v2/topic-plans/{{ p.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+          {% if total == 0 %}暂无题材方案 — 先去 <a href="/v2/hot-topics" style="color:var(--accent);">热点池</a>选一条进入“题材规划”{% else %}当前过滤无结果{% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}

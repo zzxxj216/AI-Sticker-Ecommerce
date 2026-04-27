@@ -1,0 +1,149 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.2 · Topic Plan Detail</p>
+    <h1>方案 #{{ plan.id }}</h1>
+    <p class="page-subtitle">
+      基于热点 <a href="/v2/hot-topics/{{ plan.topic_id }}" style="color:var(--accent);">{{ plan.topic_name }}</a>
+      · 配置 {{ plan.config.get('series_count', '?') }} 套 × {{ plan.config.get('previews_per_series', '?') }} 图 × {{ plan.config.get('stickers_per_preview', '?') }} 贴
+    </p>
+  </div>
+  <div>
+    <a href="/v2/topic-plans" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:16px;">
+  <div style="padding:18px 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:18px;">
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">状态</div>
+      <div style="margin-top:4px;">
+        <span class="v2-status-pill {% if plan.status == 'ready' %}ok{% elif 'failed' in plan.status %}error{% elif plan.status == 'generating' %}running{% else %}pending{% endif %}">{{ plan.status }}</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">main 模型</div>
+      <div style="margin-top:4px;font-family:monospace;font-size:12px;">{{ plan.config.get('main_model', '—') }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">extract 模型</div>
+      <div style="margin-top:4px;font-family:monospace;font-size:12px;">{{ plan.config.get('extract_model', '—') }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">updated</div>
+      <div style="margin-top:4px;color:var(--text-muted);font-size:12px;">{{ plan.updated_human }}</div>
+    </div>
+  </div>
+</section>
+
+{% if 'failed' in plan.status %}
+<section class="panel" style="margin-bottom:16px;border-left:3px solid var(--danger);">
+  <div style="padding:16px 24px;">
+    <h3 style="margin:0 0 8px;font-size:14px;color:var(--danger);">⚠ 生成未完成</h3>
+    <p style="margin:0;color:var(--text-muted);font-size:13px;">
+      {% if plan.status == 'draft_extract_failed' %}
+        主模型已写出 markdown（见下方 raw 内容），但提取模型未能转成结构化 JSON。可去 /v2/system/ai-logs 查看错误详情。
+      {% elif plan.status == 'draft_main_failed' %}
+        主模型调用失败。详见 <a href="/v2/system/ai-logs" style="color:var(--accent);">AI 调用日志</a>。
+      {% endif %}
+    </p>
+    {% if plan.series_payload.get('_error') %}
+    <pre style="margin:8px 0 0;font-size:11px;color:var(--text-muted);background:var(--bg-subtle);padding:8px;border-radius:6px;">{{ plan.series_payload['_error'] }}</pre>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<!-- 系列卡片 -->
+{% if plan.series %}
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">{{ plan.series|length }} 个系列</h3>
+    <span style="font-size:12px;color:var(--text-muted);">勾选/取消 = 控制 A.3 是否生成预览图</span>
+  </div>
+  <div style="padding:0 24px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px;">
+    {% for s in plan.series %}
+    <div class="panel" style="padding:16px;{% if not s.is_selected %}opacity:.55;{% endif %}">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;margin-bottom:8px;">
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">系列 #{{ s.series_idx }}</div>
+          <h4 style="margin:2px 0 0;font-size:15px;">{{ s.series_name }}</h4>
+        </div>
+        <form method="post" action="/v2/topic-plans/{{ plan.id }}/series/{{ s.id }}/toggle" style="display:inline;">
+          <input type="hidden" name="is_selected" value="{{ 0 if s.is_selected else 1 }}">
+          <button type="submit"
+                  style="padding:4px 10px;background:{% if s.is_selected %}var(--success){% else %}var(--surface){% endif %};color:{% if s.is_selected %}#fff{% else %}var(--text-muted){% endif %};border:1px solid {% if s.is_selected %}var(--success){% else %}var(--line){% endif %};border-radius:6px;font-size:11px;cursor:pointer;font-weight:600;">
+            {% if s.is_selected %}✓ 已选用{% else %}+ 选用{% endif %}
+          </button>
+        </form>
+      </div>
+
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+        <span class="v2-status-pill {% if s.priority == 'high' %}ok{% elif s.priority == 'low' %}pending{% else %}running{% endif %}">{{ s.priority }}</span>
+        {% if s.pack_archetype %}<span class="v2-status-pill pending">{{ s.pack_archetype }}</span>{% endif %}
+      </div>
+
+      {% if s.metadata.positioning_cn %}
+      <p style="margin:0 0 8px;font-size:12px;color:var(--text-secondary);">{{ s.metadata.positioning_cn }}</p>
+      {% endif %}
+
+      {% if s.metadata.title_en %}
+      <div style="margin:8px 0;padding:8px 10px;background:var(--bg-subtle);border-radius:6px;font-size:12px;">
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;">title_en</div>
+        {{ s.metadata.title_en }}
+      </div>
+      {% endif %}
+
+      {% if s.style_anchor %}
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);">style_anchor & palette</summary>
+        <pre style="margin:6px 0 0;font-size:11px;white-space:pre-wrap;color:var(--text-secondary);background:var(--bg-subtle);padding:8px;border-radius:6px;">{{ s.style_anchor }}
+
+palette: {{ s.palette }}</pre>
+      </details>
+      {% endif %}
+
+      {% if s.metadata.preview_briefs %}
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);">{{ s.metadata.preview_briefs|length }} 张预览图概要</summary>
+        <div style="margin-top:8px;font-size:11px;">
+          {% for pb in s.metadata.preview_briefs %}
+          <div style="padding:6px 0;border-top:1px dashed var(--line-soft);">
+            <strong>预览 #{{ pb.preview_idx }}</strong> — {{ pb.theme }}
+            <ul style="margin:4px 0 0;padding-left:16px;color:var(--text-muted);">
+              {% for st in pb.stickers %}<li>{{ st }}</li>{% endfor %}
+            </ul>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--text-muted);">
+        ↓ A.3 (W2.3) 会用 style_anchor + preview_briefs 调 image-gen
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<!-- raw markdown -->
+<section class="panel" style="margin-bottom:16px;">
+  <details {% if not plan.series %}open{% endif %}>
+    <summary style="padding:16px 24px;cursor:pointer;font-size:14px;font-weight:600;">主模型 markdown 原文 ({{ plan.main_raw_text|length }} 字符)</summary>
+    <pre style="padding:0 24px 20px;margin:0;font-size:12px;color:var(--text-secondary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:8px;margin:0 24px 20px;padding:14px;">{{ plan.main_raw_text }}</pre>
+  </details>
+</section>
+
+<!-- raw json payload -->
+<section class="panel">
+  <details>
+    <summary style="padding:16px 24px;cursor:pointer;font-size:14px;font-weight:600;">提取后 series_payload (JSON)</summary>
+    <pre style="padding:0 24px 20px;margin:0;font-size:12px;color:var(--text-muted);overflow-x:auto;background:var(--bg-subtle);border-radius:8px;margin:0 24px 20px;padding:14px;">{{ series_payload_json }}</pre>
+  </details>
+</section>
+
+{% endblock %}

@@ -1,0 +1,98 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.2 · Generate Topic Plan</p>
+    <h1>新建题材方案</h1>
+    <p class="page-subtitle">两步生成：① 主模型 (gpt-5.4-pro) 写 markdown 方案 ② 提取模型 (gpt-4o-mini) 转 JSON。生成耗时约 30-90 秒。</p>
+  </div>
+  <div>
+    <a href="/v2/topic-plans" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  </div>
+</section>
+
+{% if not topic %}
+<section class="panel" style="padding:24px;">
+  <h3 style="margin:0 0 12px;font-size:15px;">先选一个热点</h3>
+  <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px;">题材规划基于热点池里的某一条。请先选定一条已 selected / pending 的热点。</p>
+  <a href="/v2/hot-topics" class="button"
+     style="display:inline-block;padding:8px 16px;background:var(--accent);color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">
+    去热点池选 →
+  </a>
+</section>
+{% else %}
+
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">已选热点</h3>
+  </div>
+  <div style="padding:0 24px 18px;display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;">
+    <div>
+      <span class="v2-status-pill {% if topic.status == 'selected' %}ok{% else %}pending{% endif %}">{{ topic.status }}</span>
+    </div>
+    <div>
+      <div style="font-weight:600;">{{ topic.topic_name }}</div>
+      <div style="color:var(--text-muted);font-size:12px;margin-top:2px;">
+        <code>{{ topic.source }}</code> · query: <code>{{ topic.query or '—' }}</code> · region: {{ topic.region or 'US' }}
+      </div>
+    </div>
+    <a href="/v2/hot-topics/{{ topic.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">查看 →</a>
+  </div>
+</section>
+
+<form method="post" action="/v2/topic-plans/generate" id="gen-form">
+  <input type="hidden" name="topic_id" value="{{ topic.id }}">
+
+  <section class="panel" style="margin-bottom:16px;">
+    <div class="panel-header" style="padding:16px 24px;">
+      <h3 style="margin:0;font-size:16px;">参数配置</h3>
+    </div>
+    <div style="padding:0 24px 20px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px;">
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">套数 (series_count)</label>
+        <input type="number" name="series_count" min="1" max="10" value="{{ defaults.series_count }}" required
+               style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;">
+        <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">每套是一个独立风格系列。</p>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">每套预览图 (previews_per_series)</label>
+        <input type="number" name="previews_per_series" min="1" max="10" value="{{ defaults.previews_per_series }}" required
+               style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;">
+        <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">A.3 会按此数量调 image-gen。</p>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">每张含 sticker (stickers_per_preview)</label>
+        <input type="number" name="stickers_per_preview" min="1" max="20" value="{{ defaults.stickers_per_preview }}" required
+               style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;">
+        <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">A.3 会切成相同数量的单图。</p>
+      </div>
+    </div>
+    <div style="padding:0 24px 20px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">额外说明（可选）</label>
+      <textarea name="extra_brief" rows="3" placeholder="例如：偏 Y2K 风、避开军事题材、本批面向 Z 世代..."
+                style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;"></textarea>
+    </div>
+    <div style="padding:0 24px 20px;display:flex;gap:10px;align-items:center;">
+      <button type="submit" id="gen-btn" class="button"
+              style="padding:10px 24px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        生成方案
+      </button>
+      <span style="color:var(--text-muted);font-size:12px;">点击后会同步等待 AI 返回（约 30-90s）。</span>
+    </div>
+  </section>
+</form>
+
+<script>
+  document.getElementById('gen-form').addEventListener('submit', function() {
+    var btn = document.getElementById('gen-btn');
+    btn.disabled = true;
+    btn.textContent = '生成中... (这会花 30-90 秒)';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  });
+</script>
+
+{% endif %}
+
+{% endblock %}

@@ -26,6 +26,12 @@ from fastapi.templating import Jinja2Templates
 
 from src.core.logger import get_logger
 from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_hot_topic_service
+from src.services.topic_plans import get_topic_plan_service
+from src.services.topic_plans.service import (
+    DEFAULT_PREVIEWS_PER_SERIES,
+    DEFAULT_SERIES_COUNT,
+    DEFAULT_STICKERS_PER_PREVIEW,
+)
 
 logger = get_logger("web.v2")
 
@@ -394,15 +400,125 @@ async def v2_hot_topic_set_status(request: Request, topic_id: int):
 
 
 @router.get("/topic-plans", response_class=HTMLResponse)
-def v2_topic_plans(request: Request):
-    return _placeholder(
-        request,
-        title="题材规划",
-        section_tag="A.2 · W2",
-        planned_in="W2 / A.2 任务",
-        related_table="topic_plans, pack_series",
-        description="人工选热点 + 配数量 → AI 两步生成（主模型自由产出 + 提取模型转 JSON）。",
+def v2_topic_plans_list(
+    request: Request,
+    status: str = "all",
+    topic_id: int | None = None,
+    limit: int = 50,
+):
+    svc = get_topic_plan_service()
+    plans, total = svc.list_plans(
+        topic_id=topic_id,
+        status=status if status != "all" else None,
+        limit=limit,
     )
+    for p in plans:
+        p["updated_human"] = _fmt_ts(p.get("updated_at"))
+    return templates.TemplateResponse(
+        "v2_topic_plans.html",
+        {
+            "request": request,
+            "page_title": "题材规划",
+            "plans": plans,
+            "total": total,
+            "status_filter": status,
+            "topic_id_filter": topic_id,
+        },
+    )
+
+
+@router.get("/topic-plans/new", response_class=HTMLResponse)
+def v2_topic_plan_new(request: Request, topic_id: int | None = None):
+    """Show the generate-plan form. Requires a ?topic_id= query param."""
+    topic = None
+    if topic_id is not None:
+        topic = get_hot_topic_service().get_topic(topic_id)
+        if not topic:
+            raise HTTPException(status_code=404, detail=f"hot_topic #{topic_id} not found")
+    return templates.TemplateResponse(
+        "v2_topic_plan_new.html",
+        {
+            "request": request,
+            "page_title": "新建题材方案",
+            "topic": topic,
+            "defaults": {
+                "series_count":         DEFAULT_SERIES_COUNT,
+                "previews_per_series":  DEFAULT_PREVIEWS_PER_SERIES,
+                "stickers_per_preview": DEFAULT_STICKERS_PER_PREVIEW,
+            },
+        },
+    )
+
+
+@router.post("/topic-plans/generate")
+async def v2_topic_plan_generate(request: Request):
+    """Run two-step generation synchronously, then redirect to detail."""
+    form = await request.form()
+    try:
+        topic_id = int(form.get("topic_id") or 0)
+        series_count = int(form.get("series_count") or DEFAULT_SERIES_COUNT)
+        previews_per_series = int(form.get("previews_per_series") or DEFAULT_PREVIEWS_PER_SERIES)
+        stickers_per_preview = int(form.get("stickers_per_preview") or DEFAULT_STICKERS_PER_PREVIEW)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"bad number: {e}")
+    extra_brief = (form.get("extra_brief") or "").strip()
+
+    if topic_id <= 0:
+        raise HTTPException(status_code=400, detail="topic_id required")
+
+    svc = get_topic_plan_service()
+    try:
+        result = svc.generate_plan(
+            topic_id,
+            series_count=series_count,
+            previews_per_series=previews_per_series,
+            stickers_per_preview=stickers_per_preview,
+            extra_brief=extra_brief,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("topic plan generation failed")
+        raise HTTPException(status_code=500, detail=f"generation failed: {e}")
+
+    logger.info(
+        "topic_plan #%d generated for topic #%d (status=%s, series=%d, main_chars=%d)",
+        result["plan_id"], topic_id, result["status"],
+        result["series_count"], result["main_chars"],
+    )
+    return RedirectResponse(url=f"/v2/topic-plans/{result['plan_id']}", status_code=303)
+
+
+@router.get("/topic-plans/{plan_id:int}", response_class=HTMLResponse)
+def v2_topic_plan_detail(request: Request, plan_id: int):
+    svc = get_topic_plan_service()
+    plan = svc.get_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="plan not found")
+    plan["updated_human"] = _fmt_ts(plan.get("updated_at"))
+    series_payload_json = _json.dumps(plan.get("series_payload") or {}, ensure_ascii=False, indent=2)
+    return templates.TemplateResponse(
+        "v2_topic_plan_detail.html",
+        {
+            "request": request,
+            "page_title": f"方案 #{plan_id}",
+            "plan": plan,
+            "series_payload_json": series_payload_json,
+        },
+    )
+
+
+@router.post("/topic-plans/{plan_id:int}/series/{series_id:int}/toggle")
+async def v2_topic_plan_series_toggle(
+    request: Request, plan_id: int, series_id: int,
+):
+    form = await request.form()
+    is_selected = (form.get("is_selected") or "0").strip() == "1"
+    svc = get_topic_plan_service()
+    ok = svc.toggle_series_selection(series_id, is_selected)
+    if not ok:
+        raise HTTPException(status_code=404, detail="series not found")
+    return RedirectResponse(url=f"/v2/topic-plans/{plan_id}", status_code=303)
 
 
 @router.get("/packs", response_class=HTMLResponse)
