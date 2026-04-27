@@ -1,0 +1,87 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">B.1 · New Video</p>
+    <h1>新建 TK 视频</h1>
+    <p class="page-subtitle">从某个卡包出发，上传视频文件 + 写一句话描述视频内容（AI 文案的输入素材）。</p>
+  </div>
+  <div>
+    <a href="/v2/videos" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  </div>
+</section>
+
+<form method="post" action="/v2/videos" enctype="multipart/form-data">
+
+  <section class="panel" style="margin-bottom:16px;">
+    <div class="panel-header" style="padding:16px 24px;">
+      <h3 style="margin:0;font-size:16px;">关联卡包</h3>
+    </div>
+    <div style="padding:0 24px 18px;">
+      {% if pack %}
+      <input type="hidden" name="pack_id" value="{{ pack.id }}">
+      <div style="display:flex;align-items:center;gap:12px;">
+        {% if pack.cover_url %}<img src="{{ pack.cover_url }}" style="width:48px;height:48px;border-radius:6px;object-fit:cover;">{% endif %}
+        <div>
+          <div style="font-weight:600;">{{ pack.display_name }}</div>
+          <div style="color:var(--text-muted);font-size:12px;">pack_uid <code>{{ pack.pack_uid }}</code> · {{ pack.total_stickers }} stickers</div>
+        </div>
+      </div>
+      {% else %}
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">选择卡包</label>
+      <select name="pack_id" required
+              style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;">
+        <option value="">— 请选择 —</option>
+        {% for p in active_packs %}
+        <option value="{{ p.id }}">[{{ p.id }}] {{ p.display_name }} ({{ p.total_stickers }} 张)</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel" style="margin-bottom:16px;">
+    <div class="panel-header" style="padding:16px 24px;">
+      <h3 style="margin:0;font-size:16px;">视频文件 (mp4 / mov / webm)</h3>
+    </div>
+    <div style="padding:0 24px 18px;">
+      <input type="file" name="video_file" accept="video/mp4,video/quicktime,video/webm"
+             style="font-size:13px;">
+      <p style="margin:8px 0 0;font-size:11px;color:var(--text-muted);">可以稍后上传。文件保存到 output/packs/{pack_uid}/videos/{video_id}/local.mp4。</p>
+    </div>
+  </section>
+
+  <section class="panel" style="margin-bottom:16px;">
+    <div class="panel-header" style="padding:16px 24px;">
+      <h3 style="margin:0;font-size:16px;">视频一句话描述（中文也可，AI 会翻译加工）</h3>
+    </div>
+    <div style="padding:0 24px 18px;">
+      <textarea name="video_one_liner" rows="3" placeholder="例如：unboxing of the black gold grad pack with cap-toss confetti shot at the end"
+                style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;"></textarea>
+      <p style="margin:8px 0 0;font-size:11px;color:var(--text-muted);">这段会作为 AI 文案生成的最重要 context。</p>
+    </div>
+  </section>
+
+  <section class="panel" style="margin-bottom:16px;">
+    <div class="panel-header" style="padding:16px 24px;">
+      <h3 style="margin:0;font-size:16px;">TK 账号 open_id（可选）</h3>
+    </div>
+    <div style="padding:0 24px 18px;">
+      <input type="text" name="account_open_id" placeholder="（留空 = 走 Blotato 默认账号）"
+             style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+    </div>
+  </section>
+
+  <section class="panel">
+    <div style="padding:18px 24px;display:flex;gap:10px;align-items:center;">
+      <button type="submit" class="button"
+              style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        创建视频
+      </button>
+      <span style="color:var(--text-muted);font-size:12px;">下一步：详情页生成 AI 文案 → 排期 → 发送（Blotato）。</span>
+    </div>
+  </section>
+</form>
+
+{% endblock %}

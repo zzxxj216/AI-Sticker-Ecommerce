@@ -1,0 +1,148 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">B.1 · Video Detail</p>
+    <h1>视频 #{{ video.id }} <span style="font-weight:400;color:var(--text-muted);">— {{ video.pack_name }}</span></h1>
+    <p class="page-subtitle">
+      pack <a href="/v2/packs/{{ video.pack_id }}" style="color:var(--accent);">#{{ video.pack_id }}</a>
+      · pack_uid <code>{{ video.pack_uid }}</code>
+      · <span class="v2-status-pill {% if video.publish_status == 'published' %}ok{% elif video.publish_status == 'failed' %}error{% elif video.publish_status == 'dispatching' %}running{% else %}pending{% endif %}">{{ video.publish_status }}</span>
+    </p>
+  </div>
+  <div>
+    <a href="/v2/videos" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  </div>
+</section>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+
+  <!-- 视频文件 -->
+  <section class="panel" style="padding:14px;">
+    <h3 style="margin:0 0 8px;font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">视频文件</h3>
+    {% if video.video_url %}
+    <video controls preload="metadata" style="width:100%;border-radius:8px;display:block;background:#000;">
+      <source src="{{ video.video_url }}">
+    </video>
+    <div style="margin-top:8px;font-size:11px;color:var(--text-muted);"><code>{{ video.local_video_path }}</code></div>
+    {% else %}
+    <div style="aspect-ratio:9/16;background:var(--bg-subtle);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px;">尚未上传视频</div>
+    {% endif %}
+  </section>
+
+  <!-- pack 封面参考 -->
+  <section class="panel" style="padding:14px;">
+    <h3 style="margin:0 0 8px;font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">关联卡包封面</h3>
+    {% if video.pack_cover_url %}
+    <img src="{{ video.pack_cover_url }}" style="width:100%;border-radius:8px;display:block;background:#f5f5f5;">
+    {% endif %}
+  </section>
+</div>
+
+<!-- 元数据编辑 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:14px 24px;">
+    <h3 style="margin:0;font-size:14px;">视频元数据</h3>
+  </div>
+  <form method="post" action="/v2/videos/{{ video.id }}/edit-meta" style="padding:0 24px 18px;">
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">一句话描述</label>
+      <textarea name="video_one_liner" rows="2"
+                style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;">{{ video.video_one_liner }}</textarea>
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">TK account open_id</label>
+      <input type="text" name="account_open_id" value="{{ video.account_open_id }}"
+             style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+    </div>
+    <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">保存</button>
+  </form>
+</section>
+
+<!-- AI 文案生成 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">AI 文案（英文 / 两步生成）</h3>
+    <form method="post" action="/v2/videos/{{ video.id }}/generate-caption" id="gen-cap-form" style="display:inline;">
+      <button type="submit" id="gen-cap-btn"
+              style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        {% if video.caption %}↻ 重新生成{% else %}生成文案 + Hashtag{% endif %}
+      </button>
+    </form>
+  </div>
+  <div style="padding:0 24px 18px;">
+    <form method="post" action="/v2/videos/{{ video.id }}/edit-caption">
+      <div style="margin-bottom:10px;">
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">caption (en)</label>
+        <textarea name="caption" rows="3" maxlength="500"
+                  style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;font-family:inherit;">{{ video.caption }}</textarea>
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">hashtags (one per line, leading # 自动补)</label>
+        <textarea name="hashtags" rows="6"
+                  style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:12px;resize:vertical;font-family:monospace;">{% for t in video.hashtags %}{{ t }}
+{% endfor %}</textarea>
+      </div>
+      <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;">手工保存</button>
+    </form>
+  </div>
+</section>
+
+<!-- 排期 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">发布排期</h3>
+  </div>
+  <form method="post" action="/v2/videos/{{ video.id }}/schedule" style="padding:0 24px 18px;display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
+    <div>
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">scheduled_at（本地时间）</label>
+      <input type="datetime-local" name="scheduled_at"
+             style="padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+    </div>
+    <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">设置 / 更新排期</button>
+    <span style="color:var(--text-muted);font-size:12px;">当前：{{ video.scheduled_human or '未排期' }}</span>
+  </form>
+  {% if video.scheduled_at %}
+  <form method="post" action="/v2/videos/{{ video.id }}/schedule" style="padding:0 24px 18px;">
+    <input type="hidden" name="scheduled_at" value="0">
+    <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;font-size:11px;">取消排期</button>
+  </form>
+  {% endif %}
+</section>
+
+<!-- 发布状态 -->
+{% if video.publish_status != 'pending' %}
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:14px 24px;">
+    <h3 style="margin:0;font-size:14px;">发布状态</h3>
+  </div>
+  <div style="padding:0 24px 18px;font-size:12px;color:var(--text-muted);">
+    <div>blotato_post_id: <code>{{ video.blotato_post_id or '—' }}</code></div>
+    <div>published_at: {{ video.published_human or '—' }}</div>
+    {% if video.publish_error %}
+    <div style="margin-top:6px;color:var(--danger);">error: {{ video.publish_error }}</div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<!-- raw markdown -->
+{% if video.caption_main_raw_text %}
+<section class="panel">
+  <details>
+    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">主模型 markdown 原文 ({{ video.caption_main_raw_text|length }} 字符)</summary>
+    <pre style="margin:0;padding:0 24px 18px;font-size:12px;color:var(--text-secondary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:8px;margin:0 24px 18px;padding:14px;">{{ video.caption_main_raw_text }}</pre>
+  </details>
+</section>
+{% endif %}
+
+<script>
+  document.getElementById('gen-cap-form').addEventListener('submit', function() {
+    var btn = document.getElementById('gen-cap-btn');
+    btn.disabled = true; btn.textContent = '生成中...（约 30-60s）';
+    btn.style.opacity = '0.6'; btn.style.cursor = 'not-allowed';
+  });
+</script>
+
+{% endblock %}

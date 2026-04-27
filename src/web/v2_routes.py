@@ -13,6 +13,7 @@ existing FastAPI app without disturbing the V1 routes.
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -28,6 +29,7 @@ from src.core.logger import get_logger
 from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_hot_topic_service
 from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
+from src.services.tk_videos import get_tk_video_service
 from src.services.topic_plans import get_topic_plan_service
 from src.services.topic_plans.service import (
     DEFAULT_PREVIEWS_PER_SERIES,
@@ -838,27 +840,207 @@ async def v2_pack_refresh_total(request: Request, pack_id: int):
     return RedirectResponse(url=f"/v2/packs/{pack_id}", status_code=303)
 
 
+# ----------------------------------------------------------------------
+# B.1 — TK videos (manual upload, AI caption two-step gen, schedule)
+# ----------------------------------------------------------------------
+
 @router.get("/videos", response_class=HTMLResponse)
-def v2_videos(request: Request):
-    return _placeholder(
-        request,
-        title="TK 视频管理",
-        section_tag="B.1 · W3",
-        planned_in="W3 / B.1 任务",
-        related_table="tk_videos",
-        description="人工上传视频 + AI 文案 + Hashtag（强制英文）+ 定时发送。",
+def v2_videos_list(
+    request: Request,
+    pack_id: int | None = None,
+    publish_status: str = "all",
+    limit: int = 100,
+):
+    svc = get_tk_video_service()
+    videos, total = svc.list_videos(
+        pack_id=pack_id,
+        publish_status=publish_status if publish_status != "all" else None,
+        limit=limit,
     )
+    for v in videos:
+        v["scheduled_human"] = _fmt_ts(v.get("scheduled_at"))
+        v["published_human"] = _fmt_ts(v.get("published_at"))
+        v["pack_cover_url"] = _path_to_v2_url(v.get("pack_cover") or "")
+    return templates.TemplateResponse(
+        "v2_videos.html",
+        {
+            "request": request,
+            "page_title": "TK 视频管理",
+            "videos": videos,
+            "total": total,
+            "pack_id_filter": pack_id,
+            "status_filter": publish_status,
+        },
+    )
+
+
+@router.get("/videos/new", response_class=HTMLResponse)
+def v2_video_new(request: Request, pack_id: int | None = None):
+    pack = None
+    if pack_id is not None:
+        pack = get_pack_service().get_pack(pack_id)
+        if not pack:
+            raise HTTPException(status_code=404, detail=f"pack #{pack_id} not found")
+        pack["cover_url"] = _path_to_v2_url(pack.get("cover_image_path") or "")
+    # Pull recent active packs as picker options when no pack_id provided.
+    packs, _ = get_pack_service().list_packs(status="active", limit=50)
+    for p in packs:
+        p["cover_url"] = _path_to_v2_url(p.get("cover_image_path") or "")
+    return templates.TemplateResponse(
+        "v2_video_new.html",
+        {
+            "request": request,
+            "page_title": "新建 TK 视频",
+            "pack": pack,
+            "active_packs": packs,
+        },
+    )
+
+
+@router.post("/videos")
+async def v2_video_create(request: Request):
+    """Create video row, then save uploaded file (multipart/form-data)."""
+    form = await request.form()
+    try:
+        pack_id = int(form.get("pack_id") or 0)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="pack_id must be int")
+    if pack_id <= 0:
+        raise HTTPException(status_code=400, detail="pack_id required")
+    account_open_id = (form.get("account_open_id") or "").strip()
+    one_liner = (form.get("video_one_liner") or "").strip()
+    upload = form.get("video_file")
+
+    svc = get_tk_video_service()
+    try:
+        video_id = svc.create_video(
+            pack_id, account_open_id=account_open_id,
+            video_one_liner=one_liner,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # If a file was uploaded, save it via PackStore.
+    if upload is not None and getattr(upload, "filename", ""):
+        import tempfile
+        tmp = Path(tempfile.mkdtemp()) / upload.filename
+        with open(tmp, "wb") as fh:
+            shutil.copyfileobj(upload.file, fh)
+        try:
+            svc.save_video_file(video_id, tmp, original_filename=upload.filename)
+        finally:
+            try:
+                tmp.unlink()
+                tmp.parent.rmdir()
+            except Exception:
+                pass
+
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
+
+
+@router.get("/videos/{video_id:int}", response_class=HTMLResponse)
+def v2_video_detail(request: Request, video_id: int):
+    svc = get_tk_video_service()
+    v = svc.get_video(video_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="video not found")
+    v["scheduled_human"] = _fmt_ts(v.get("scheduled_at"))
+    v["published_human"] = _fmt_ts(v.get("published_at"))
+    v["pack_cover_url"] = _path_to_v2_url(v.get("cover_image_path") or "")
+    v["video_url"] = _path_to_v2_url(v.get("local_video_path") or "")
+    return templates.TemplateResponse(
+        "v2_video_detail.html",
+        {
+            "request": request,
+            "page_title": f"视频 #{video_id}",
+            "video": v,
+        },
+    )
+
+
+@router.post("/videos/{video_id:int}/generate-caption")
+async def v2_video_generate_caption(request: Request, video_id: int):
+    svc = get_tk_video_service()
+    try:
+        result = svc.generate_caption(video_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("generate_caption failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("video #%d caption: extract_ok=%s caption=%r",
+                video_id, result["extract_ok"], result.get("caption", "")[:80])
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
+
+
+@router.post("/videos/{video_id:int}/edit-caption")
+async def v2_video_edit_caption(request: Request, video_id: int):
+    form = await request.form()
+    caption = (form.get("caption") or "").strip()
+    raw_tags = (form.get("hashtags") or "").strip()
+    # Accept either newline-separated or space-separated; preserve "#"
+    tags: list[str] = []
+    for t in raw_tags.replace("\r", "").splitlines():
+        for piece in t.split():
+            piece = piece.strip()
+            if piece:
+                tags.append(piece if piece.startswith("#") else f"#{piece}")
+    svc = get_tk_video_service()
+    if not svc.update_caption_manual(video_id, caption, tags):
+        raise HTTPException(status_code=404, detail="video not found")
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
+
+
+@router.post("/videos/{video_id:int}/edit-meta")
+async def v2_video_edit_meta(request: Request, video_id: int):
+    form = await request.form()
+    one_liner = (form.get("video_one_liner") or "").strip()
+    account = (form.get("account_open_id") or "").strip()
+    svc = get_tk_video_service()
+    svc.update_one_liner(video_id, one_liner)
+    svc.update_account(video_id, account)
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
+
+
+@router.post("/videos/{video_id:int}/schedule")
+async def v2_video_schedule(request: Request, video_id: int):
+    form = await request.form()
+    raw = (form.get("scheduled_at") or "").strip()
+    if not raw or raw == "0":
+        ts = 0
+    else:
+        # Accept "YYYY-MM-DDTHH:MM" (HTML datetime-local input, local time)
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(raw)
+            ts = int(dt.timestamp())
+        except ValueError:
+            try:
+                ts = int(raw)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"bad scheduled_at: {raw!r}")
+    svc = get_tk_video_service()
+    if not svc.schedule_video(video_id, ts):
+        raise HTTPException(status_code=404, detail="video not found")
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
 
 
 @router.get("/analytics", response_class=HTMLResponse)
 def v2_analytics(request: Request):
-    return _placeholder(
-        request,
-        title="视频数据看板",
-        section_tag="B.3 · W3",
-        planned_in="W3 / B.3 任务",
-        related_table="tk_video_metrics",
-        description="2h 自动刷新（独立调度脚本已就绪），按互动率排序。",
+    """Quick metrics view — full B.3 dashboard lands later."""
+    svc = get_tk_video_service()
+    videos, total = svc.list_videos(publish_status="published", limit=200)
+    for v in videos:
+        v["pack_cover_url"] = _path_to_v2_url(v.get("pack_cover") or "")
+        v["published_human"] = _fmt_ts(v.get("published_at"))
+    return templates.TemplateResponse(
+        "v2_analytics.html",
+        {
+            "request": request,
+            "page_title": "TK 视频数据看板",
+            "videos": videos,
+            "total": total,
+        },
     )
 
 
