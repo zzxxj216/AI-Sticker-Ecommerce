@@ -1,0 +1,133 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.3 · Series Preview Generation</p>
+    <h1>系列 #{{ series.series_idx }} <span style="font-weight:400;color:var(--text-muted);">— {{ series.series_name }}</span></h1>
+    <p class="page-subtitle">
+      基于 <a href="/v2/topic-plans/{{ series.plan_id }}" style="color:var(--accent);">方案 #{{ series.plan_id }}</a>
+      · pack_uid: <code>{{ series.pack_uid or '（未生成）' }}</code>
+      · {{ series.status_summary.ok }}/{{ series.expected_count }} 已生成
+    </p>
+  </div>
+  <div>
+    <a href="/v2/topic-plans/{{ series.plan_id }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回方案</a>
+  </div>
+</section>
+
+<!-- 状态卡 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div style="padding:18px 24px;display:grid;grid-template-columns:repeat(5,1fr);gap:18px;">
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">总计</div>
+      <div style="margin-top:4px;font-weight:600;font-size:18px;">{{ series.status_summary.total }} / {{ series.expected_count }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">已生成</div>
+      <div style="margin-top:4px;font-weight:600;font-size:18px;color:var(--success);">{{ series.status_summary.ok }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">生成中</div>
+      <div style="margin-top:4px;font-weight:600;font-size:18px;color:var(--warning);">{{ series.status_summary.generating }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">失败</div>
+      <div style="margin-top:4px;font-weight:600;font-size:18px;color:var(--danger);">{{ series.status_summary.error }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">待生成</div>
+      <div style="margin-top:4px;font-weight:600;font-size:18px;color:var(--text-muted);">{{ series.status_summary.pending + (series.expected_count - series.status_summary.total) }}</div>
+    </div>
+  </div>
+</section>
+
+<!-- 操作 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">操作</h3>
+  </div>
+  <div style="padding:0 24px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <form method="post" action="/v2/series/{{ series.id }}/generate-previews" style="display:inline;" id="gen-form">
+      <button type="submit" class="button" id="gen-btn"
+              style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        生成 / 补齐预览图（{{ series.expected_count - series.status_summary.ok }} 张待办）
+      </button>
+    </form>
+    <span style="color:var(--text-muted);font-size:12px;">每张约 30-60s，3 张并发，全部完成后跳回此页。</span>
+  </div>
+</section>
+
+<!-- 风格锚点 -->
+{% if series.style_anchor %}
+<section class="panel" style="margin-bottom:16px;">
+  <details>
+    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">style_anchor (image-gen 用)</summary>
+    <div style="padding:0 24px 18px;">
+      <pre style="margin:0;font-size:12px;color:var(--text-secondary);background:var(--bg-subtle);padding:12px;border-radius:8px;white-space:pre-wrap;">{{ series.style_anchor }}</pre>
+      {% if series.palette %}<p style="margin:6px 0 0;font-size:12px;color:var(--text-muted);">palette: {{ series.palette }}</p>{% endif %}
+    </div>
+  </details>
+</section>
+{% endif %}
+
+<!-- 预览图网格 -->
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">预览图</h3>
+  </div>
+  <div style="padding:0 24px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
+    {% for p in series.previews %}
+    <div class="panel" style="padding:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div>
+          <span class="v2-section-tag">#{{ p.preview_idx }}</span>
+          <span style="margin-left:6px;font-size:13px;font-weight:600;">{{ p.brief.theme or '—' }}</span>
+        </div>
+        <span class="v2-status-pill {% if p.generation_status == 'ok' %}ok{% elif p.generation_status == 'error' %}error{% elif p.generation_status == 'generating' %}running{% else %}pending{% endif %}">{{ p.generation_status }}</span>
+      </div>
+
+      {% if p.image_url %}
+      <a href="/v2/previews/{{ p.id }}">
+        <img src="{{ p.image_url }}" alt="preview {{ p.preview_idx }}"
+             style="width:100%;border-radius:8px;display:block;background:#f5f5f5;">
+      </a>
+      {% else %}
+      <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px;">
+        {% if p.generation_status == 'generating' %}生成中…{% elif p.generation_status == 'error' %}失败 — 点击重新生成{% else %}尚未生成{% endif %}
+      </div>
+      {% endif %}
+
+      {% if p.brief.stickers %}
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);">{{ p.brief.stickers|length }} 个 sticker brief</summary>
+        <ul style="margin:6px 0 0;padding-left:16px;font-size:11px;color:var(--text-muted);">
+          {% for s in p.brief.stickers %}<li>{{ s }}</li>{% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+
+      <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted);">
+        <span>{{ p.generated_human or '—' }}</span>
+        <a href="/v2/previews/{{ p.id }}" style="color:var(--accent);text-decoration:none;">详情 →</a>
+      </div>
+    </div>
+    {% else %}
+    <div style="grid-column:1/-1;padding:30px 0;text-align:center;color:var(--text-muted);">
+      尚未创建任何预览图。点击上方“生成 / 补齐预览图”按钮自动从 metadata 的 preview_briefs 创建并生成。
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<script>
+  document.getElementById('gen-form').addEventListener('submit', function() {
+    var btn = document.getElementById('gen-btn');
+    btn.disabled = true;
+    btn.textContent = '生成中...（请勿离开此页）';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  });
+</script>
+
+{% endblock %}

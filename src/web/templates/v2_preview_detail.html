@@ -1,0 +1,85 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.3 · Preview Image Detail</p>
+    <h1>预览 #{{ preview.preview_idx }} <span style="font-weight:400;color:var(--text-muted);">— {{ preview.series_name }}</span></h1>
+    <p class="page-subtitle">
+      系列 <a href="/v2/series/{{ preview.series_id }}" style="color:var(--accent);">#{{ preview.series_idx }}</a>
+      · pack_uid: <code>{{ preview.pack_uid }}</code>
+      · model: <code>{{ preview.model_used or '—' }}</code>
+      · <span class="v2-status-pill {% if preview.generation_status == 'ok' %}ok{% elif preview.generation_status == 'error' %}error{% elif preview.generation_status == 'generating' %}running{% else %}pending{% endif %}">{{ preview.generation_status }}</span>
+    </p>
+  </div>
+  <div>
+    <a href="/v2/series/{{ preview.series_id }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回系列</a>
+  </div>
+</section>
+
+<div style="display:grid;grid-template-columns:1fr 360px;gap:16px;">
+
+  <!-- 主图 -->
+  <section class="panel" style="padding:14px;">
+    {% if preview.image_url %}
+    <img src="{{ preview.image_url }}" alt="preview {{ preview.preview_idx }}"
+         style="width:100%;border-radius:8px;display:block;background:#f5f5f5;">
+    <div style="margin-top:10px;text-align:right;font-size:11px;color:var(--text-muted);">
+      <code>{{ preview.image_path }}</code>
+    </div>
+    {% else %}
+    <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);">
+      {% if preview.generation_status == 'error' %}生成失败{% elif preview.generation_status == 'generating' %}生成中…{% else %}尚未生成{% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- 侧边操作 -->
+  <div>
+    <section class="panel" style="margin-bottom:14px;">
+      <div class="panel-header" style="padding:14px 16px;">
+        <h3 style="margin:0;font-size:14px;">操作</h3>
+      </div>
+      <div style="padding:0 16px 14px;display:flex;flex-direction:column;gap:8px;">
+        <form method="post" action="/v2/previews/{{ preview.id }}/regenerate" id="regen-form">
+          <button type="submit" id="regen-btn"
+                  style="width:100%;padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+            ↻ 重新生成（约 30-60s）
+          </button>
+        </form>
+        <button disabled
+                style="width:100%;padding:8px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:not-allowed;">
+          切单 sticker（W2.4）
+        </button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header" style="padding:14px 16px;">
+        <h3 style="margin:0;font-size:14px;">style_anchor</h3>
+      </div>
+      <div style="padding:0 16px 14px;">
+        <pre style="margin:0;font-size:11px;color:var(--text-secondary);background:var(--bg-subtle);padding:10px;border-radius:6px;white-space:pre-wrap;">{{ preview.style_anchor or '—' }}</pre>
+      </div>
+    </section>
+  </div>
+</div>
+
+<section class="panel" style="margin-top:16px;">
+  <details>
+    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">完整 prompt_text ({{ preview.prompt_text|length }} 字符)</summary>
+    <pre style="margin:0;padding:0 24px 18px;font-size:12px;color:var(--text-secondary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:8px;margin:0 24px 18px;padding:14px;">{{ preview.prompt_text }}</pre>
+  </details>
+</section>
+
+<script>
+  document.getElementById('regen-form').addEventListener('submit', function() {
+    var btn = document.getElementById('regen-btn');
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  });
+</script>
+
+{% endblock %}

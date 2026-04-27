@@ -121,8 +121,16 @@ palette: {{ s.palette }}</pre>
       </details>
       {% endif %}
 
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--text-muted);">
-        ↓ A.3 (W2.3) 会用 style_anchor + preview_briefs 调 image-gen
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:11px;color:var(--text-muted);">A.3 预览图生成</span>
+        {% if s.is_selected %}
+        <a href="/v2/series/{{ s.id }}"
+           style="padding:4px 12px;background:var(--accent);color:#fff;border-radius:6px;text-decoration:none;font-size:11px;font-weight:600;">
+          → 生成预览图
+        </a>
+        {% else %}
+        <span style="font-size:11px;color:var(--text-muted);">先勾选才能生成</span>
+        {% endif %}
       </div>
     </div>
     {% endfor %}

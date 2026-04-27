@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.core.logger import get_logger
 from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_hot_topic_service
+from src.services.preview_gen import get_preview_gen_service
 from src.services.topic_plans import get_topic_plan_service
 from src.services.topic_plans.service import (
     DEFAULT_PREVIEWS_PER_SERIES,
@@ -71,6 +72,21 @@ def _fmt_duration(seconds: int | float | None) -> str:
     if seconds < 3600:
         return f"{seconds // 60}m {seconds % 60}s"
     return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+def _path_to_v2_url(disk_path: str) -> str:
+    """Map an ``output/packs/...`` disk path to its ``/v2-outputs/...`` URL.
+
+    Returns empty string if ``disk_path`` doesn't live under output/packs.
+    """
+    if not disk_path:
+        return ""
+    p = disk_path.replace("\\", "/")
+    marker = "output/packs/"
+    idx = p.find(marker)
+    if idx < 0:
+        return ""
+    return "/v2-outputs/" + p[idx + len(marker):]
 
 
 def _fmt_interval(seconds: int) -> str:
@@ -519,6 +535,106 @@ async def v2_topic_plan_series_toggle(
     if not ok:
         raise HTTPException(status_code=404, detail="series not found")
     return RedirectResponse(url=f"/v2/topic-plans/{plan_id}", status_code=303)
+
+
+# ----------------------------------------------------------------------
+# A.3 — preview generation (series + preview pages, generate route)
+# ----------------------------------------------------------------------
+
+@router.get("/series/{series_id:int}", response_class=HTMLResponse)
+def v2_series_detail(request: Request, series_id: int):
+    svc = get_preview_gen_service()
+    series = svc.get_series_with_previews(series_id)
+    if not series:
+        raise HTTPException(status_code=404, detail="series not found")
+    briefs_by_idx = {int(b.get("preview_idx") or 0): b
+                     for b in (series.get("metadata") or {}).get("preview_briefs", [])}
+    enriched = []
+    ok_n = err_n = pending_n = generating_n = 0
+    for p in series["previews"]:
+        d = dict(p)
+        d["image_url"] = _path_to_v2_url(d.get("image_path") or "")
+        d["generated_human"] = _fmt_ts(d.get("generated_at"))
+        d["brief"] = briefs_by_idx.get(int(d["preview_idx"]), {})
+        enriched.append(d)
+        st = d["generation_status"]
+        if   st == "ok":         ok_n += 1
+        elif st == "error":      err_n += 1
+        elif st == "generating": generating_n += 1
+        else:                    pending_n += 1
+    series["previews"] = enriched
+    series["status_summary"] = {
+        "ok": ok_n, "error": err_n,
+        "generating": generating_n, "pending": pending_n,
+        "total": len(enriched),
+    }
+    series["expected_count"] = len(briefs_by_idx)
+    return templates.TemplateResponse(
+        "v2_series_detail.html",
+        {
+            "request": request,
+            "page_title": f"系列 #{series_id} {series['series_name']}",
+            "series": series,
+        },
+    )
+
+
+@router.post("/series/{series_id:int}/prepare-previews")
+async def v2_series_prepare_previews(request: Request, series_id: int):
+    """Mint pack_uid + create pending pack_previews rows from briefs."""
+    svc = get_preview_gen_service()
+    try:
+        result = svc.prepare_previews(series_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    logger.info("series #%d prepare: %s", series_id, result)
+    return RedirectResponse(url=f"/v2/series/{series_id}", status_code=303)
+
+
+@router.post("/series/{series_id:int}/generate-previews")
+async def v2_series_generate_previews(request: Request, series_id: int):
+    """Run image_generate for every pending preview in this series (sync wait)."""
+    svc = get_preview_gen_service()
+    # Auto-prepare in case operator skipped that step.
+    try:
+        svc.prepare_previews(series_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    result = svc.generate_pending_for_series(series_id)
+    logger.info(
+        "series #%d generate-previews: %d ok / %d error of %d attempted",
+        series_id, result["ok"], result["error"], result["attempted"],
+    )
+    return RedirectResponse(url=f"/v2/series/{series_id}", status_code=303)
+
+
+@router.get("/previews/{preview_id:int}", response_class=HTMLResponse)
+def v2_preview_detail(request: Request, preview_id: int):
+    svc = get_preview_gen_service()
+    p = svc.get_preview(preview_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="preview not found")
+    p["image_url"] = _path_to_v2_url(p.get("image_path") or "")
+    p["generated_human"] = _fmt_ts(p.get("generated_at"))
+    return templates.TemplateResponse(
+        "v2_preview_detail.html",
+        {
+            "request": request,
+            "page_title": f"预览 #{preview_id}",
+            "preview": p,
+        },
+    )
+
+
+@router.post("/previews/{preview_id:int}/regenerate")
+async def v2_preview_regenerate(request: Request, preview_id: int):
+    svc = get_preview_gen_service()
+    p = svc.get_preview(preview_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="preview not found")
+    result = svc.regenerate_preview(preview_id)
+    logger.info("preview #%d regenerate → %s", preview_id, result["status"])
+    return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
 
 
 @router.get("/packs", response_class=HTMLResponse)
