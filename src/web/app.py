@@ -557,8 +557,16 @@ def api_retry_job(job_id: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
+@app.get("/")
+def home_redirect():
+    """V1 home is retired — V2 is the only entry point. Old routes still
+    respond at their original paths for data continuity but aren't linked."""
+    return RedirectResponse(url="/v2", status_code=307)
+
+
+@app.get("/legacy", response_class=HTMLResponse)
+def legacy_home(request: Request):
+    """V1 dashboard, kept reachable for ad-hoc inspection of legacy data."""
     db = trend_service.db
     pending_news = db.list_trends("news", status="pending")
     pending_tk = db.list_trends("tiktok", status="pending")
