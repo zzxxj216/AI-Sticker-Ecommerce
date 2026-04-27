@@ -529,6 +529,29 @@ def v2_topic_plan_detail(request: Request, plan_id: int):
     )
 
 
+@router.post("/topic-plans/{plan_id:int}/retry-extract")
+async def v2_topic_plan_retry_extract(request: Request, plan_id: int):
+    """Re-run only step 2 (extract) against the existing main markdown.
+
+    Cheap recovery path when extract failed but main_raw_text is good.
+    """
+    svc = get_topic_plan_service()
+    try:
+        result = svc.retry_extract(plan_id)
+    except ValueError as e:
+        # 409 Conflict for the "downstream work exists" case so the UI can
+        # show the message; 404 for the "not found" case.
+        msg = str(e)
+        code = 409 if "pack_previews" in msg or "main_raw_text" in msg else 404
+        raise HTTPException(status_code=code, detail=msg)
+    except Exception as e:
+        logger.exception("retry_extract failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("plan #%d retry_extract → ok=%s series=%d",
+                plan_id, result.get("extract_ok"), result.get("series_count", 0))
+    return RedirectResponse(url=f"/v2/topic-plans/{plan_id}", status_code=303)
+
+
 @router.post("/topic-plans/{plan_id:int}/series/{series_id:int}/toggle")
 async def v2_topic_plan_series_toggle(
     request: Request, plan_id: int, series_id: int,
@@ -704,6 +727,105 @@ async def v2_sticker_toggle(request: Request, sticker_id: int):
 
 
 # ----------------------------------------------------------------------
+# System / health
+# ----------------------------------------------------------------------
+
+@router.get("/system/health", response_class=HTMLResponse)
+def v2_system_health(request: Request):
+    """Quick at-a-glance config-and-state check across all integrations."""
+    import os
+    checks = []
+
+    # AI Router (any of the OpenAI/AiHubMix keys)
+    has_ai = bool(os.getenv("AIHUBMIX_API_KEY") or os.getenv("OPENAI_API_KEY"))
+    checks.append({
+        "name": "AI Router (text + image)",
+        "configured": has_ai,
+        "detail": "AIHUBMIX_API_KEY or OPENAI_API_KEY",
+        "section": "A.2 / A.3 / B.1 / C.1",
+    })
+
+    # Hot-topic websearch
+    checks.append({
+        "name": "Web search providers",
+        "configured": bool(os.getenv("AIHUBMIX_API_KEY")),
+        "detail": "AIHUBMIX_API_KEY (aihubmix_surfing); TAVILY_API_KEY / PERPLEXITY_API_KEY for fallbacks",
+        "section": "A.1",
+    })
+
+    # Blotato dispatcher
+    try:
+        from src.services.tiktok.blotato_service import BlotaToService
+        bs = BlotaToService()
+        checks.append({
+            "name": "Blotato (TK video dispatch)",
+            "configured": bs.is_configured(),
+            "detail": "BLOTATO_API_KEY",
+            "section": "B.1 publish",
+        })
+    except Exception as e:
+        checks.append({"name": "Blotato", "configured": False,
+                       "detail": f"import failed: {e}", "section": "B.1"})
+
+    # TikTok Display API
+    try:
+        from src.services.tiktok.tiktok_display_service import TikTokDisplayService
+        ts = TikTokDisplayService()
+        accounts = ts.list_accounts()
+        checks.append({
+            "name": "TikTok Display (metrics)",
+            "configured": ts.is_configured(),
+            "detail": f"TIKTOK_CLIENT_KEY/SECRET; {len(accounts)} account(s) authorized",
+            "section": "B.2",
+        })
+    except Exception as e:
+        checks.append({"name": "TikTok Display", "configured": False,
+                       "detail": f"import failed: {e}", "section": "B.2"})
+
+    # TKShop wrapper
+    tkshop_url = os.getenv("TKSHOP_SERVER_URL", "http://192.168.121.1")
+    checks.append({
+        "name": "TKShop wrapper server",
+        "configured": True,  # always configured (default URL)
+        "detail": f"TKSHOP_SERVER_URL={tkshop_url} (POST /products + GET /products/{{id}}/status)",
+        "section": "C.3 / C.4",
+    })
+
+    # Migrations
+    conn = _open_db()
+    try:
+        try:
+            applied = [r[0] for r in conn.execute(
+                "SELECT filename FROM schema_migrations ORDER BY filename"
+            ).fetchall()]
+        except sqlite3.OperationalError:
+            applied = []
+        # Counts of all primary tables
+        table_counts = {}
+        for t in ["hot_topics", "topic_plans", "pack_series", "pack_previews",
+                  "pack_stickers", "packs", "tk_videos", "tk_video_metrics",
+                  "tkshop_products", "tkshop_product_images",
+                  "tkshop_publish_logs", "ai_call_logs", "scheduled_jobs"]:
+            try:
+                table_counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            except sqlite3.OperationalError:
+                table_counts[t] = -1  # missing
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(
+        "v2_system_health.html",
+        {
+            "request": request,
+            "page_title": "系统健康",
+            "checks": checks,
+            "applied_migrations": applied,
+            "table_counts": table_counts,
+        },
+    )
+
+
+# ----------------------------------------------------------------------
 # A.4 — pack aggregate (promote series → pack, list, detail, gallery)
 # ----------------------------------------------------------------------
 
@@ -770,7 +892,7 @@ async def v2_pack_create(request: Request, series_id: int):
 @router.get("/packs/{pack_id:int}", response_class=HTMLResponse)
 def v2_pack_detail(request: Request, pack_id: int):
     svc = get_pack_service()
-    pack = svc.get_pack(pack_id)
+    pack = svc.get_pack_with_downstream(pack_id)
     if not pack:
         raise HTTPException(status_code=404, detail="pack not found")
     pack["created_human"] = _fmt_ts(pack.get("created_at"))
@@ -779,6 +901,11 @@ def v2_pack_detail(request: Request, pack_id: int):
         s["image_url"] = _path_to_v2_url(s.get("image_path") or "")
     for p in pack.get("previews", []):
         p["image_url"] = _path_to_v2_url(p.get("image_path") or "")
+    for v in pack.get("videos", []):
+        v["scheduled_human"] = _fmt_ts(v.get("scheduled_at"))
+        v["published_human"] = _fmt_ts(v.get("published_at"))
+    for pr in pack.get("products", []):
+        pr["created_human"] = _fmt_ts(pr.get("created_at"))
     return templates.TemplateResponse(
         "v2_pack_detail.html",
         {
@@ -1001,6 +1128,50 @@ async def v2_video_edit_meta(request: Request, video_id: int):
     svc = get_tk_video_service()
     svc.update_one_liner(video_id, one_liner)
     svc.update_account(video_id, account)
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
+
+
+@router.post("/videos/{video_id:int}/dispatch-now")
+async def v2_video_dispatch_now(request: Request, video_id: int):
+    """Manual dispatch: bypasses the scheduler and calls Blotato inline.
+
+    Useful when the operator wants to publish immediately without waiting
+    for the next scheduler tick (60s) or for one-off retries of failed
+    dispatches.
+    """
+    svc = get_tk_video_service()
+    v = svc.get_video(video_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="video not found")
+    if v["publish_status"] in ("published", "dispatching"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"already {v['publish_status']} — clear status first",
+        )
+    if not v.get("local_video_path"):
+        raise HTTPException(status_code=400, detail="upload a video file first")
+    try:
+        result = svc.dispatch_video(video_id)
+    except Exception as e:
+        logger.exception("manual dispatch failed for video #%d", video_id)
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("video #%d manual dispatch → %s", video_id,
+                "ok" if result.get("ok") else f"fail: {result.get('error', '')[:80]}")
+    return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
+
+
+@router.post("/videos/{video_id:int}/poll-status")
+async def v2_video_poll_status(request: Request, video_id: int):
+    """Manual trigger of the dispatch-status poll for one video.
+
+    Same as the tk_dispatch_status_poll scheduled job but immediate;
+    resolves tiktok_video_id from Blotato so B.2 metrics can attach.
+    """
+    svc = get_tk_video_service()
+    if not svc.get_video(video_id):
+        raise HTTPException(status_code=404, detail="video not found")
+    result = svc.refresh_dispatch_status()
+    logger.info("video #%d manual poll-status: %s", video_id, result)
     return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
 
 

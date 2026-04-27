@@ -109,6 +109,25 @@
     <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;font-size:11px;">取消排期</button>
   </form>
   {% endif %}
+
+  <div style="padding:0 24px 18px;display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line-soft);padding-top:14px;">
+    {% if video.local_video_path and video.publish_status not in ('published', 'dispatching') %}
+    <form method="post" action="/v2/videos/{{ video.id }}/dispatch-now" style="display:inline;">
+      <button type="submit" onclick="return confirm('立即调用 Blotato 派发?')"
+              style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">
+        🚀 立即派发到 Blotato（绕过排期）
+      </button>
+    </form>
+    {% endif %}
+    {% if video.publish_status == 'published' and not video.tiktok_video_id %}
+    <form method="post" action="/v2/videos/{{ video.id }}/poll-status" style="display:inline;">
+      <button type="submit"
+              style="padding:8px 16px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;">
+        ↻ 轮询 Blotato 解析 tiktok_video_id
+      </button>
+    </form>
+    {% endif %}
+  </div>
 </section>
 
 <!-- 发布状态 -->

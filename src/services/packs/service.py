@@ -161,6 +161,29 @@ class PackService:
             ).fetchall()
         return [dict(r) for r in rows], total
 
+    def get_pack_with_downstream(self, pack_id: int) -> Optional[dict]:
+        d = self.get_pack(pack_id)
+        if not d:
+            return None
+        with _open_db(self.db_path) as conn:
+            videos = conn.execute(
+                """
+                SELECT id, publish_status, scheduled_at, published_at, caption
+                  FROM tk_videos WHERE pack_id = ? ORDER BY id DESC
+                """,
+                (pack_id,),
+            ).fetchall()
+            products = conn.execute(
+                """
+                SELECT id, publish_status, title, tiktok_product_id, created_at
+                  FROM tkshop_products WHERE pack_id = ? ORDER BY id DESC
+                """,
+                (pack_id,),
+            ).fetchall()
+        d["videos"] = [dict(v) for v in videos]
+        d["products"] = [dict(p) for p in products]
+        return d
+
     def get_pack(self, pack_id: int) -> Optional[dict]:
         with _open_db(self.db_path) as conn:
             row = conn.execute(

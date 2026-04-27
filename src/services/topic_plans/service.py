@@ -342,6 +342,75 @@ class TopicPlanService:
     # Mutate
     # ------------------------------------------------------------------
 
+    def retry_extract(self, plan_id: int, *, extract_model: Optional[str] = None) -> dict[str, Any]:
+        """Re-run only the extract step against the existing main_raw_text.
+
+        Useful when extract_failed but the main markdown looks salvageable.
+        Saves a full main-step call (~30s + most of the cost).
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, main_raw_text, config
+                  FROM topic_plans WHERE id = ?
+                """,
+                (plan_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"plan #{plan_id} not found")
+            if not (row["main_raw_text"] or "").strip():
+                raise ValueError("plan has no main_raw_text — run generate_plan first")
+            cfg = json.loads(row["config"] or "{}")
+
+        schema = build_extract_schema(
+            series_count=cfg.get("series_count") or DEFAULT_SERIES_COUNT,
+            previews_per_series=cfg.get("previews_per_series") or DEFAULT_PREVIEWS_PER_SERIES,
+            stickers_per_preview=cfg.get("stickers_per_preview") or DEFAULT_STICKERS_PER_PREVIEW,
+        )
+        try:
+            payload = self.router.extract_json(
+                row["main_raw_text"],
+                schema=schema,
+                instructions=EXTRACT_INSTRUCTIONS,
+                model=extract_model,
+                max_retries=1,
+                task="topic_plan:extract:retry",
+                related_table="topic_plans",
+                related_id=plan_id,
+            )
+        except Exception as e:
+            return {"plan_id": plan_id, "extract_ok": False, "error": str(e)[:500]}
+
+        with _open_db(self.db_path) as conn:
+            # Refuse if downstream A.3 work already exists — overwriting
+            # would orphan pack_previews / pack_stickers (FK violation
+            # via cascade, or worse, lose generated images on disk).
+            downstream = conn.execute(
+                """
+                SELECT COUNT(*) FROM pack_previews
+                 WHERE series_id IN (SELECT id FROM pack_series WHERE plan_id = ?)
+                """,
+                (plan_id,),
+            ).fetchone()[0]
+            if downstream:
+                raise ValueError(
+                    f"plan #{plan_id} has {downstream} pack_previews already — "
+                    "would orphan generated images. Delete them manually first."
+                )
+            conn.execute("DELETE FROM pack_series WHERE plan_id = ?", (plan_id,))
+            conn.execute(
+                """
+                UPDATE topic_plans
+                   SET series_payload = ?, status = 'ready', updated_at = ?
+                 WHERE id = ?
+                """,
+                (json.dumps(payload, ensure_ascii=False), int(time.time()), plan_id),
+            )
+            self._insert_series_rows(conn, plan_id, payload)
+            conn.commit()
+        return {"plan_id": plan_id, "extract_ok": True,
+                "series_count": len(payload.get("series", []))}
+
     def toggle_series_selection(self, series_id: int, is_selected: bool) -> bool:
         with _open_db(self.db_path) as conn:
             cur = conn.execute(

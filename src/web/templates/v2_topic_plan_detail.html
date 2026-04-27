@@ -52,6 +52,13 @@
     {% if plan.series_payload.get('_error') %}
     <pre style="margin:8px 0 0;font-size:11px;color:var(--text-muted);background:var(--bg-subtle);padding:8px;border-radius:6px;">{{ plan.series_payload['_error'] }}</pre>
     {% endif %}
+    {% if plan.status == 'draft_extract_failed' and plan.main_raw_text %}
+    <form method="post" action="/v2/topic-plans/{{ plan.id }}/retry-extract" style="margin-top:12px;">
+      <button type="submit" style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">
+        ↻ 仅重试提取（不再调主模型，省钱）
+      </button>
+    </form>
+    {% endif %}
   </div>
 </section>
 {% endif %}

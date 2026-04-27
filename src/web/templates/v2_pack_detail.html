@@ -123,6 +123,47 @@
   </div>
 </section>
 
+<!-- 下游：视频 + 产品 -->
+{% if pack.videos or pack.products %}
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">下游</h3>
+  </div>
+  <div style="padding:0 24px 18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+    <div>
+      <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">TK 视频 ({{ pack.videos|length }})</h4>
+      {% if pack.videos %}
+      <ul style="margin:0;padding-left:0;list-style:none;">
+        {% for v in pack.videos %}
+        <li style="padding:6px 0;border-top:1px solid var(--line-soft);font-size:12px;display:flex;justify-content:space-between;align-items:center;">
+          <a href="/v2/videos/{{ v.id }}" style="color:var(--text);text-decoration:none;">#{{ v.id }} <span style="color:var(--text-muted);">{{ (v.caption or '—')[:50] }}</span></a>
+          <span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% else %}pending{% endif %}" style="font-size:10px;">{{ v.publish_status }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p style="color:var(--text-muted);font-size:12px;margin:0;">暂无视频</p>
+      {% endif %}
+    </div>
+    <div>
+      <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">TKShop 产品 ({{ pack.products|length }})</h4>
+      {% if pack.products %}
+      <ul style="margin:0;padding-left:0;list-style:none;">
+        {% for p in pack.products %}
+        <li style="padding:6px 0;border-top:1px solid var(--line-soft);font-size:12px;display:flex;justify-content:space-between;align-items:center;">
+          <a href="/v2/products/{{ p.id }}" style="color:var(--text);text-decoration:none;">#{{ p.id }} <span style="color:var(--text-muted);">{{ (p.title or '—')[:50] }}</span></a>
+          <span class="v2-status-pill {% if p.publish_status == 'published' %}ok{% elif p.publish_status == 'failed' %}error{% else %}pending{% endif %}" style="font-size:10px;">{{ p.publish_status }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p style="color:var(--text-muted);font-size:12px;margin:0;">暂无产品</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
 <!-- 预览图（缩略） -->
 {% if pack.previews %}
 <section class="panel">
