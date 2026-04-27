@@ -530,7 +530,7 @@ class AIRouter:
         )
         i2i = os.getenv(
             "JIEKOU_IMAGE_EDIT_URL",
-            "https://api.jiekou.ai/v3/gpt-image-2-image-to-image",
+            "https://api.jiekou.ai/v3/gpt-image-2-edit",
         )
         return api_key, t2i, i2i
 

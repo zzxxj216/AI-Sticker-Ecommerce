@@ -38,11 +38,13 @@ logger = get_logger("service.preview_gen")
 
 DEFAULT_DB_PATH = Path("data/ops_workbench.db")
 
-# W1.8 POC observed ~1/3 transient APIConnectionError on image_edit;
-# image_generate was more reliable but we still want bounded concurrency
-# (each call holds a 1024x1024 b64 in memory, ~3MB).
-DEFAULT_MAX_WORKERS = 3
-DEFAULT_RETRY_ON_ERROR = 1
+# JieKou /v3/gpt-image-2-edit drops connections under concurrency >= 3
+# (verified during W3.3 smoke: 2/5 splits failed with RemoteProtocolError
+# at workers=3). image_generate (text-to-image) is more reliable; image
+# edit (image-to-image) is the flaky one. Cap workers at 2 globally and
+# raise per-call retries to 3.
+DEFAULT_MAX_WORKERS = 2
+DEFAULT_RETRY_ON_ERROR = 3
 DEFAULT_IMAGE_SIZE = "1024x1024"
 
 
