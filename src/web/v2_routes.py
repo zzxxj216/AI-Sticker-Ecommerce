@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.core.logger import get_logger
 from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_hot_topic_service
+from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
 from src.services.topic_plans import get_topic_plan_service
 from src.services.topic_plans.service import (
@@ -698,26 +699,143 @@ async def v2_sticker_toggle(request: Request, sticker_id: int):
     return RedirectResponse(url=f"/v2/stickers/{sticker_id}", status_code=303)
 
 
+# ----------------------------------------------------------------------
+# A.4 — pack aggregate (promote series → pack, list, detail, gallery)
+# ----------------------------------------------------------------------
+
 @router.get("/packs", response_class=HTMLResponse)
-def v2_packs(request: Request):
-    return _placeholder(
-        request,
-        title="卡包管理",
-        section_tag="A.4 · W3",
-        planned_in="W3 / A.4 任务",
-        related_table="packs, pack_series, pack_previews, pack_stickers",
+def v2_packs_list(request: Request, status: str = "all", limit: int = 50):
+    svc = get_pack_service()
+    packs, total = svc.list_packs(
+        status=status if status != "all" else None,
+        limit=limit,
+    )
+    for p in packs:
+        p["created_human"] = _fmt_ts(p.get("created_at"))
+        p["cover_url"] = _path_to_v2_url(p.get("cover_image_path") or "")
+    return templates.TemplateResponse(
+        "v2_packs.html",
+        {
+            "request": request,
+            "page_title": "卡包管理",
+            "packs": packs,
+            "total": total,
+            "status_filter": status,
+        },
     )
 
 
 @router.get("/gallery", response_class=HTMLResponse)
 def v2_gallery(request: Request):
-    return _placeholder(
-        request,
-        title="卡包画廊",
-        section_tag="A.4 · W3",
-        planned_in="W3 / A.4 任务",
-        related_table="packs",
+    """Visual grid of all active packs (cover + name + sticker count)."""
+    svc = get_pack_service()
+    packs, total = svc.list_packs(status="active", limit=200)
+    for p in packs:
+        p["cover_url"] = _path_to_v2_url(p.get("cover_image_path") or "")
+        p["created_human"] = _fmt_ts(p.get("created_at"))
+    return templates.TemplateResponse(
+        "v2_gallery.html",
+        {
+            "request": request,
+            "page_title": "卡包画廊",
+            "packs": packs,
+            "total": total,
+        },
     )
+
+
+@router.post("/packs/from-series/{series_id:int}")
+async def v2_pack_create(request: Request, series_id: int):
+    """Promote a pack_series into a packs row. Idempotent."""
+    form = await request.form()
+    display_name = (form.get("display_name") or "").strip() or None
+    cover_id_str = (form.get("cover_sticker_id") or "").strip()
+    cover_sticker_id = int(cover_id_str) if cover_id_str.isdigit() else None
+    svc = get_pack_service()
+    try:
+        result = svc.create_pack_from_series(
+            series_id, display_name=display_name,
+            cover_sticker_id=cover_sticker_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("pack create from series #%d → %s", series_id, result)
+    return RedirectResponse(url=f"/v2/packs/{result['pack_id']}", status_code=303)
+
+
+@router.get("/packs/{pack_id:int}", response_class=HTMLResponse)
+def v2_pack_detail(request: Request, pack_id: int):
+    svc = get_pack_service()
+    pack = svc.get_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="pack not found")
+    pack["created_human"] = _fmt_ts(pack.get("created_at"))
+    pack["cover_url"] = _path_to_v2_url(pack.get("cover_image_path") or "")
+    for s in pack.get("stickers", []):
+        s["image_url"] = _path_to_v2_url(s.get("image_path") or "")
+    for p in pack.get("previews", []):
+        p["image_url"] = _path_to_v2_url(p.get("image_path") or "")
+    return templates.TemplateResponse(
+        "v2_pack_detail.html",
+        {
+            "request": request,
+            "page_title": f"卡包 {pack['display_name']}",
+            "pack": pack,
+        },
+    )
+
+
+@router.post("/packs/{pack_id:int}/cover")
+async def v2_pack_set_cover(request: Request, pack_id: int):
+    form = await request.form()
+    sticker_id_str = (form.get("sticker_id") or "").strip()
+    if not sticker_id_str.isdigit():
+        raise HTTPException(status_code=400, detail="sticker_id required")
+    svc = get_pack_service()
+    try:
+        svc.set_cover(pack_id, int(sticker_id_str))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(url=f"/v2/packs/{pack_id}", status_code=303)
+
+
+@router.post("/packs/{pack_id:int}/rename")
+async def v2_pack_rename(request: Request, pack_id: int):
+    form = await request.form()
+    new_name = (form.get("display_name") or "").strip()
+    svc = get_pack_service()
+    try:
+        ok = svc.rename(pack_id, new_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="pack not found")
+    return RedirectResponse(url=f"/v2/packs/{pack_id}", status_code=303)
+
+
+@router.post("/packs/{pack_id:int}/status")
+async def v2_pack_set_status(request: Request, pack_id: int):
+    form = await request.form()
+    new_status = (form.get("status") or "").strip()
+    svc = get_pack_service()
+    try:
+        ok = svc.update_status(pack_id, new_status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="pack not found")
+    return RedirectResponse(url=f"/v2/packs/{pack_id}", status_code=303)
+
+
+@router.post("/packs/{pack_id:int}/refresh-total")
+async def v2_pack_refresh_total(request: Request, pack_id: int):
+    svc = get_pack_service()
+    try:
+        cnt = svc.refresh_total_stickers(pack_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    logger.info("pack #%d total_stickers refreshed to %d", pack_id, cnt)
+    return RedirectResponse(url=f"/v2/packs/{pack_id}", status_code=303)
 
 
 @router.get("/videos", response_class=HTMLResponse)

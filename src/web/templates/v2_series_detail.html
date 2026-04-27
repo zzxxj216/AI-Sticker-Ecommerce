@@ -54,6 +54,14 @@
         生成 / 补齐预览图（{{ series.expected_count - series.status_summary.ok }} 张待办）
       </button>
     </form>
+    {% if series.status_summary.ok > 0 %}
+    <form method="post" action="/v2/packs/from-series/{{ series.id }}" style="display:inline;">
+      <button type="submit"
+              style="padding:10px 20px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        💾 保存为卡包 (A.4)
+      </button>
+    </form>
+    {% endif %}
     <span style="color:var(--text-muted);font-size:12px;">每张约 30-60s，3 张并发，全部完成后跳回此页。</span>
   </div>
 </section>

@@ -1,0 +1,81 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.4 · Packs</p>
+    <h1>卡包管理</h1>
+    <p class="page-subtitle">已 promote 的系列。下游 TK 视频 / TKShop 产品都按 pack 关联。</p>
+  </div>
+  <div>
+    <a href="/v2/gallery" class="button"
+       style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;text-decoration:none;font-weight:600;">
+      画廊视图 →
+    </a>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:12px;">
+  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+    <span style="font-size:13px;font-weight:600;">状态：</span>
+    {% for st, label in [('all','全部'),('active','活跃'),('archived','已归档')] %}
+    <a href="?status={{ st }}"
+       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}ok{% else %}pending{% endif %}"
+       style="text-decoration:none;cursor:pointer;">{{ label }}</a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">{{ total }} 个卡包</h3>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
+    <table style="width:100%;font-size:13px;min-width:900px;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);">
+          <th style="padding:8px 0;width:80px;">封面</th>
+          <th>display_name / topic</th>
+          <th>pack_uid</th>
+          <th>archetype</th>
+          <th style="text-align:right;">stickers</th>
+          <th>状态</th>
+          <th>created</th>
+          <th style="text-align:right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in packs %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:8px 0;">
+            {% if p.cover_url %}
+            <img src="{{ p.cover_url }}" alt="cover"
+                 style="width:48px;height:48px;border-radius:6px;object-fit:cover;background:#f5f5f5;display:block;">
+            {% else %}
+            <div style="width:48px;height:48px;border-radius:6px;background:var(--bg-subtle);"></div>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/v2/packs/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ p.display_name }}</a>
+            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ p.topic_name or '—' }}</div>
+          </td>
+          <td><code style="font-size:11px;color:var(--text-muted);">{{ p.pack_uid }}</code></td>
+          <td>{% if p.pack_archetype %}<span class="v2-status-pill pending">{{ p.pack_archetype }}</span>{% else %}—{% endif %}</td>
+          <td style="text-align:right;font-weight:600;">{{ p.total_stickers }}</td>
+          <td><span class="v2-status-pill {% if p.status == 'active' %}ok{% else %}error{% endif %}">{{ p.status }}</span></td>
+          <td style="color:var(--text-muted);font-size:12px;">{{ p.created_human }}</td>
+          <td style="text-align:right;">
+            <a href="/v2/packs/{{ p.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+          暂无卡包 — 先去某个系列详情页点 “保存为卡包”
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
