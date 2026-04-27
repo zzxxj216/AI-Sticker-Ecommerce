@@ -1,0 +1,183 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">C · Product Detail</p>
+    <h1>产品 #{{ product.id }} <span style="font-weight:400;color:var(--text-muted);">— {{ product.pack_name }}</span></h1>
+    <p class="page-subtitle">
+      pack <a href="/v2/packs/{{ product.pack_id }}" style="color:var(--accent);">#{{ product.pack_id }}</a>
+      · pack_uid <code>{{ product.pack_uid }}</code>
+      · <span class="v2-status-pill {% if product.publish_status == 'published' %}ok{% elif product.publish_status == 'failed' %}error{% elif product.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ product.publish_status }}</span>
+      {% if product.tiktok_product_id %}· tiktok_id: <code>{{ product.tiktok_product_id }}</code>{% endif %}
+    </p>
+  </div>
+  <div>
+    <a href="/v2/products" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  </div>
+</section>
+
+<!-- AI 详情生成 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">AI 详情（英文 / 两步生成）</h3>
+    <form method="post" action="/v2/products/{{ product.id }}/generate-detail" id="gen-form" style="display:inline;">
+      <button type="submit" id="gen-btn"
+              style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        {% if product.title %}↻ 重新生成{% else %}生成 title + description + 卖点 + 关键词{% endif %}
+      </button>
+    </form>
+  </div>
+  <form method="post" action="/v2/products/{{ product.id }}/edit-detail" style="padding:0 24px 18px;">
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">title (en, 60-100 chars)</label>
+      <input type="text" name="title" value="{{ product.title }}" maxlength="200"
+             style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">description_html (英文 HTML)</label>
+      <textarea name="description_html" rows="10"
+                style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:12px;resize:vertical;font-family:monospace;">{{ product.description_html }}</textarea>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:10px;">
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">selling_points (5 行)</label>
+        <textarea name="selling_points" rows="6"
+                  style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:12px;resize:vertical;">{% for s in product.selling_points %}{{ s }}
+{% endfor %}</textarea>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">keywords (12-20 行)</label>
+        <textarea name="keywords" rows="6"
+                  style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:12px;resize:vertical;">{% for k in product.keywords %}{{ k }}
+{% endfor %}</textarea>
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">category_id (TikTok Shop)</label>
+      <input type="text" name="category_id" value="{{ product.category_id }}"
+             style="width:200px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+    </div>
+    <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;">手工保存</button>
+  </form>
+</section>
+
+<!-- 详情 HTML 预览 -->
+{% if product.description_html %}
+<section class="panel" style="margin-bottom:16px;">
+  <details open>
+    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">详情页预览（buyer-facing）</summary>
+    <div style="padding:0 24px 20px;background:#fff;border:1px solid var(--line);margin:0 24px 20px;border-radius:8px;padding:20px;color:#222;font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.6;">
+      {{ product.description_html | safe }}
+    </div>
+  </details>
+</section>
+{% endif %}
+
+<!-- 产品图 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">产品图 ({{ product.images|length }})</h3>
+  </div>
+  <form method="post" action="/v2/products/{{ product.id }}/images" enctype="multipart/form-data" style="padding:0 24px 14px;display:flex;gap:8px;align-items:center;">
+    <input type="file" name="image_file" accept="image/png,image/jpeg,image/webp" required
+           style="font-size:12px;">
+    <select name="role" style="padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;">
+      <option value="main">main</option>
+      <option value="secondary">secondary</option>
+      <option value="lifestyle">lifestyle</option>
+      <option value="size_chart">size_chart</option>
+    </select>
+    <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">+ 上传</button>
+  </form>
+  <div style="padding:0 24px 18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;">
+    {% for img in product.images %}
+    <div class="panel" style="padding:8px;">
+      {% if img.url %}
+      <img src="{{ img.url }}" style="width:100%;border-radius:6px;display:block;background:#f5f5f5;aspect-ratio:1/1;object-fit:contain;">
+      {% endif %}
+      <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+        <span class="v2-section-tag">{{ img.role }} #{{ img.sort_order }}</span>
+        <span class="v2-status-pill {% if img.source == 'manual' %}ok{% else %}pending{% endif %}" style="font-size:10px;">{{ img.source }}</span>
+      </div>
+      <form method="post" action="/v2/products/images/{{ img.id }}/delete" style="margin-top:6px;">
+        <input type="hidden" name="back" value="/v2/products/{{ product.id }}">
+        <button type="submit" onclick="return confirm('确定删除?')"
+                style="width:100%;padding:4px;background:var(--surface);color:var(--danger);border:1px solid var(--line);border-radius:4px;font-size:10px;cursor:pointer;">删除</button>
+      </form>
+    </div>
+    {% else %}
+    <div style="grid-column:1/-1;padding:18px;text-align:center;color:var(--text-muted);font-size:12px;">无产品图。最少上传一张 <strong>main</strong>。</div>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- 发布 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">发布到 TKShop</h3>
+  </div>
+  <div style="padding:0 24px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <form method="post" action="/v2/products/{{ product.id }}/publish" style="display:inline;">
+      <input type="hidden" name="dry_run" value="1">
+      <button type="submit" style="padding:8px 16px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:pointer;">
+        🧪 dry-run（构建 payload + 写日志，不调服务器）
+      </button>
+    </form>
+    <form method="post" action="/v2/products/{{ product.id }}/publish" style="display:inline;">
+      <button type="submit" onclick="return confirm('确认发布到 TKShop?')"
+              style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        🚀 发布（POST 192.168.121.1）
+      </button>
+    </form>
+    <span style="color:var(--text-muted);font-size:12px;">每次发布写一行 tkshop_publish_logs，可在下方查看完整 request/response。</span>
+  </div>
+</section>
+
+<!-- 发布日志 -->
+{% if product.publish_logs %}
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:14px 24px;">
+    <h3 style="margin:0;font-size:14px;">发布日志 ({{ product.publish_logs|length }})</h3>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;">
+    <table style="width:100%;font-size:12px;">
+      <thead><tr style="text-align:left;color:var(--text-muted);">
+        <th style="padding:6px 0;">#</th><th>endpoint</th><th>OK</th><th>error_code</th><th>error_message</th><th>created</th>
+      </tr></thead>
+      <tbody>
+        {% for log in product.publish_logs %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:6px 0;">{{ log.attempt_idx }}</td>
+          <td><code>{{ log.api_endpoint }}</code></td>
+          <td>{% if log.success %}<span style="color:var(--success);">✓</span>{% else %}<span style="color:var(--danger);">×</span>{% endif %}</td>
+          <td>{{ log.error_code or '—' }}</td>
+          <td style="color:var(--text-muted);max-width:300px;">{{ (log.error_message or '')[:120] }}</td>
+          <td style="color:var(--text-muted);">{{ log.created_human }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<!-- raw markdown -->
+{% if product.detail_main_raw_text %}
+<section class="panel">
+  <details>
+    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">主模型 markdown 原文 ({{ product.detail_main_raw_text|length }} 字符)</summary>
+    <pre style="margin:0;padding:0 24px 18px;font-size:12px;color:var(--text-secondary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:8px;margin:0 24px 18px;padding:14px;">{{ product.detail_main_raw_text }}</pre>
+  </details>
+</section>
+{% endif %}
+
+<script>
+  document.getElementById('gen-form').addEventListener('submit', function() {
+    var btn = document.getElementById('gen-btn');
+    btn.disabled = true; btn.textContent = '生成中...（约 30-60s）';
+    btn.style.opacity = '0.6'; btn.style.cursor = 'not-allowed';
+  });
+</script>
+
+{% endblock %}

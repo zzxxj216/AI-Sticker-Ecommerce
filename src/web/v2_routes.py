@@ -30,6 +30,7 @@ from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_
 from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
 from src.services.tk_videos import get_tk_video_service
+from src.services.tkshop import get_tkshop_service
 from src.services.topic_plans import get_topic_plan_service
 from src.services.topic_plans.service import (
     DEFAULT_PREVIEWS_PER_SERIES,
@@ -1044,13 +1045,150 @@ def v2_analytics(request: Request):
     )
 
 
+# ----------------------------------------------------------------------
+# C — TKShop products (detail gen, image mgmt, publish, status)
+# ----------------------------------------------------------------------
+
 @router.get("/products", response_class=HTMLResponse)
-def v2_products(request: Request):
-    return _placeholder(
-        request,
-        title="TKShop 产品",
-        section_tag="C · W4",
-        planned_in="W4 / C.1-C.4 任务",
-        related_table="tkshop_products, tkshop_product_images, tkshop_publish_logs",
-        description="详情页生成（英文）+ 主图管理（人工 + AI）+ 一键发布 + 状态看板。",
+def v2_products_list(
+    request: Request,
+    pack_id: int | None = None,
+    publish_status: str = "all",
+    limit: int = 100,
+):
+    svc = get_tkshop_service()
+    products, total = svc.list_products(
+        pack_id=pack_id,
+        publish_status=publish_status if publish_status != "all" else None,
+        limit=limit,
     )
+    for p in products:
+        p["created_human"] = _fmt_ts(p.get("created_at"))
+        p["published_human"] = _fmt_ts(p.get("published_at"))
+        p["pack_cover_url"] = _path_to_v2_url(p.get("pack_cover") or "")
+    return templates.TemplateResponse(
+        "v2_products.html",
+        {
+            "request": request,
+            "page_title": "TKShop 产品",
+            "products": products,
+            "total": total,
+            "pack_id_filter": pack_id,
+            "status_filter": publish_status,
+        },
+    )
+
+
+@router.post("/products/from-pack/{pack_id:int}")
+async def v2_product_create(request: Request, pack_id: int):
+    svc = get_tkshop_service()
+    try:
+        pid = svc.create_product_from_pack(pack_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return RedirectResponse(url=f"/v2/products/{pid}", status_code=303)
+
+
+@router.get("/products/{product_id:int}", response_class=HTMLResponse)
+def v2_product_detail(request: Request, product_id: int):
+    svc = get_tkshop_service()
+    p = svc.get_product(product_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="product not found")
+    p["created_human"] = _fmt_ts(p.get("created_at"))
+    p["published_human"] = _fmt_ts(p.get("published_at"))
+    p["pack_cover_url"] = _path_to_v2_url(p.get("cover_image_path") or "")
+    for img in p.get("images", []):
+        img["url"] = _path_to_v2_url(img.get("local_path") or "")
+        img["created_human"] = _fmt_ts(img.get("created_at"))
+    for log in p.get("publish_logs", []):
+        log["created_human"] = _fmt_ts(log.get("created_at"))
+    return templates.TemplateResponse(
+        "v2_product_detail.html",
+        {
+            "request": request,
+            "page_title": f"产品 #{product_id}",
+            "product": p,
+        },
+    )
+
+
+@router.post("/products/{product_id:int}/generate-detail")
+async def v2_product_generate_detail(request: Request, product_id: int):
+    svc = get_tkshop_service()
+    try:
+        result = svc.generate_detail(product_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("generate_detail failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("product #%d detail generated: extract_ok=%s title=%r",
+                product_id, result["extract_ok"], result.get("title", "")[:80])
+    return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
+
+
+@router.post("/products/{product_id:int}/edit-detail")
+async def v2_product_edit_detail(request: Request, product_id: int):
+    form = await request.form()
+    title = (form.get("title") or "").strip()
+    desc = form.get("description_html") or ""
+    raw_sp = (form.get("selling_points") or "").strip()
+    raw_kw = (form.get("keywords") or "").strip()
+    cat = (form.get("category_id") or "").strip()
+    sps = [l.strip().lstrip("-*•").strip() for l in raw_sp.splitlines() if l.strip()]
+    kws = [l.strip().lstrip("#").strip() for l in raw_kw.splitlines() if l.strip()]
+    svc = get_tkshop_service()
+    if not svc.update_detail_manual(
+        product_id, title=title, description_html=desc,
+        selling_points=sps, keywords=kws, category_id=cat or None,
+    ):
+        raise HTTPException(status_code=404, detail="product not found")
+    return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
+
+
+@router.post("/products/{product_id:int}/images")
+async def v2_product_add_image(request: Request, product_id: int):
+    form = await request.form()
+    role = (form.get("role") or "main").strip().lower()
+    upload = form.get("image_file")
+    if upload is None or not getattr(upload, "filename", ""):
+        raise HTTPException(status_code=400, detail="image_file required")
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / upload.filename
+    with open(tmp, "wb") as fh:
+        shutil.copyfileobj(upload.file, fh)
+    svc = get_tkshop_service()
+    try:
+        svc.add_product_image(product_id, src_path=tmp, role=role)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    finally:
+        try:
+            tmp.unlink(); tmp.parent.rmdir()
+        except Exception:
+            pass
+    return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
+
+
+@router.post("/products/images/{image_id:int}/delete")
+async def v2_product_delete_image(request: Request, image_id: int):
+    form = await request.form()
+    svc = get_tkshop_service()
+    svc.delete_image(image_id)
+    back = (form.get("back") or "").strip()
+    return RedirectResponse(url=back or "/v2/products", status_code=303)
+
+
+@router.post("/products/{product_id:int}/publish")
+async def v2_product_publish(request: Request, product_id: int):
+    form = await request.form()
+    dry_run = (form.get("dry_run") or "0").strip() == "1"
+    svc = get_tkshop_service()
+    try:
+        result = svc.publish(product_id, dry_run=dry_run)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    logger.info("product #%d publish (dry_run=%s) → %s",
+                product_id, dry_run, "ok" if result.get("ok") else "fail")
+    return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)

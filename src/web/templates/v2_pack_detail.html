@@ -77,8 +77,12 @@
       <div style="padding:0 20px 16px;display:flex;gap:8px;flex-wrap:wrap;">
         <a href="/v2/videos?pack_id={{ pack.id }}"
            style="padding:6px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:6px;font-weight:600;text-decoration:none;font-size:12px;">→ TK 视频 (B.1 / W3)</a>
+        <form method="post" action="/v2/products/from-pack/{{ pack.id }}" style="display:inline;">
+          <button type="submit"
+                  style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">→ TKShop 产品 (C)</button>
+        </form>
         <a href="/v2/products?pack_id={{ pack.id }}"
-           style="padding:6px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:6px;font-weight:600;text-decoration:none;font-size:12px;">→ TKShop 产品 (C.1 / W4)</a>
+           style="padding:6px 14px;background:transparent;color:var(--text-muted);border:none;font-weight:600;text-decoration:underline;font-size:11px;">已有产品</a>
       </div>
     </section>
   </div>

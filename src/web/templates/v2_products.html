@@ -1,0 +1,73 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">C · TKShop Products</p>
+    <h1>TKShop 产品</h1>
+    <p class="page-subtitle">每个 pack 一个产品。详情页（标题/描述/卖点/关键词）走 AI 两步生成；主图人工上传；发布通过本机 192.168.121.1 转发。</p>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:12px;">
+  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+    <span style="font-size:13px;font-weight:600;">状态：</span>
+    {% for st, label in [('all','全部'),('draft','草稿'),('publishing','发布中'),('published','已发布'),('failed','失败')] %}
+    <a href="?status={{ st }}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}"
+       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}ok{% else %}pending{% endif %}"
+       style="text-decoration:none;cursor:pointer;">{{ label }}</a>
+    {% endfor %}
+    {% if pack_id_filter %}
+    <span style="font-size:12px;color:var(--text-muted);">pack #{{ pack_id_filter }}
+      <a href="?status={{ status_filter or 'all' }}" style="color:var(--accent);text-decoration:none;margin-left:6px;">清除</a>
+    </span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">{{ total }} 个产品</h3>
+  </div>
+  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
+    <table style="width:100%;font-size:13px;min-width:900px;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);">
+          <th style="padding:8px 0;width:60px;">封面</th>
+          <th>title (en) / pack</th>
+          <th>tiktok_product_id</th>
+          <th>状态</th>
+          <th>created</th>
+          <th>published</th>
+          <th style="text-align:right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:8px 0;">
+            {% if p.pack_cover_url %}
+            <img src="{{ p.pack_cover_url }}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;background:#f5f5f5;">
+            {% endif %}
+          </td>
+          <td>
+            <a href="/v2/products/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ (p.title or '（未生成）')[:80] }}</a>
+            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ p.pack_name or '—' }}</div>
+          </td>
+          <td><code style="font-size:11px;color:var(--text-muted);">{{ p.tiktok_product_id or '—' }}</code></td>
+          <td><span class="v2-status-pill {% if p.publish_status == 'published' %}ok{% elif p.publish_status == 'failed' %}error{% elif p.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ p.publish_status }}</span></td>
+          <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
+          <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human or '—' }}</td>
+          <td style="text-align:right;"><a href="/v2/products/{{ p.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+          暂无产品 — 去某个卡包详情页点 “→ TKShop 产品”
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
