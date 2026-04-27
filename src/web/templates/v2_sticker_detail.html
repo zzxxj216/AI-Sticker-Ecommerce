@@ -1,0 +1,101 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header">
+  <div>
+    <p class="eyebrow">A.3 · Sticker Detail</p>
+    <h1>贴纸 #{{ sticker.sticker_idx }} <span style="font-weight:400;color:var(--text-muted);">— {{ sticker.name }}</span></h1>
+    <p class="page-subtitle">
+      系列 <a href="/v2/series/{{ sticker.series_id }}" style="color:var(--accent);">#{{ sticker.series_idx }}</a>
+      · 预览 <a href="/v2/previews/{{ sticker.preview_id }}" style="color:var(--accent);">#{{ sticker.preview_idx }}</a>
+      · model: <code>{{ sticker.model_used or '—' }}</code>
+      · <span class="v2-status-pill {% if sticker.generation_status == 'ok' %}ok{% elif sticker.generation_status == 'error' %}error{% elif sticker.generation_status == 'generating' %}running{% else %}pending{% endif %}">{{ sticker.generation_status }}</span>
+      {% if not sticker.is_selected %}<span class="v2-status-pill error">已停用</span>{% endif %}
+    </p>
+  </div>
+  <div>
+    <a href="/v2/previews/{{ sticker.preview_id }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回预览</a>
+  </div>
+</section>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+
+  <!-- 切出来的单图 -->
+  <section class="panel" style="padding:14px;">
+    <h3 style="margin:0 0 8px;font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">切出的单图</h3>
+    {% if sticker.image_url %}
+    <img src="{{ sticker.image_url }}" alt="sticker {{ sticker.sticker_idx }}"
+         style="width:100%;border-radius:8px;display:block;background:#f5f5f5;">
+    <div style="margin-top:8px;font-size:11px;color:var(--text-muted);"><code>{{ sticker.image_path }}</code></div>
+    {% else %}
+    <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);">
+      {% if sticker.generation_status == 'error' %}生成失败{% elif sticker.generation_status == 'generating' %}生成中…{% else %}尚未生成{% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- 来源预览 -->
+  <section class="panel" style="padding:14px;">
+    <h3 style="margin:0 0 8px;font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">来源预览图</h3>
+    {% if sticker.preview_image_url %}
+    <a href="/v2/previews/{{ sticker.preview_id }}">
+      <img src="{{ sticker.preview_image_url }}" alt="source preview"
+           style="width:100%;border-radius:8px;display:block;background:#f5f5f5;">
+    </a>
+    {% else %}
+    <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);">无预览图</div>
+    {% endif %}
+  </section>
+
+</div>
+
+<!-- 操作 + 文案 -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:14px 24px;">
+    <h3 style="margin:0;font-size:14px;">操作</h3>
+  </div>
+  <div style="padding:0 24px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <form method="post" action="/v2/stickers/{{ sticker.id }}/regenerate" id="regen-form" style="display:inline;">
+      <button type="submit" id="regen-btn"
+              style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+        ↻ 重新切（约 30-60s）
+      </button>
+    </form>
+    <form method="post" action="/v2/stickers/{{ sticker.id }}/toggle" style="display:inline;">
+      <input type="hidden" name="is_selected" value="{{ 0 if sticker.is_selected else 1 }}">
+      <button type="submit"
+              style="padding:8px 16px;background:{% if sticker.is_selected %}var(--surface){% else %}var(--success){% endif %};color:{% if sticker.is_selected %}var(--text){% else %}#fff{% endif %};border:1px solid {% if sticker.is_selected %}var(--line){% else %}var(--success){% endif %};border-radius:8px;font-weight:600;cursor:pointer;">
+        {% if sticker.is_selected %}停用此贴纸{% else %}恢复使用{% endif %}
+      </button>
+    </form>
+    <span style="color:var(--text-muted);font-size:12px;">停用 = 卡包打包（A.4 / W3）时不计入。</span>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:14px 24px;">
+    <h3 style="margin:0;font-size:14px;">brief / 描述</h3>
+  </div>
+  <div style="padding:0 24px 18px;font-size:13px;color:var(--text-secondary);">
+    {{ sticker.description or '—' }}
+  </div>
+</section>
+
+<section class="panel">
+  <details>
+    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">完整 prompt_text ({{ sticker.prompt_text|length }} 字符)</summary>
+    <pre style="margin:0;padding:0 24px 18px;font-size:12px;color:var(--text-secondary);white-space:pre-wrap;background:var(--bg-subtle);border-radius:8px;margin:0 24px 18px;padding:14px;">{{ sticker.prompt_text }}</pre>
+  </details>
+</section>
+
+<script>
+  document.getElementById('regen-form').addEventListener('submit', function() {
+    var btn = document.getElementById('regen-btn');
+    btn.disabled = true;
+    btn.textContent = '切中...';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  });
+</script>
+
+{% endblock %}

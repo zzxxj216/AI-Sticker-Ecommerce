@@ -20,6 +20,31 @@ UNIVERSAL_TAIL = (
 )
 
 
+def build_split_prompt(
+    *,
+    sticker_brief: str,
+    sticker_idx: int,
+    total_stickers: int,
+    style_anchor: str,
+) -> str:
+    """Prompt for image_edit that extracts ONE sticker from a sheet preview.
+
+    The source image is a {total_stickers}-sticker sheet; we want a single
+    isolated die-cut sticker on a clean background, square format, ready
+    to be sold individually or printed alone.
+    """
+    return (
+        f"From this sticker sheet of {total_stickers} stickers, isolate ONLY "
+        f"sticker #{sticker_idx}: \"{sticker_brief}\". "
+        f"Re-render that single sticker as a standalone, centered, die-cut "
+        f"vinyl sticker on a clean white background, with a thin white "
+        f"border around the design, square 1:1 composition, no other "
+        f"stickers visible, no sheet layout, print-ready, high detail. "
+        f"Keep the exact text, colors, and visual style as it appears in "
+        f"the sheet. Style reference: {style_anchor[:300]}"
+    )
+
+
 def build_preview_prompt(
     *,
     style_anchor: str,

@@ -616,6 +616,9 @@ def v2_preview_detail(request: Request, preview_id: int):
         raise HTTPException(status_code=404, detail="preview not found")
     p["image_url"] = _path_to_v2_url(p.get("image_path") or "")
     p["generated_human"] = _fmt_ts(p.get("generated_at"))
+    for s in p.get("stickers", []):
+        s["image_url"] = _path_to_v2_url(s.get("image_path") or "")
+        s["generated_human"] = _fmt_ts(s.get("generated_at"))
     return templates.TemplateResponse(
         "v2_preview_detail.html",
         {
@@ -635,6 +638,64 @@ async def v2_preview_regenerate(request: Request, preview_id: int):
     result = svc.regenerate_preview(preview_id)
     logger.info("preview #%d regenerate → %s", preview_id, result["status"])
     return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
+
+
+@router.post("/previews/{preview_id:int}/split")
+async def v2_preview_split(request: Request, preview_id: int):
+    """Auto-prepare + run image_edit for every sticker brief under this preview."""
+    svc = get_preview_gen_service()
+    try:
+        prep = svc.prepare_stickers(preview_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if prep.get("skipped_reason"):
+        logger.warning("preview #%d split skipped: %s", preview_id, prep["skipped_reason"])
+        return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
+    result = svc.split_pending_for_preview(preview_id)
+    logger.info(
+        "preview #%d split: %d ok / %d error of %d attempted",
+        preview_id, result["ok"], result["error"], result["attempted"],
+    )
+    return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
+
+
+@router.get("/stickers/{sticker_id:int}", response_class=HTMLResponse)
+def v2_sticker_detail(request: Request, sticker_id: int):
+    svc = get_preview_gen_service()
+    s = svc.get_sticker(sticker_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="sticker not found")
+    s["image_url"] = _path_to_v2_url(s.get("image_path") or "")
+    s["preview_image_url"] = _path_to_v2_url(s.get("preview_image_path") or "")
+    s["generated_human"] = _fmt_ts(s.get("generated_at"))
+    return templates.TemplateResponse(
+        "v2_sticker_detail.html",
+        {
+            "request": request,
+            "page_title": f"贴纸 #{sticker_id}",
+            "sticker": s,
+        },
+    )
+
+
+@router.post("/stickers/{sticker_id:int}/regenerate")
+async def v2_sticker_regenerate(request: Request, sticker_id: int):
+    svc = get_preview_gen_service()
+    if not svc.get_sticker(sticker_id):
+        raise HTTPException(status_code=404, detail="sticker not found")
+    result = svc.regenerate_sticker(sticker_id)
+    logger.info("sticker #%d regenerate → %s", sticker_id, result["status"])
+    return RedirectResponse(url=f"/v2/stickers/{sticker_id}", status_code=303)
+
+
+@router.post("/stickers/{sticker_id:int}/toggle")
+async def v2_sticker_toggle(request: Request, sticker_id: int):
+    form = await request.form()
+    is_selected = (form.get("is_selected") or "0").strip() == "1"
+    svc = get_preview_gen_service()
+    if not svc.toggle_sticker_selection(sticker_id, is_selected):
+        raise HTTPException(status_code=404, detail="sticker not found")
+    return RedirectResponse(url=f"/v2/stickers/{sticker_id}", status_code=303)
 
 
 @router.get("/packs", response_class=HTMLResponse)

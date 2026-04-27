@@ -47,10 +47,19 @@
             ↻ 重新生成（约 30-60s）
           </button>
         </form>
+        {% if preview.generation_status == 'ok' and preview.sticker_summary.expected > 0 %}
+        <form method="post" action="/v2/previews/{{ preview.id }}/split" id="split-form">
+          <button type="submit" id="split-btn"
+                  style="width:100%;padding:8px 14px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+            ✂ 切 / 补齐 sticker（{{ preview.sticker_summary.expected - preview.sticker_summary.ok }} 张待办）
+          </button>
+        </form>
+        {% else %}
         <button disabled
                 style="width:100%;padding:8px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:not-allowed;">
-          切单 sticker（W2.4）
+          切单 sticker（先生成预览）
         </button>
+        {% endif %}
       </div>
     </section>
 
@@ -64,6 +73,42 @@
     </section>
   </div>
 </div>
+
+{% if preview.stickers or preview.sticker_summary.expected %}
+<section class="panel" style="margin-top:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">单图 sticker</h3>
+    <span style="font-size:12px;color:var(--text-muted);">
+      {{ preview.sticker_summary.ok }} ok ·
+      {{ preview.sticker_summary.error }} err ·
+      {{ preview.sticker_summary.generating }} gen ·
+      共 {{ preview.sticker_summary.expected }} 应有
+    </span>
+  </div>
+  <div style="padding:0 24px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;">
+    {% for s in preview.stickers %}
+    <a href="/v2/stickers/{{ s.id }}" style="text-decoration:none;color:inherit;">
+      <div class="panel" style="padding:8px;{% if not s.is_selected %}opacity:.5;{% endif %}">
+        {% if s.image_url %}
+        <img src="{{ s.image_url }}"
+             alt="sticker {{ s.sticker_idx }}"
+             style="width:100%;border-radius:6px;display:block;background:#f5f5f5;aspect-ratio:1/1;object-fit:contain;">
+        {% else %}
+        <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:11px;">
+          {% if s.generation_status == 'generating' %}生成中…{% elif s.generation_status == 'error' %}失败{% else %}待生成{% endif %}
+        </div>
+        {% endif %}
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+          <span class="v2-section-tag">#{{ s.sticker_idx }}</span>
+          <span class="v2-status-pill {% if s.generation_status == 'ok' %}ok{% elif s.generation_status == 'error' %}error{% elif s.generation_status == 'generating' %}running{% else %}pending{% endif %}" style="font-size:10px;">{{ s.generation_status }}</span>
+        </div>
+        <div style="margin-top:4px;font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ s.name or '—' }}</div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 <section class="panel" style="margin-top:16px;">
   <details>
@@ -80,6 +125,16 @@
     btn.style.opacity = '0.6';
     btn.style.cursor = 'not-allowed';
   });
+  var splitForm = document.getElementById('split-form');
+  if (splitForm) {
+    splitForm.addEventListener('submit', function() {
+      var btn = document.getElementById('split-btn');
+      btn.disabled = true;
+      btn.textContent = '切单中...（每张约 60s，3 张并发）';
+      btn.style.opacity = '0.6';
+      btn.style.cursor = 'not-allowed';
+    });
+  }
 </script>
 
 {% endblock %}

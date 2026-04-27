@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 from src.core.logger import get_logger
 from src.services.ai.router import AIRouter, get_router
-from src.services.preview_gen.prompts import build_preview_prompt
+from src.services.preview_gen.prompts import build_preview_prompt, build_split_prompt
 from src.services.storage.pack_store import PackStore, get_pack_store, make_pack_uid
 
 logger = get_logger("service.preview_gen")
@@ -309,6 +309,220 @@ class PreviewGenService:
         return {"status": "error", "preview_id": preview_id, "error": last_err}
 
     # ------------------------------------------------------------------
+    # Split phase — image_edit per sticker
+    # ------------------------------------------------------------------
+
+    def prepare_stickers(self, preview_id: int) -> dict[str, Any]:
+        """Create pending pack_stickers rows from this preview's brief.
+
+        The brief is looked up from the parent series's metadata_json
+        (preview_briefs[preview_idx]). Idempotent — only creates rows
+        for missing sticker_idx values.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT pp.id, pp.preview_idx, pp.image_path,
+                       pp.generation_status,
+                       s.id AS series_id, s.style_anchor, s.metadata_json
+                  FROM pack_previews pp
+                  JOIN pack_series   s ON s.id = pp.series_id
+                 WHERE pp.id = ?
+                """,
+                (preview_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"preview #{preview_id} not found")
+            if row["generation_status"] != "ok" or not row["image_path"]:
+                return {"created": 0, "existing": 0,
+                        "skipped_reason": "preview not generated yet"}
+
+            briefs = self._parse_briefs(row["metadata_json"])
+            brief = next(
+                (b for b in briefs if int(b.get("preview_idx") or 0) == row["preview_idx"]),
+                None,
+            )
+            if not brief or not brief.get("stickers"):
+                return {"created": 0, "existing": 0,
+                        "skipped_reason": "no sticker brief for this preview_idx"}
+
+            stickers = list(brief.get("stickers") or [])
+            existing_idx = {
+                r[0] for r in conn.execute(
+                    "SELECT sticker_idx FROM pack_stickers WHERE preview_id = ?",
+                    (preview_id,),
+                ).fetchall()
+            }
+            created = 0
+            for idx, brief_text in enumerate(stickers, 1):
+                if idx in existing_idx:
+                    continue
+                prompt = build_split_prompt(
+                    sticker_brief=brief_text,
+                    sticker_idx=idx,
+                    total_stickers=len(stickers),
+                    style_anchor=row["style_anchor"] or "",
+                )
+                conn.execute(
+                    """
+                    INSERT INTO pack_stickers
+                        (preview_id, sticker_idx, name, description,
+                         image_path, prompt_text, model_used,
+                         generation_status, generated_at, is_selected)
+                    VALUES (?, ?, ?, ?, '', ?, '', 'pending', NULL, 1)
+                    """,
+                    (preview_id, idx,
+                     (brief_text.split("/", 1)[0]).strip()[:200],
+                     brief_text[:500], prompt),
+                )
+                created += 1
+            conn.commit()
+        return {"created": created, "existing": len(existing_idx),
+                "total": len(stickers), "skipped_reason": ""}
+
+    def split_pending_for_preview(
+        self,
+        preview_id: int,
+        *,
+        max_workers: int = DEFAULT_MAX_WORKERS,
+        size: str = DEFAULT_IMAGE_SIZE,
+    ) -> dict[str, Any]:
+        """Run image_edit for every pending sticker under this preview."""
+        with _open_db(self.db_path) as conn:
+            ids = [r[0] for r in conn.execute(
+                """
+                SELECT id FROM pack_stickers
+                 WHERE preview_id = ? AND generation_status IN ('pending', 'error')
+                 ORDER BY sticker_idx
+                """,
+                (preview_id,),
+            ).fetchall()]
+        if not ids:
+            return {"attempted": 0, "ok": 0, "error": 0, "errors": []}
+
+        ok_n, err_n, errors = 0, 0, []
+        workers = max(1, min(max_workers, len(ids)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(self._split_one_with_retry, sid, size): sid
+                       for sid in ids}
+            for fut in as_completed(futures):
+                sid = futures[fut]
+                try:
+                    r = fut.result()
+                    if r["status"] == "ok":
+                        ok_n += 1
+                    else:
+                        err_n += 1
+                        errors.append({"sticker_id": sid, "error": r["error"][:200]})
+                except Exception as e:
+                    err_n += 1
+                    errors.append({"sticker_id": sid, "error": str(e)[:200]})
+
+        return {"attempted": len(ids), "ok": ok_n, "error": err_n,
+                "errors": errors}
+
+    def regenerate_sticker(self, sticker_id: int, *, size: str = DEFAULT_IMAGE_SIZE) -> dict[str, Any]:
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                "UPDATE pack_stickers SET generation_status = 'pending' WHERE id = ?",
+                (sticker_id,),
+            )
+            conn.commit()
+        return self._split_one_with_retry(sticker_id, size)
+
+    def _split_one_with_retry(self, sticker_id: int, size: str) -> dict[str, Any]:
+        """image_edit one sticker. Marks status, writes file, updates row.
+
+        Loads the parent preview's PNG bytes from disk and feeds them to
+        AIRouter.image_edit alongside the sticker's prompt_text.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT ps.id, ps.sticker_idx, ps.prompt_text, ps.preview_id,
+                       pp.image_path AS preview_image_path,
+                       s.series_idx, s.pack_uid
+                  FROM pack_stickers ps
+                  JOIN pack_previews pp ON pp.id = ps.preview_id
+                  JOIN pack_series   s  ON s.id  = pp.series_id
+                 WHERE ps.id = ?
+                """,
+                (sticker_id,),
+            ).fetchone()
+            if not row:
+                return {"status": "error", "error": f"sticker #{sticker_id} not found"}
+            if not row["preview_image_path"]:
+                return {"status": "error", "error": "parent preview has no image yet"}
+            preview_path = Path(row["preview_image_path"])
+            if not preview_path.is_file():
+                return {"status": "error", "error": f"preview file missing: {preview_path}"}
+            conn.execute(
+                "UPDATE pack_stickers SET generation_status = 'generating' WHERE id = ?",
+                (sticker_id,),
+            )
+            conn.commit()
+
+        source_bytes = preview_path.read_bytes()
+        last_err = ""
+        for attempt in range(DEFAULT_RETRY_ON_ERROR + 1):
+            try:
+                t0 = time.time()
+                image_bytes = self.router.image_edit(
+                    source_bytes,
+                    row["prompt_text"],
+                    size=size,
+                    task=f"sticker_split{':retry' + str(attempt) if attempt else ''}",
+                    related_table="pack_stickers",
+                    related_id=sticker_id,
+                )
+                # Sticker filename is unique within the series, so we use
+                # an idx that combines preview + sticker so multiple previews
+                # in the same series don't collide.
+                global_idx = row["preview_id"] * 1000 + row["sticker_idx"]
+                img_path = self.store.write_sticker(
+                    pack_uid=row["pack_uid"],
+                    series_idx=row["series_idx"],
+                    sticker_idx=global_idx,
+                    image_bytes=image_bytes,
+                    meta={
+                        "preview_id": row["preview_id"],
+                        "sticker_idx": row["sticker_idx"],
+                        "prompt": row["prompt_text"][:500],
+                    },
+                )
+                rel = img_path.as_posix()
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        """
+                        UPDATE pack_stickers
+                           SET image_path = ?, model_used = ?,
+                               generation_status = 'ok', generated_at = ?
+                         WHERE id = ?
+                        """,
+                        (rel, self.router.DEFAULT_IMAGE_MODEL,
+                         int(time.time()), sticker_id),
+                    )
+                    conn.commit()
+                logger.info("sticker #%d split in %.1fs → %s",
+                            sticker_id, time.time() - t0, rel)
+                return {"status": "ok", "sticker_id": sticker_id, "image_path": rel}
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+                logger.warning("sticker #%d attempt %d/%d failed: %s",
+                               sticker_id, attempt + 1,
+                               DEFAULT_RETRY_ON_ERROR + 1, last_err)
+                if attempt < DEFAULT_RETRY_ON_ERROR:
+                    time.sleep(2 ** attempt)
+
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                "UPDATE pack_stickers SET generation_status = 'error' WHERE id = ?",
+                (sticker_id,),
+            )
+            conn.commit()
+        return {"status": "error", "sticker_id": sticker_id, "error": last_err}
+
+    # ------------------------------------------------------------------
     # Read APIs for UI
     # ------------------------------------------------------------------
 
@@ -343,14 +557,73 @@ class PreviewGenService:
                        pp.image_path, pp.model_used, pp.generation_status,
                        pp.generated_at,
                        s.series_idx, s.series_name, s.pack_uid, s.style_anchor,
-                       s.plan_id
+                       s.plan_id, s.metadata_json
                   FROM pack_previews pp
                   JOIN pack_series   s ON s.id = pp.series_id
                  WHERE pp.id = ?
                 """,
                 (preview_id,),
             ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            stickers = conn.execute(
+                """
+                SELECT id, sticker_idx, name, description, image_path,
+                       prompt_text, model_used, generation_status, generated_at
+                  FROM pack_stickers
+                 WHERE preview_id = ?
+                 ORDER BY sticker_idx
+                """,
+                (preview_id,),
+            ).fetchall()
+        d["stickers"] = [dict(s) for s in stickers]
+        # Counts for status grid
+        ok_n = sum(1 for s in d["stickers"] if s["generation_status"] == "ok")
+        err_n = sum(1 for s in d["stickers"] if s["generation_status"] == "error")
+        gen_n = sum(1 for s in d["stickers"] if s["generation_status"] == "generating")
+        # Expected count from briefs
+        try:
+            briefs = (json.loads(d.get("metadata_json") or "{}").get("preview_briefs") or [])
+            brief = next((b for b in briefs
+                          if int(b.get("preview_idx") or 0) == d["preview_idx"]), None)
+            expected = len(brief.get("stickers") or []) if brief else 0
+        except Exception:
+            expected = 0
+        d["sticker_summary"] = {
+            "ok": ok_n, "error": err_n, "generating": gen_n,
+            "total": len(d["stickers"]), "expected": expected,
+        }
+        return d
+
+    def get_sticker(self, sticker_id: int) -> Optional[dict]:
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT ps.id, ps.preview_id, ps.sticker_idx, ps.name,
+                       ps.description, ps.image_path, ps.prompt_text,
+                       ps.model_used, ps.generation_status, ps.generated_at,
+                       ps.is_selected,
+                       pp.preview_idx, pp.image_path AS preview_image_path,
+                       s.id AS series_id, s.series_idx, s.series_name,
+                       s.pack_uid, s.plan_id
+                  FROM pack_stickers   ps
+                  JOIN pack_previews   pp ON pp.id = ps.preview_id
+                  JOIN pack_series     s  ON s.id  = pp.series_id
+                 WHERE ps.id = ?
+                """,
+                (sticker_id,),
+            ).fetchone()
         return dict(row) if row else None
+
+    def toggle_sticker_selection(self, sticker_id: int, is_selected: bool) -> bool:
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE pack_stickers SET is_selected = ? WHERE id = ?",
+                (1 if is_selected else 0, sticker_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
 
 # ---------------------------------------------------------------------------
