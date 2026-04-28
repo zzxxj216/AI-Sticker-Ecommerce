@@ -1014,7 +1014,7 @@ def v2_video_new(request: Request, pack_id: int | None = None):
     packs, _ = get_pack_service().list_packs(status="active", limit=50)
     for p in packs:
         p["cover_url"] = _path_to_v2_url(p.get("cover_image_path") or "")
-    blotato_accounts = get_tk_video_service().list_blotato_accounts()
+    blotato = get_tk_video_service().list_blotato_accounts()
     return templates.TemplateResponse(
         "v2_video_new.html",
         {
@@ -1022,7 +1022,9 @@ def v2_video_new(request: Request, pack_id: int | None = None):
             "page_title": "新建 TK 视频",
             "pack": pack,
             "active_packs": packs,
-            "blotato_accounts": blotato_accounts,
+            "blotato_accounts": blotato["accounts"],
+            "blotato_ok": blotato["ok"],
+            "blotato_error": blotato["error"],
         },
     )
 
@@ -1078,14 +1080,16 @@ def v2_video_detail(request: Request, video_id: int):
     v["published_human"] = _fmt_ts(v.get("published_at"))
     v["pack_cover_url"] = _path_to_v2_url(v.get("cover_image_path") or "")
     v["video_url"] = _path_to_v2_url(v.get("local_video_path") or "")
-    blotato_accounts = svc.list_blotato_accounts()
+    blotato = svc.list_blotato_accounts()
     return templates.TemplateResponse(
         "v2_video_detail.html",
         {
             "request": request,
             "page_title": f"视频 #{video_id}",
             "video": v,
-            "blotato_accounts": blotato_accounts,
+            "blotato_accounts": blotato["accounts"],
+            "blotato_ok": blotato["ok"],
+            "blotato_error": blotato["error"],
         },
     )
 

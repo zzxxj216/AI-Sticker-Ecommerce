@@ -80,10 +80,15 @@
         来源：Blotato.get_tiktok_accounts()，由 BLOTATO_TK_ACCOUNT_IDS env 过滤。留空则派发时自动用第一个账号。
       </p>
       {% else %}
-      <input type="text" name="blotato_account_id" placeholder="（Blotato 未配置 / 无可用账号）"
+      <input type="text" name="blotato_account_id" placeholder="例如 38083"
              style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
       <p style="margin:8px 0 0;font-size:11px;color:var(--danger);">
-        ⚠ 没获取到 Blotato 账号 — 检查 BLOTATO_API_KEY / BLOTATO_TK_ACCOUNT_IDS。
+        {% if blotato_error == 'not_configured' %}
+        ⚠ Blotato 未配置 — 在 .env 加 BLOTATO_API_KEY 后重启服务。
+        {% else %}
+        ⚠ 没拉到 Blotato 账号列表（Blotato API 临时不可达，可手填 ID 继续，或 <a href="" onclick="location.reload();return false;">刷新本页</a>）：<br>
+        <code style="font-size:10px;">{{ blotato_error or '(unknown)' }}</code>
+        {% endif %}
       </p>
       {% endif %}
     </div>

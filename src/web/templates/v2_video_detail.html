@@ -66,8 +66,15 @@
         {% endfor %}
       </select>
       {% else %}
-      <input type="text" name="blotato_account_id" value="{{ video.blotato_account_id or '' }}" placeholder="Blotato 未连通"
+      <input type="text" name="blotato_account_id" value="{{ video.blotato_account_id or '' }}" placeholder="例如 38083"
              style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+      <p style="margin:4px 0 0;font-size:11px;color:var(--danger);">
+        {% if blotato_error == 'not_configured' %}
+        Blotato 未配置（缺 BLOTATO_API_KEY）。
+        {% else %}
+        Blotato API 暂未拉到账号列表，可手填 ID 或 <a href="" onclick="location.reload();return false;">刷新</a>。<code style="font-size:10px;">{{ blotato_error or '' }}</code>
+        {% endif %}
+      </p>
       {% endif %}
     </div>
     <div style="margin-bottom:10px;">

@@ -97,22 +97,26 @@ class TKVideoService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def list_blotato_accounts() -> list[dict]:
-        """List Blotato-side TikTok accounts the operator can publish to.
+    def list_blotato_accounts() -> dict[str, Any]:
+        """List Blotato-side TikTok accounts.
 
-        Returns ``[{id, displayName, username, ...}, ...]`` filtered by
-        BLOTATO_TK_ACCOUNT_IDS env if that's set. Returns empty list if
-        Blotato isn't configured — UI shows that as "未配置".
+        Returns ``{"accounts": [...], "ok": bool, "error": str}`` so the
+        UI can distinguish three states:
+          - ok=True, accounts=[...]   → render dropdown
+          - ok=False, error="not_configured"  → BLOTATO_API_KEY missing
+          - ok=False, error=<message> → transient API failure (retry)
         """
         from src.services.tiktok.blotato_service import BlotaToService
         bsvc = BlotaToService()
         if not bsvc.is_configured():
-            return []
+            return {"accounts": [], "ok": False, "error": "not_configured"}
         try:
-            return bsvc.get_tiktok_accounts()
+            accs = bsvc.get_tiktok_accounts()
+            return {"accounts": accs, "ok": True, "error": ""}
         except Exception as e:
-            logger.warning("list_blotato_accounts failed: %s", e)
-            return []
+            err = f"{type(e).__name__}: {e}"
+            logger.warning("list_blotato_accounts failed: %s", err)
+            return {"accounts": [], "ok": False, "error": err[:200]}
 
     def update_blotato_account(self, video_id: int, account_id: str) -> bool:
         with _open_db(self.db_path) as conn:
