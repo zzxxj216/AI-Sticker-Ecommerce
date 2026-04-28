@@ -45,16 +45,33 @@ class BlotaToService:
             "blotato-api-key": self.api_key,
         }
 
+    def _raise_with_body(self, resp: "requests.Response") -> None:
+        """raise_for_status replacement that includes the response body
+        in the exception message — Blotato 400/403 tell you exactly which
+        field they want, and that detail was being swallowed."""
+        if resp.ok:
+            return
+        body = ""
+        try:
+            j = resp.json()
+            body = j.get("message") or str(j)
+        except Exception:
+            body = resp.text or ""
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason} for {resp.url}: {body[:600]}",
+            response=resp,
+        )
+
     def _get(self, path: str, params: dict | None = None) -> dict:
         url = f"{BLOTATO_BASE_URL}{path}"
         resp = requests.get(url, headers=self._headers(), params=params, timeout=self._timeout)
-        resp.raise_for_status()
+        self._raise_with_body(resp)
         return resp.json()
 
     def _post(self, path: str, json_body: dict | None = None) -> dict:
         url = f"{BLOTATO_BASE_URL}{path}"
         resp = requests.post(url, headers=self._headers(), json=json_body, timeout=self._timeout)
-        resp.raise_for_status()
+        self._raise_with_body(resp)
         return resp.json()
 
     # ------------------------------------------------------------------
