@@ -506,6 +506,31 @@ def main() -> int:
         print(f"  minted {n_uids} new pack_uid(s)")
         print(f"  inserted {n_previews} new pack_previews")
 
+        # Auto-promote each series that already has at least 1 ok preview
+        # so the operator sees them in /v2/packs and /v2/gallery immediately.
+        # Series with no generated previews yet get promoted when the
+        # operator runs preview gen (manual click) — see PackService for
+        # the preview-only fallback.
+        from src.services.packs import get_pack_service
+        psvc = get_pack_service()
+        promotable = conn.execute(
+            """
+            SELECT s.id FROM pack_series s
+             WHERE s.plan_id = ?
+               AND s.id IN (SELECT series_id FROM pack_previews
+                             WHERE generation_status = 'ok')
+               AND s.id NOT IN (SELECT series_id FROM packs)
+            """,
+            (plan_id,),
+        ).fetchall()
+        if promotable:
+            print(f"\n=== Auto-promoting {len(promotable)} series with previews → packs ===")
+            for r in promotable:
+                res = psvc.create_pack_from_series(r["id"])
+                print(f"  series #{r['id']} → pack #{res['pack_id']} "
+                      f"(preview_only={res.get('preview_only')}, "
+                      f"target={res.get('total_stickers')})")
+
         print(f"\n=== Final state ===")
         for sr in conn.execute(
             "SELECT id, series_idx, series_name, pack_uid FROM pack_series WHERE plan_id=? ORDER BY series_idx",
@@ -514,7 +539,9 @@ def main() -> int:
             n = conn.execute(
                 "SELECT COUNT(*) FROM pack_previews WHERE series_id=?", (sr["id"],),
             ).fetchone()[0]
-            print(f"  series #{sr['id']} idx={sr['series_idx']} previews={n}  uid={sr['pack_uid'][:30]}")
+            pack = conn.execute("SELECT id FROM packs WHERE series_id=?", (sr["id"],)).fetchone()
+            pack_str = f" → pack #{pack['id']}" if pack else ""
+            print(f"  series #{sr['id']} idx={sr['series_idx']} previews={n}  uid={sr['pack_uid'][:30]}{pack_str}")
         return 0
     finally:
         conn.close()

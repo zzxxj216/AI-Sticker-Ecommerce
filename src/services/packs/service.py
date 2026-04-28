@@ -8,6 +8,7 @@ pack_id and treat the pack as the unit of work.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -85,9 +86,20 @@ class PackService:
                 """,
                 (series_id,),
             ).fetchall()
-            if not ok_stickers:
-                raise ValueError("series has no successful selected stickers — "
-                                 "generate previews and split first")
+            ok_previews = conn.execute(
+                """
+                SELECT id, preview_idx, image_path
+                  FROM pack_previews
+                 WHERE series_id = ?
+                   AND generation_status = 'ok'
+                 ORDER BY preview_idx
+                """,
+                (series_id,),
+            ).fetchall()
+            if not ok_stickers and not ok_previews:
+                raise ValueError(
+                    "series has neither generated previews nor split stickers — "
+                    "generate previews first")
 
             cover_path = ""
             if cover_sticker_id:
@@ -95,8 +107,30 @@ class PackService:
                 if not hit:
                     raise ValueError(f"sticker #{cover_sticker_id} not in this series's ok set")
                 cover_path = hit["image_path"]
-            else:
+            elif ok_stickers:
                 cover_path = ok_stickers[0]["image_path"]
+            else:
+                # Preview-only fallback — use the first generated preview as cover
+                cover_path = ok_previews[0]["image_path"]
+
+            # total_stickers = actual ok stickers if any have been split,
+            # otherwise the *expected* count from the briefs (so the operator
+            # sees the target number, not zero, until splitting runs).
+            if ok_stickers:
+                total = len(ok_stickers)
+            else:
+                meta_row = conn.execute(
+                    "SELECT metadata_json FROM pack_series WHERE id = ?",
+                    (series_id,),
+                ).fetchone()
+                expected = 0
+                try:
+                    md = json.loads(meta_row["metadata_json"] or "{}")
+                    for b in md.get("preview_briefs", []):
+                        expected += len(b.get("stickers") or [])
+                except Exception:
+                    pass
+                total = expected
 
             now = int(time.time())
             cur = conn.execute(
@@ -110,16 +144,20 @@ class PackService:
                     series["pack_uid"], series_id,
                     display_name or series["series_name"] or f"pack_{series_id}",
                     cover_path,
-                    len(ok_stickers),
+                    total,
                     now,
                 ),
             )
             conn.commit()
             pack_id = cur.lastrowid
-        logger.info("pack #%d created for series #%d (%d stickers)",
-                    pack_id, series_id, len(ok_stickers))
+        logger.info(
+            "pack #%d created for series #%d (target %d stickers, "
+            "%d split / %d previews)",
+            pack_id, series_id, total, len(ok_stickers), len(ok_previews),
+        )
         return {"pack_id": pack_id, "pack_uid": series["pack_uid"],
-                "created": True, "total_stickers": len(ok_stickers)}
+                "created": True, "total_stickers": total,
+                "preview_only": not ok_stickers}
 
     # ------------------------------------------------------------------
     # Read
@@ -148,7 +186,14 @@ class PackService:
                        p.created_at,
                        s.series_idx, s.series_name, s.pack_archetype,
                        s.priority, s.plan_id,
-                       t.topic_name
+                       t.topic_name,
+                       (SELECT COUNT(*) FROM pack_stickers ps
+                          JOIN pack_previews pp ON pp.id = ps.preview_id
+                         WHERE pp.series_id = s.id
+                           AND ps.generation_status = 'ok') AS sticker_ok_count,
+                       (SELECT COUNT(*) FROM pack_previews pp
+                         WHERE pp.series_id = s.id
+                           AND pp.generation_status = 'ok') AS preview_ok_count
                   FROM packs       p
              LEFT JOIN pack_series s ON s.id = p.series_id
              LEFT JOIN topic_plans tp ON tp.id = s.plan_id
@@ -159,7 +204,12 @@ class PackService:
                 """,
                 tuple(params) + (limit, offset),
             ).fetchall()
-        return [dict(r) for r in rows], total
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["preview_only"] = (d.get("sticker_ok_count") or 0) == 0
+            out.append(d)
+        return out, total
 
     def get_pack_with_downstream(self, pack_id: int) -> Optional[dict]:
         d = self.get_pack(pack_id)
@@ -287,9 +337,9 @@ class PackService:
             return cur.rowcount > 0
 
     def refresh_total_stickers(self, pack_id: int) -> int:
-        """Recount ok+selected stickers — useful after operator toggles
-        is_selected on individual stickers post-creation.
-        """
+        """Recount: prefer real ok+selected stickers, fall back to expected
+        sticker count from metadata.preview_briefs when nothing has been
+        split yet (preview-only pack)."""
         with _open_db(self.db_path) as conn:
             row = conn.execute(
                 "SELECT series_id FROM packs WHERE id = ?", (pack_id,),
@@ -306,6 +356,17 @@ class PackService:
                 """,
                 (row["series_id"],),
             ).fetchone()[0]
+            if cnt == 0:
+                meta = conn.execute(
+                    "SELECT metadata_json FROM pack_series WHERE id = ?",
+                    (row["series_id"],),
+                ).fetchone()
+                try:
+                    md = json.loads(meta["metadata_json"] or "{}")
+                    cnt = sum(len(b.get("stickers") or [])
+                              for b in md.get("preview_briefs", []))
+                except Exception:
+                    pass
             conn.execute("UPDATE packs SET total_stickers = ? WHERE id = ?",
                          (cnt, pack_id))
             conn.commit()

@@ -58,10 +58,11 @@
           <td>
             <a href="/v2/packs/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ p.display_name }}</a>
             <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ p.topic_name or '—' }}</div>
+            {% if p.preview_only %}<span class="v2-status-pill pending" style="font-size:9px;margin-top:2px;">仅预览（{{ p.preview_ok_count }} 张）</span>{% endif %}
           </td>
           <td><code style="font-size:11px;color:var(--text-muted);">{{ p.pack_uid }}</code></td>
           <td>{% if p.pack_archetype %}<span class="v2-status-pill pending">{{ p.pack_archetype }}</span>{% else %}—{% endif %}</td>
-          <td style="text-align:right;font-weight:600;">{{ p.total_stickers }}</td>
+          <td style="text-align:right;font-weight:600;">{{ p.total_stickers }}{% if p.preview_only %}<span style="color:var(--text-muted);font-weight:400;font-size:11px;"> 目标</span>{% endif %}</td>
           <td><span class="v2-status-pill {% if p.status == 'active' %}ok{% else %}error{% endif %}">{{ p.status }}</span></td>
           <td style="color:var(--text-muted);font-size:12px;">{{ p.created_human }}</td>
           <td style="text-align:right;">

@@ -28,9 +28,15 @@
         {% endif %}
         <div style="margin-top:8px;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ p.display_name }}</div>
         <div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted);">
-          <span>{{ p.total_stickers }} 张</span>
+          <span>{{ p.total_stickers }} 张{% if p.preview_only %}（目标）{% endif %}</span>
           {% if p.pack_archetype %}<code>{{ p.pack_archetype }}</code>{% endif %}
         </div>
+        {% if p.preview_only %}
+        <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--text-muted);">
+          <span class="v2-status-pill pending" style="font-size:9px;">仅预览</span>
+          <span>{{ p.preview_ok_count }} 张预览图</span>
+        </div>
+        {% endif %}
       </div>
     </a>
     {% else %}
