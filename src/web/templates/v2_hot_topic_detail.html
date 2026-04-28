@@ -78,6 +78,27 @@
   </div>
 </section>
 
+{% if topic.source == 'synthesized' %}
+<section class="panel" style="margin-bottom:16px;border-left:3px solid var(--success);">
+  <div class="panel-header" style="padding:16px 24px;">
+    <h3 style="margin:0;font-size:16px;">合成题材摘要 (A.1.5)</h3>
+  </div>
+  <div style="padding:0 24px 18px;">
+    <pre style="margin:0;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;background:var(--bg-subtle);padding:14px;border-radius:8px;">{{ topic.theme_summary or '—' }}</pre>
+    {% if topic.parents %}
+    <div style="margin-top:14px;">
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">合成自 {{ topic.parents|length }} 条 raw 候选</div>
+      <ul style="margin:0;padding-left:18px;font-size:12px;">
+        {% for p in topic.parents %}
+        <li style="margin:3px 0;"><a href="/v2/hot-topics/{{ p.id }}" style="color:var(--accent);">[#{{ p.id }}] {{ p.topic_name[:80] }}</a> <code style="color:var(--text-muted);font-size:10px;">({{ p.source }})</code></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
 <section class="panel" style="margin-bottom:16px;">
   <div class="panel-header" style="padding:16px 24px;">
     <h3 style="margin:0;font-size:16px;">引用 / 证据 ({{ topic.evidence_urls|length }})</h3>

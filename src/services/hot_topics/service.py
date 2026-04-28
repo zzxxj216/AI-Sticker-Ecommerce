@@ -28,6 +28,7 @@ KNOWN_PROVIDERS = [
     ("tavily",            "Tavily",            False), # needs TAVILY_API_KEY
     ("perplexity",        "Perplexity",        False), # needs PERPLEXITY_API_KEY
     ("tiktok_cc",         "TikTok Creative Center (legacy)", True),  # already seeded
+    ("synthesized",       "AI 合成题材 (A.1.5)", True),                  # produced by SynthesisService
 ]
 
 VALID_STATUSES = ("pending", "selected", "archived")
@@ -188,13 +189,36 @@ class HotTopicService:
             r = conn.execute(
                 """
                 SELECT id, source, query, topic_name, raw_payload,
-                       evidence_urls, hot_score, region, fetched_at, status
+                       evidence_urls, hot_score, region, fetched_at, status,
+                       theme_summary, parent_topic_ids
                   FROM hot_topics
                  WHERE id = ?
                 """,
                 (topic_id,),
             ).fetchone()
-        return self._row_to_dict(r) if r else None
+            if not r:
+                return None
+            d = self._row_to_dict(r)
+            # Resolve parent topic IDs into names so the detail page can
+            # link back to the raw evidence rows.
+            parents: list[dict] = []
+            try:
+                pids = json.loads(d.get("parent_topic_ids") or "[]")
+            except Exception:
+                pids = []
+            if pids:
+                placeholders = ",".join("?" * len(pids))
+                rows = conn.execute(
+                    f"""
+                    SELECT id, source, topic_name FROM hot_topics
+                     WHERE id IN ({placeholders})
+                     ORDER BY id
+                    """,
+                    tuple(pids),
+                ).fetchall()
+                parents = [dict(p) for p in rows]
+            d["parents"] = parents
+        return d
 
     def update_status(self, topic_id: int, new_status: str) -> bool:
         if new_status not in VALID_STATUSES:
@@ -232,7 +256,9 @@ class HotTopicService:
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
         d = dict(row)
-        for json_field in ("raw_payload", "evidence_urls"):
+        for json_field in ("raw_payload", "evidence_urls", "parent_topic_ids"):
+            if json_field not in d:
+                continue
             try:
                 d[json_field] = json.loads(d.get(json_field) or "{}")
             except Exception:

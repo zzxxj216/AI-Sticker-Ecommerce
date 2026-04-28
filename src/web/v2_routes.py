@@ -32,6 +32,7 @@ from src.services.preview_gen import get_preview_gen_service
 from src.services.tk_videos import get_tk_video_service
 from src.services.tkshop import get_tkshop_service
 from src.services.topic_plans import get_topic_plan_service
+from src.services.topic_synthesis import get_synthesis_service
 from src.services.topic_plans.service import (
     DEFAULT_PREVIEWS_PER_SERIES,
     DEFAULT_SERIES_COUNT,
@@ -404,6 +405,32 @@ def v2_hot_topic_detail(request: Request, topic_id: int):
             "raw_payload_json": raw_payload_json,
         },
     )
+
+
+@router.post("/hot-topics/synthesize")
+async def v2_hot_topics_synthesize(request: Request):
+    """A.1.5 — cluster N selected hot_topics into 1-3 themes via AI."""
+    form = await request.form()
+    raw_ids = form.getlist("topic_ids")
+    extra = (form.get("extra_brief") or "").strip()
+    try:
+        ids = [int(x) for x in raw_ids if str(x).strip().isdigit()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="topic_ids must be ints")
+    if len(ids) < 2:
+        raise HTTPException(status_code=400,
+                            detail="select at least 2 topics to synthesize")
+    svc = get_synthesis_service()
+    try:
+        result = svc.synthesize(ids, extra_brief=extra)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("synthesize failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("synthesized %d themes from %d inputs", len(result["created"]), len(ids))
+    # Land the operator on the synthesized-source filter to see the new rows.
+    return RedirectResponse(url="/v2/hot-topics?source=synthesized", status_code=303)
 
 
 @router.post("/hot-topics/{topic_id:int}/status")

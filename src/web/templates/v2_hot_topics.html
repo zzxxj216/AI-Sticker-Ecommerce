@@ -102,16 +102,22 @@
   </div>
 </section>
 
-<!-- 列表 -->
+<!-- 列表 (form 包裹 → 选中 raw 行后可一键合成题材 A.1.5) -->
+<form method="post" action="/v2/hot-topics/synthesize" id="synth-form">
 <section class="panel">
-  <div class="panel-header" style="padding:16px 24px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
     <h3 style="margin:0;font-size:16px;">{{ total }} 条候选话题</h3>
+    <span style="font-size:11px;color:var(--text-muted);">勾选 ≥2 条 raw 候选 → 底部"合成题材"</span>
   </div>
   <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
     <table style="width:100%;font-size:13px;min-width:900px;">
       <thead>
         <tr style="text-align:left;color:var(--text-muted);">
-          <th style="padding:8px 0;">#</th>
+          <th style="padding:8px 0;width:24px;">
+            <input type="checkbox" id="select-all"
+                   onclick="document.querySelectorAll('input[name=topic_ids]:not(:disabled)').forEach(cb => cb.checked = this.checked);">
+          </th>
+          <th>#</th>
           <th>topic_name</th>
           <th>source</th>
           <th>query</th>
@@ -124,9 +130,19 @@
       </thead>
       <tbody>
         {% for t in topics %}
-        <tr style="border-top:1px solid var(--line-soft);">
-          <td style="padding:8px 0;color:var(--text-muted);">{{ t.id }}</td>
-          <td><a href="/v2/hot-topics/{{ t.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ t.topic_name[:80] }}</a></td>
+        <tr style="border-top:1px solid var(--line-soft);{% if t.source == 'synthesized' %}background:var(--success-bg);{% endif %}">
+          <td style="padding:8px 0;">
+            {% if t.source != 'synthesized' %}
+            <input type="checkbox" name="topic_ids" value="{{ t.id }}">
+            {% else %}
+            <span title="已是合成题材，无需再次合成" style="color:var(--text-muted);">★</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--text-muted);">{{ t.id }}</td>
+          <td>
+            <a href="/v2/hot-topics/{{ t.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ t.topic_name[:80] }}</a>
+            {% if t.source == 'synthesized' %}<span class="v2-status-pill ok" style="margin-left:6px;font-size:10px;">题材</span>{% endif %}
+          </td>
           <td><code style="font-size:12px;">{{ t.source }}</code></td>
           <td style="color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ t.query or '—' }}</td>
           <td>{{ t.region or '—' }}</td>
@@ -138,7 +154,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+        <tr><td colspan="10" style="padding:30px 0;text-align:center;color:var(--text-muted);">
           {% if total == 0 %}暂无热点 — 上方运行一次搜索{% else %}当前过滤无结果{% endif %}
         </td></tr>
         {% endfor %}
@@ -151,5 +167,40 @@
     {% endif %}
   </div>
 </section>
+
+<!-- 合成动作栏 (sticky bottom) -->
+<section class="panel" style="margin-top:14px;position:sticky;bottom:8px;z-index:10;">
+  <div style="padding:14px 24px;display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
+    <div style="flex:1;min-width:300px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">额外说明（可选，例如"偏向 Y2K 风"或"avoid Christmas overlap"）</label>
+      <input type="text" name="extra_brief" placeholder="留空则纯按候选合成"
+             style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+    </div>
+    <button type="submit" id="synth-btn"
+            style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
+      ✨ 合成 1-3 个题材（A.1.5，约 30-60s）
+    </button>
+  </div>
+  <p style="margin:0 24px 14px;font-size:11px;color:var(--text-muted);">
+    合成后会在 <code>source=synthesized</code> 过滤里出现新行。题材规划 (A.2) 推荐用 synthesized 行作为输入，比单条 URL 信息量大。
+  </p>
+</section>
+</form>
+
+<script>
+  document.getElementById('synth-form').addEventListener('submit', function(e) {
+    var n = document.querySelectorAll('input[name=topic_ids]:checked').length;
+    if (n < 2) {
+      e.preventDefault();
+      alert('请至少勾选 2 条 raw 候选再合成');
+      return;
+    }
+    var btn = document.getElementById('synth-btn');
+    btn.disabled = true;
+    btn.textContent = '合成中... (约 30-60s)';
+    btn.style.opacity = '0.6';
+    btn.style.cursor = 'not-allowed';
+  });
+</script>
 
 {% endblock %}
