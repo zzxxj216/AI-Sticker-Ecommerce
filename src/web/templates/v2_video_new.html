@@ -65,11 +65,27 @@
 
   <section class="panel" style="margin-bottom:16px;">
     <div class="panel-header" style="padding:16px 24px;">
-      <h3 style="margin:0;font-size:16px;">TK 账号 open_id（可选）</h3>
+      <h3 style="margin:0;font-size:16px;">Blotato 发布账号</h3>
     </div>
     <div style="padding:0 24px 18px;">
-      <input type="text" name="account_open_id" placeholder="（留空 = 走 Blotato 默认账号）"
+      {% if blotato_accounts %}
+      <select name="blotato_account_id" required
+              style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+        <option value="">— 请选择 Blotato 账号 —</option>
+        {% for a in blotato_accounts %}
+        <option value="{{ a.id }}">[{{ a.id }}] {{ a.displayName or a.username or a.name or '(unnamed)' }}{% if a.username %} (@{{ a.username }}){% endif %}</option>
+        {% endfor %}
+      </select>
+      <p style="margin:8px 0 0;font-size:11px;color:var(--text-muted);">
+        来源：Blotato.get_tiktok_accounts()，由 BLOTATO_TK_ACCOUNT_IDS env 过滤。留空则派发时自动用第一个账号。
+      </p>
+      {% else %}
+      <input type="text" name="blotato_account_id" placeholder="（Blotato 未配置 / 无可用账号）"
              style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+      <p style="margin:8px 0 0;font-size:11px;color:var(--danger);">
+        ⚠ 没获取到 Blotato 账号 — 检查 BLOTATO_API_KEY / BLOTATO_TK_ACCOUNT_IDS。
+      </p>
+      {% endif %}
     </div>
   </section>
 

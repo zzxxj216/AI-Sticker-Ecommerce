@@ -66,8 +66,9 @@ class TKVideoService:
         self,
         pack_id: int,
         *,
-        account_open_id: str = "",
+        blotato_account_id: str = "",
         video_one_liner: str = "",
+        account_open_id: str = "",  # only for B.2 metrics linkage
     ) -> int:
         with _open_db(self.db_path) as conn:
             pack = conn.execute(
@@ -78,16 +79,49 @@ class TKVideoService:
             cur = conn.execute(
                 """
                 INSERT INTO tk_videos
-                    (pack_id, account_open_id, local_video_path,
-                     video_one_liner, caption_main_raw_text, caption,
-                     hashtags, scheduled_at, blotato_post_id,
-                     publish_status, published_at, publish_error)
-                VALUES (?, ?, '', ?, '', '', '[]', NULL, '', 'pending', NULL, '')
+                    (pack_id, account_open_id, blotato_account_id,
+                     local_video_path, video_one_liner,
+                     caption_main_raw_text, caption, hashtags,
+                     scheduled_at, blotato_post_id, publish_status,
+                     published_at, publish_error)
+                VALUES (?, ?, ?, '', ?, '', '', '[]', NULL, '', 'pending', NULL, '')
                 """,
-                (pack_id, account_open_id, video_one_liner[:500]),
+                (pack_id, account_open_id, blotato_account_id,
+                 video_one_liner[:500]),
             )
             conn.commit()
             return cur.lastrowid
+
+    # ------------------------------------------------------------------
+    # Blotato account selection (replaces operator-typed open_id)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def list_blotato_accounts() -> list[dict]:
+        """List Blotato-side TikTok accounts the operator can publish to.
+
+        Returns ``[{id, displayName, username, ...}, ...]`` filtered by
+        BLOTATO_TK_ACCOUNT_IDS env if that's set. Returns empty list if
+        Blotato isn't configured — UI shows that as "未配置".
+        """
+        from src.services.tiktok.blotato_service import BlotaToService
+        bsvc = BlotaToService()
+        if not bsvc.is_configured():
+            return []
+        try:
+            return bsvc.get_tiktok_accounts()
+        except Exception as e:
+            logger.warning("list_blotato_accounts failed: %s", e)
+            return []
+
+    def update_blotato_account(self, video_id: int, account_id: str) -> bool:
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE tk_videos SET blotato_account_id = ? WHERE id = ?",
+                (account_id.strip(), video_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
     def save_video_file(self, video_id: int, src_path: Path,
                         *, original_filename: str = "local.mp4") -> str:
@@ -392,7 +426,7 @@ class TKVideoService:
         with _open_db(self.db_path) as conn:
             row = conn.execute(
                 """
-                SELECT id, account_open_id, local_video_path, caption,
+                SELECT id, blotato_account_id, local_video_path, caption,
                        hashtags, scheduled_at, publish_status
                   FROM tk_videos WHERE id = ?
                 """,
@@ -436,18 +470,29 @@ class TKVideoService:
             if tags:
                 text = f"{text}\n\n{' '.join(tags)}".strip()
 
-            account_id = (row["account_open_id"] or "").strip()
+            account_id = (row["blotato_account_id"] or "").strip()
             if not account_id:
                 accounts = bsvc.get_tiktok_accounts()
                 if not accounts:
                     raise RuntimeError("no TikTok accounts on Blotato")
-                account_id = accounts[0]["id"]
+                account_id = str(accounts[0]["id"])
+                logger.info("video #%d had no blotato_account_id; "
+                            "falling back to first available (%s)",
+                            video_id, account_id)
 
+            # Blotato target schema (as of 2026-04) requires these
+            # disclosure-related TikTok flags. Defaults: stickers we
+            # design ourselves are not branded content / not promoting
+            # someone else's brand / not AI-generated (operator may
+            # want to flip ai_generated=True for AI-generated assets).
             target_options = {
-                "privacyLevel": "PUBLIC_TO_EVERYONE",
-                "disabledComments": False,
-                "disabledDuet": False,
-                "disabledStitch": False,
+                "privacyLevel":      "PUBLIC_TO_EVERYONE",
+                "disabledComments":  False,
+                "disabledDuet":      False,
+                "disabledStitch":    False,
+                "isBrandedContent":  False,
+                "isYourBrand":       True,
+                "isAiGenerated":     False,
             }
             scheduled_iso = None
             if row["scheduled_at"]:
@@ -627,7 +672,8 @@ class TKVideoService:
             ).fetchone()[0]
             rows = conn.execute(
                 f"""
-                SELECT v.id, v.pack_id, v.account_open_id, v.local_video_path,
+                SELECT v.id, v.pack_id, v.account_open_id,
+                       v.blotato_account_id, v.local_video_path,
                        v.video_one_liner, v.caption, v.hashtags,
                        v.scheduled_at, v.blotato_post_id, v.tiktok_video_id,
                        v.publish_status, v.published_at, v.publish_error,
@@ -666,11 +712,12 @@ class TKVideoService:
         with _open_db(self.db_path) as conn:
             r = conn.execute(
                 """
-                SELECT v.id, v.pack_id, v.account_open_id, v.local_video_path,
+                SELECT v.id, v.pack_id, v.account_open_id,
+                       v.blotato_account_id, v.local_video_path,
                        v.video_one_liner, v.caption_main_raw_text,
                        v.caption, v.hashtags, v.scheduled_at,
-                       v.blotato_post_id, v.publish_status,
-                       v.published_at, v.publish_error,
+                       v.blotato_post_id, v.tiktok_video_id,
+                       v.publish_status, v.published_at, v.publish_error,
                        p.display_name AS pack_name, p.cover_image_path,
                        p.pack_uid
                   FROM tk_videos v

@@ -52,8 +52,29 @@
                 style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;">{{ video.video_one_liner }}</textarea>
     </div>
     <div style="margin-bottom:10px;">
-      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">TK account open_id</label>
-      <input type="text" name="account_open_id" value="{{ video.account_open_id }}"
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">
+        Blotato 发布账号 (用于 B.1 派发)
+      </label>
+      {% if blotato_accounts %}
+      <select name="blotato_account_id"
+              style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+        <option value="">— 留空走默认 —</option>
+        {% for a in blotato_accounts %}
+        <option value="{{ a.id }}" {% if (video.blotato_account_id or '') == (a.id|string) %}selected{% endif %}>
+          [{{ a.id }}] {{ a.displayName or a.username or a.name or '(unnamed)' }}
+        </option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <input type="text" name="blotato_account_id" value="{{ video.blotato_account_id or '' }}" placeholder="Blotato 未连通"
+             style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+      {% endif %}
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">
+        TK Display open_id (B.2 metrics 用，可选)
+      </label>
+      <input type="text" name="account_open_id" value="{{ video.account_open_id or '' }}" placeholder="留空 = 不抓 metrics"
              style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
     </div>
     <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">保存</button>

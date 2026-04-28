@@ -1011,10 +1011,10 @@ def v2_video_new(request: Request, pack_id: int | None = None):
         if not pack:
             raise HTTPException(status_code=404, detail=f"pack #{pack_id} not found")
         pack["cover_url"] = _path_to_v2_url(pack.get("cover_image_path") or "")
-    # Pull recent active packs as picker options when no pack_id provided.
     packs, _ = get_pack_service().list_packs(status="active", limit=50)
     for p in packs:
         p["cover_url"] = _path_to_v2_url(p.get("cover_image_path") or "")
+    blotato_accounts = get_tk_video_service().list_blotato_accounts()
     return templates.TemplateResponse(
         "v2_video_new.html",
         {
@@ -1022,6 +1022,7 @@ def v2_video_new(request: Request, pack_id: int | None = None):
             "page_title": "新建 TK 视频",
             "pack": pack,
             "active_packs": packs,
+            "blotato_accounts": blotato_accounts,
         },
     )
 
@@ -1036,14 +1037,14 @@ async def v2_video_create(request: Request):
         raise HTTPException(status_code=400, detail="pack_id must be int")
     if pack_id <= 0:
         raise HTTPException(status_code=400, detail="pack_id required")
-    account_open_id = (form.get("account_open_id") or "").strip()
+    blotato_account_id = (form.get("blotato_account_id") or "").strip()
     one_liner = (form.get("video_one_liner") or "").strip()
     upload = form.get("video_file")
 
     svc = get_tk_video_service()
     try:
         video_id = svc.create_video(
-            pack_id, account_open_id=account_open_id,
+            pack_id, blotato_account_id=blotato_account_id,
             video_one_liner=one_liner,
         )
     except ValueError as e:
@@ -1077,12 +1078,14 @@ def v2_video_detail(request: Request, video_id: int):
     v["published_human"] = _fmt_ts(v.get("published_at"))
     v["pack_cover_url"] = _path_to_v2_url(v.get("cover_image_path") or "")
     v["video_url"] = _path_to_v2_url(v.get("local_video_path") or "")
+    blotato_accounts = svc.list_blotato_accounts()
     return templates.TemplateResponse(
         "v2_video_detail.html",
         {
             "request": request,
             "page_title": f"视频 #{video_id}",
             "video": v,
+            "blotato_accounts": blotato_accounts,
         },
     )
 
@@ -1124,10 +1127,13 @@ async def v2_video_edit_caption(request: Request, video_id: int):
 async def v2_video_edit_meta(request: Request, video_id: int):
     form = await request.form()
     one_liner = (form.get("video_one_liner") or "").strip()
-    account = (form.get("account_open_id") or "").strip()
+    blotato_account = (form.get("blotato_account_id") or "").strip()
+    open_id = (form.get("account_open_id") or "").strip()
     svc = get_tk_video_service()
     svc.update_one_liner(video_id, one_liner)
-    svc.update_account(video_id, account)
+    svc.update_blotato_account(video_id, blotato_account)
+    if open_id:
+        svc.update_account(video_id, open_id)
     return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
 
 
