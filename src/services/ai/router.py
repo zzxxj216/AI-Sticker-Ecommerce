@@ -101,6 +101,26 @@ class AIRouter:
     # Provider accessors (lazy)
     # ------------------------------------------------------------------
 
+    def _text_service_tag(self) -> str:
+        """Return the service label used in ai_call_logs for text/extract calls.
+
+        Reflects whichever provider _get_openai actually picked, so the
+        logs show "jiekou" / "aihubmix" / "openai" accurately instead of
+        always "openai".
+        """
+        if os.getenv("JIEKOU_API_KEY"):
+            return "jiekou"
+        if os.getenv("OPENAI_API_KEY"):
+            base = os.getenv("OPENAI_BASE_URL", "")
+            if "jiekou" in base:
+                return "jiekou"
+            if "aihubmix" in base:
+                return "aihubmix"
+            return "openai"
+        if os.getenv("AIHUBMIX_API_KEY"):
+            return "aihubmix"
+        return "unknown"
+
     def _get_openai(self, model: Optional[str] = None) -> OpenAIService:
         """Return an OpenAIService pointed at JieKou (or fallback).
 
@@ -157,7 +177,7 @@ class AIRouter:
         client = self._get_openai(model)
 
         with AICallLog(
-            service="openai",
+            service=self._text_service_tag(),
             model=model,
             task=task,
             related_table=related_table,
@@ -231,7 +251,7 @@ class AIRouter:
         last_error: Optional[Exception] = None
         for attempt in range(max_retries + 1):
             with AICallLog(
-                service="openai",
+                service=self._text_service_tag(),
                 model=model,
                 task=task if attempt == 0 else f"{task}:retry{attempt}",
                 related_table=related_table,

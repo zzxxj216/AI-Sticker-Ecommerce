@@ -15,29 +15,28 @@ KNOWN INACCURACIES:
 
 from __future__ import annotations
 
-# (input_per_1k_usd, output_per_1k_usd)
+# (input_per_1k_usd, output_per_1k_usd) — derived by dividing each
+# vendor's published per-1M price by 1000. Earlier versions of this
+# file mistakenly stored per-1M values, which 1000×-inflated the cost
+# column in ai_call_logs (e.g. a $2.82 entry should have been $0.0028).
 TEXT_COST_PER_1K: dict[str, tuple[float, float]] = {
-    # OpenAI (direct or via aihubmix). Numbers are AiHubMix-flavoured
-    # estimates — aihubmix.com publishes prices in 元 (1k tokens) and the
-    # USD equivalents below assume ~7 CNY/USD.
-    # Surfing variant adds a per-call websearch surcharge but token cost
-    # tracks the base model.
-    "gpt-5.4":                 (0.30, 1.20),
-    "gpt-5.4:surfing":         (0.30, 1.20),
-    "gpt-5.4-pro":             (1.50, 6.00),
-    "gpt-4o":                  (2.50, 10.00),
-    "gpt-4o-mini":             (0.15, 0.60),
-    "gpt-4o-search-preview":   (2.50, 10.00),
-    "gpt-4.1":                 (2.00, 8.00),
-    "gpt-4.1-mini":            (0.40, 1.60),
+    # OpenAI (direct or via JieKou / AiHubMix proxies)
+    "gpt-5.4":                 (0.0003,  0.0012),
+    "gpt-5.4:surfing":         (0.0003,  0.0012),
+    "gpt-5.4-pro":             (0.0015,  0.0060),
+    "gpt-4o":                  (0.0025,  0.0100),
+    "gpt-4o-mini":             (0.00015, 0.00060),
+    "gpt-4o-search-preview":   (0.0025,  0.0100),
+    "gpt-4.1":                 (0.0020,  0.0080),
+    "gpt-4.1-mini":            (0.00040, 0.00160),
     # Anthropic (proxied)
-    "claude-opus-4":           (15.00, 75.00),
-    "claude-sonnet-4":         (3.00, 15.00),
-    "claude-haiku-4":          (0.25, 1.25),
+    "claude-opus-4":           (0.0150,  0.0750),
+    "claude-sonnet-4":         (0.0030,  0.0150),
+    "claude-haiku-4":          (0.00025, 0.00125),
     # Gemini (proxied)
-    "gemini-2.0-flash":        (0.075, 0.30),
-    "gemini-2.0-pro":          (1.25, 5.00),
-    "gemini-2.5-pro":          (1.25, 5.00),
+    "gemini-2.0-flash":        (0.000075, 0.00030),
+    "gemini-2.0-pro":          (0.00125, 0.00500),
+    "gemini-2.5-pro":          (0.00125, 0.00500),
 }
 
 # Per-image flat estimate (USD). gpt-image-2 cost varies by quality
