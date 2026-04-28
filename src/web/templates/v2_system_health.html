@@ -9,6 +9,35 @@
   </div>
 </section>
 
+<!-- 后台任务（最重要：操作员判断哪些 AI 任务还在跑） -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;font-size:16px;">后台运行中的任务 ({{ running_tasks|length }})</h3>
+    {% if running_tasks %}<span style="font-size:11px;color:var(--text-muted);">下方每 8s 自动刷新</span>{% endif %}
+  </div>
+  <div style="padding:0 24px 18px;">
+    {% if running_tasks %}
+    <table style="width:100%;font-size:12px;">
+      <thead><tr style="text-align:left;color:var(--text-muted);">
+        <th style="padding:6px 0;">label</th><th>task_id</th><th style="text-align:right;">已运行</th>
+      </tr></thead>
+      <tbody>
+        {% for t in running_tasks %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:6px 0;">{{ t.label }}</td>
+          <td><code style="font-size:11px;color:var(--text-muted);">{{ t.task_id }}</code></td>
+          <td style="text-align:right;">{{ '%dm %ds'|format(t.elapsed_s // 60, t.elapsed_s % 60) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <script>setTimeout(function() { location.reload(); }, 8000);</script>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:12px;margin:0;">无后台任务在跑。</p>
+    {% endif %}
+  </div>
+</section>
+
 <section class="panel" style="margin-bottom:16px;">
   <div class="panel-header" style="padding:16px 24px;">
     <h3 style="margin:0;font-size:16px;">外部集成</h3>

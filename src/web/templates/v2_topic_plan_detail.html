@@ -145,6 +145,13 @@ palette: {{ s.palette }}</pre>
 </section>
 {% endif %}
 
+{% if plan.status == 'generating' %}
+<script>
+  // Plan AI gen runs ~30-90s in background; refresh until status flips.
+  setTimeout(function() { location.reload(); }, 8000);
+</script>
+{% endif %}
+
 <!-- raw markdown -->
 <section class="panel" style="margin-bottom:16px;">
   <details {% if not plan.series %}open{% endif %}>

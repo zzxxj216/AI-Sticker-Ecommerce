@@ -175,9 +175,13 @@
 <script>
   document.getElementById('gen-form').addEventListener('submit', function() {
     var btn = document.getElementById('gen-btn');
-    btn.disabled = true; btn.textContent = '生成中...（约 30-60s）';
-    btn.style.opacity = '0.6'; btn.style.cursor = 'not-allowed';
+    btn.textContent = '已派发到后台...';
+    btn.style.opacity = '0.6';
   });
+  // Refresh while detail is generating (raw_text present but title not yet extracted)
+  {% if not product.title and product.detail_main_raw_text %}
+  setTimeout(function() { location.reload(); }, 8000);
+  {% endif %}
 </script>
 
 {% endblock %}

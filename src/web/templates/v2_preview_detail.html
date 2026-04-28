@@ -120,21 +120,22 @@
 <script>
   document.getElementById('regen-form').addEventListener('submit', function() {
     var btn = document.getElementById('regen-btn');
-    btn.disabled = true;
-    btn.textContent = '生成中...';
+    btn.textContent = '已派发到后台...';
     btn.style.opacity = '0.6';
-    btn.style.cursor = 'not-allowed';
   });
   var splitForm = document.getElementById('split-form');
   if (splitForm) {
     splitForm.addEventListener('submit', function() {
       var btn = document.getElementById('split-btn');
-      btn.disabled = true;
-      btn.textContent = '切单中...（每张约 60s，3 张并发）';
+      btn.textContent = '已派发到后台...';
       btn.style.opacity = '0.6';
-      btn.style.cursor = 'not-allowed';
     });
   }
+  // Auto-refresh while preview is generating OR any sticker is pending/generating.
+  {% set st = preview.sticker_summary %}
+  {% if preview.generation_status == 'generating' or st.generating > 0 or (st.expected - st.ok - st.error) > 0 %}
+  setTimeout(function() { location.reload(); }, 10000);
+  {% endif %}
 </script>
 
 {% endblock %}

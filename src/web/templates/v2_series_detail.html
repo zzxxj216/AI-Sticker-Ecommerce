@@ -51,7 +51,9 @@
     <form method="post" action="/v2/series/{{ series.id }}/generate-previews" style="display:inline;" id="gen-form">
       <button type="submit" class="button" id="gen-btn"
               style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
-        生成 / 补齐预览图（{{ series.expected_count - series.status_summary.ok }} 张待办）
+        {% if series.status_summary.generating > 0 %}↻ 生成中…（点击补齐 / 重试）
+        {% else %}生成 / 补齐预览图（{{ series.expected_count - series.status_summary.ok }} 张待办）
+        {% endif %}
       </button>
     </form>
     {% if series.status_summary.ok > 0 %}
@@ -129,13 +131,18 @@
 </section>
 
 <script>
+  // Submit kicks off a background task and 303s back here. No need to
+  // freeze the UI — operator can navigate away. Auto-refresh handles
+  // status updates.
   document.getElementById('gen-form').addEventListener('submit', function() {
     var btn = document.getElementById('gen-btn');
-    btn.disabled = true;
-    btn.textContent = '生成中...（请勿离开此页）';
+    btn.textContent = '已派发到后台...';
     btn.style.opacity = '0.6';
-    btn.style.cursor = 'not-allowed';
   });
+  // Auto-refresh while any preview is pending or generating.
+  {% if series.status_summary.generating > 0 or (series.expected_count - series.status_summary.ok - series.status_summary.error) > 0 %}
+  setTimeout(function() { location.reload(); }, 10000);
+  {% endif %}
 </script>
 
 {% endblock %}

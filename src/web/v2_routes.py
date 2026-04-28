@@ -27,6 +27,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.core.logger import get_logger
 from src.services.hot_topics import KNOWN_PROVIDERS as HOT_TOPIC_PROVIDERS, get_hot_topic_service
+from src.web.background import is_running, list_running, run_async
 from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
 from src.services.tk_videos import get_tk_video_service
@@ -421,16 +422,19 @@ async def v2_hot_topics_synthesize(request: Request):
         raise HTTPException(status_code=400,
                             detail="select at least 2 topics to synthesize")
     svc = get_synthesis_service()
+    # Quick validation (cheap, sync) before backgrounding
     try:
-        result = svc.synthesize(ids, extra_brief=extra)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        svc  # noqa: just touching to fail-fast on import
     except Exception as e:
-        logger.exception("synthesize failed")
         raise HTTPException(status_code=500, detail=str(e))
-    logger.info("synthesized %d themes from %d inputs", len(result["created"]), len(ids))
-    # Land the operator on the synthesized-source filter to see the new rows.
-    return RedirectResponse(url="/v2/hot-topics?source=synthesized", status_code=303)
+    task_id = "synth:" + ",".join(str(x) for x in ids[:6])
+    run_async(
+        task_id, svc.synthesize, ids,
+        extra_brief=extra,
+        label=f"题材合成 ({len(ids)} 输入)",
+    )
+    return RedirectResponse(url="/v2/hot-topics?source=synthesized&synth_running=1",
+                            status_code=303)
 
 
 @router.post("/hot-topics/{topic_id:int}/status")
@@ -516,7 +520,7 @@ async def v2_topic_plan_generate(request: Request):
 
     svc = get_topic_plan_service()
     try:
-        result = svc.generate_plan(
+        plan_id = svc.start_plan(
             topic_id,
             series_count=series_count,
             previews_per_series=previews_per_series,
@@ -525,16 +529,12 @@ async def v2_topic_plan_generate(request: Request):
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("topic plan generation failed")
-        raise HTTPException(status_code=500, detail=f"generation failed: {e}")
-
-    logger.info(
-        "topic_plan #%d generated for topic #%d (status=%s, series=%d, main_chars=%d)",
-        result["plan_id"], topic_id, result["status"],
-        result["series_count"], result["main_chars"],
+    run_async(
+        f"plan_gen:{plan_id}",
+        svc.continue_plan, plan_id,
+        label=f"题材规划 plan #{plan_id}",
     )
-    return RedirectResponse(url=f"/v2/topic-plans/{result['plan_id']}", status_code=303)
+    return RedirectResponse(url=f"/v2/topic-plans/{plan_id}", status_code=303)
 
 
 @router.get("/topic-plans/{plan_id:int}", response_class=HTMLResponse)
@@ -563,19 +563,33 @@ async def v2_topic_plan_retry_extract(request: Request, plan_id: int):
     Cheap recovery path when extract failed but main_raw_text is good.
     """
     svc = get_topic_plan_service()
-    try:
-        result = svc.retry_extract(plan_id)
-    except ValueError as e:
-        # 409 Conflict for the "downstream work exists" case so the UI can
-        # show the message; 404 for the "not found" case.
-        msg = str(e)
-        code = 409 if "pack_previews" in msg or "main_raw_text" in msg else 404
-        raise HTTPException(status_code=code, detail=msg)
-    except Exception as e:
-        logger.exception("retry_extract failed")
-        raise HTTPException(status_code=500, detail=str(e))
-    logger.info("plan #%d retry_extract → ok=%s series=%d",
-                plan_id, result.get("extract_ok"), result.get("series_count", 0))
+    # Validation step (cheap, sync) — surface immediate errors before
+    # backgrounding the AI call. Re-validates on the actual run too.
+    with sqlite3.connect(str(DEFAULT_DB_PATH)) as _c:
+        _c.row_factory = sqlite3.Row
+        row = _c.execute(
+            "SELECT main_raw_text FROM topic_plans WHERE id = ?", (plan_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"plan #{plan_id} not found")
+        if not (row["main_raw_text"] or "").strip():
+            raise HTTPException(status_code=409,
+                                detail="plan has no main_raw_text — run generate_plan first")
+        downstream = _c.execute(
+            "SELECT COUNT(*) FROM pack_previews WHERE series_id IN "
+            "(SELECT id FROM pack_series WHERE plan_id = ?)", (plan_id,),
+        ).fetchone()[0]
+        if downstream:
+            raise HTTPException(
+                status_code=409,
+                detail=f"plan #{plan_id} has {downstream} pack_previews "
+                       "already — would orphan generated images.",
+            )
+    run_async(
+        f"plan_retry:{plan_id}",
+        svc.retry_extract, plan_id,
+        label=f"重试提取 plan #{plan_id}",
+    )
     return RedirectResponse(url=f"/v2/topic-plans/{plan_id}", status_code=303)
 
 
@@ -648,17 +662,21 @@ async def v2_series_prepare_previews(request: Request, series_id: int):
 
 @router.post("/series/{series_id:int}/generate-previews")
 async def v2_series_generate_previews(request: Request, series_id: int):
-    """Run image_generate for every pending preview in this series (sync wait)."""
+    """Kick off image_generate in a background thread, redirect immediately.
+
+    Operator can navigate away — page auto-refreshes via meta tag based
+    on per-row generation_status until all done. Run twice = no-op when
+    a job is already in flight (tracked via run_async task_id).
+    """
     svc = get_preview_gen_service()
-    # Auto-prepare in case operator skipped that step.
     try:
         svc.prepare_previews(series_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    result = svc.generate_pending_for_series(series_id)
-    logger.info(
-        "series #%d generate-previews: %d ok / %d error of %d attempted",
-        series_id, result["ok"], result["error"], result["attempted"],
+    run_async(
+        f"gen_previews:{series_id}",
+        svc.generate_pending_for_series, series_id,
+        label=f"生成预览图 (series #{series_id})",
     )
     return RedirectResponse(url=f"/v2/series/{series_id}", status_code=303)
 
@@ -690,14 +708,17 @@ async def v2_preview_regenerate(request: Request, preview_id: int):
     p = svc.get_preview(preview_id)
     if not p:
         raise HTTPException(status_code=404, detail="preview not found")
-    result = svc.regenerate_preview(preview_id)
-    logger.info("preview #%d regenerate → %s", preview_id, result["status"])
+    run_async(
+        f"regen_preview:{preview_id}",
+        svc.regenerate_preview, preview_id,
+        label=f"重新生成 preview #{preview_id}",
+    )
     return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
 
 
 @router.post("/previews/{preview_id:int}/split")
 async def v2_preview_split(request: Request, preview_id: int):
-    """Auto-prepare + run image_edit for every sticker brief under this preview."""
+    """Auto-prepare + queue image_edit per sticker brief in background."""
     svc = get_preview_gen_service()
     try:
         prep = svc.prepare_stickers(preview_id)
@@ -706,10 +727,10 @@ async def v2_preview_split(request: Request, preview_id: int):
     if prep.get("skipped_reason"):
         logger.warning("preview #%d split skipped: %s", preview_id, prep["skipped_reason"])
         return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
-    result = svc.split_pending_for_preview(preview_id)
-    logger.info(
-        "preview #%d split: %d ok / %d error of %d attempted",
-        preview_id, result["ok"], result["error"], result["attempted"],
+    run_async(
+        f"split_preview:{preview_id}",
+        svc.split_pending_for_preview, preview_id,
+        label=f"切单 sticker (preview #{preview_id})",
     )
     return RedirectResponse(url=f"/v2/previews/{preview_id}", status_code=303)
 
@@ -738,8 +759,11 @@ async def v2_sticker_regenerate(request: Request, sticker_id: int):
     svc = get_preview_gen_service()
     if not svc.get_sticker(sticker_id):
         raise HTTPException(status_code=404, detail="sticker not found")
-    result = svc.regenerate_sticker(sticker_id)
-    logger.info("sticker #%d regenerate → %s", sticker_id, result["status"])
+    run_async(
+        f"regen_sticker:{sticker_id}",
+        svc.regenerate_sticker, sticker_id,
+        label=f"重新切 sticker #{sticker_id}",
+    )
     return RedirectResponse(url=f"/v2/stickers/{sticker_id}", status_code=303)
 
 
@@ -848,6 +872,7 @@ def v2_system_health(request: Request):
             "checks": checks,
             "applied_migrations": applied,
             "table_counts": table_counts,
+            "running_tasks": list_running(),
         },
     )
 
@@ -1124,15 +1149,13 @@ def v2_video_detail(request: Request, video_id: int):
 @router.post("/videos/{video_id:int}/generate-caption")
 async def v2_video_generate_caption(request: Request, video_id: int):
     svc = get_tk_video_service()
-    try:
-        result = svc.generate_caption(video_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("generate_caption failed")
-        raise HTTPException(status_code=500, detail=str(e))
-    logger.info("video #%d caption: extract_ok=%s caption=%r",
-                video_id, result["extract_ok"], result.get("caption", "")[:80])
+    if not svc.get_video(video_id):
+        raise HTTPException(status_code=404, detail="video not found")
+    run_async(
+        f"caption_gen:{video_id}",
+        svc.generate_caption, video_id,
+        label=f"AI 文案 video #{video_id}",
+    )
     return RedirectResponse(url=f"/v2/videos/{video_id}", status_code=303)
 
 
@@ -1338,15 +1361,13 @@ def v2_product_detail(request: Request, product_id: int):
 @router.post("/products/{product_id:int}/generate-detail")
 async def v2_product_generate_detail(request: Request, product_id: int):
     svc = get_tkshop_service()
-    try:
-        result = svc.generate_detail(product_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception("generate_detail failed")
-        raise HTTPException(status_code=500, detail=str(e))
-    logger.info("product #%d detail generated: extract_ok=%s title=%r",
-                product_id, result["extract_ok"], result.get("title", "")[:80])
+    if not svc.get_product(product_id):
+        raise HTTPException(status_code=404, detail="product not found")
+    run_async(
+        f"detail_gen:{product_id}",
+        svc.generate_detail, product_id,
+        label=f"AI 详情 product #{product_id}",
+    )
     return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
 
 

@@ -187,9 +187,16 @@
 <script>
   document.getElementById('gen-cap-form').addEventListener('submit', function() {
     var btn = document.getElementById('gen-cap-btn');
-    btn.disabled = true; btn.textContent = '生成中...（约 30-60s）';
-    btn.style.opacity = '0.6'; btn.style.cursor = 'not-allowed';
+    btn.textContent = '已派发到后台...';
+    btn.style.opacity = '0.6';
   });
+  // Refresh while caption is being generated (use video.caption presence as proxy
+  // for "done" — the route flips it once extract finishes).
+  {% if not video.caption and video.caption_main_raw_text %}
+  setTimeout(function() { location.reload(); }, 8000);
+  {% elif not video.caption_main_raw_text %}
+  // Caption never run — operator hasn't clicked yet, no auto-refresh.
+  {% endif %}
 </script>
 
 {% endblock %}

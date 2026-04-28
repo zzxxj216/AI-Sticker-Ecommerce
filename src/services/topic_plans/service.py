@@ -96,7 +96,10 @@ class TopicPlanService:
         }
         now = int(time.time())
 
-        # Insert plan row early so AICallLog rows can reference it.
+        plan_id = self._insert_draft_plan(topic_id, config, now)
+        return self._run_ai_steps(plan_id, topic, config)
+
+    def _insert_draft_plan(self, topic_id: int, config: dict, now: int) -> int:
         with _open_db(self.db_path) as conn:
             cur = conn.execute(
                 """
@@ -107,10 +110,71 @@ class TopicPlanService:
                 """,
                 (topic_id, json.dumps(config, ensure_ascii=False), now, now),
             )
-            plan_id = cur.lastrowid
             conn.commit()
+            return cur.lastrowid
 
-        # ---- Step 1: main creative model -----------------------------
+    def start_plan(
+        self,
+        topic_id: int,
+        *,
+        series_count: int = DEFAULT_SERIES_COUNT,
+        previews_per_series: int = DEFAULT_PREVIEWS_PER_SERIES,
+        stickers_per_preview: int = DEFAULT_STICKERS_PER_PREVIEW,
+        extra_brief: str = "",
+        main_model: Optional[str] = None,
+        extract_model: Optional[str] = None,
+    ) -> int:
+        """Insert the draft topic_plans row and return its ID immediately.
+
+        Caller is expected to schedule ``continue_plan(plan_id, ...)`` in
+        a background thread to actually run the two AI steps.
+        """
+        topic = get_hot_topic_service().get_topic(topic_id)
+        if not topic:
+            raise ValueError(f"hot_topic #{topic_id} not found")
+        config = {
+            "series_count":         series_count,
+            "previews_per_series":  previews_per_series,
+            "stickers_per_preview": stickers_per_preview,
+            "main_model":           main_model or self.router.DEFAULT_TEXT_MODEL,
+            "extract_model":        extract_model or self.router.DEFAULT_EXTRACT_MODEL,
+            "extra_brief":          extra_brief,
+        }
+        return self._insert_draft_plan(topic_id, config, int(time.time()))
+
+    def continue_plan(self, plan_id: int) -> dict:
+        """Run the AI steps for a draft plan_id created by start_plan.
+
+        Reads config from the existing row; safe to call from a background
+        thread.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT topic_id, config FROM topic_plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"plan #{plan_id} not found")
+        cfg = json.loads(row["config"] or "{}")
+        topic_id = row["topic_id"]
+        topic = get_hot_topic_service().get_topic(topic_id)
+        if not topic:
+            self._mark_status(plan_id, "draft_main_failed",
+                              error=f"parent topic #{topic_id} disappeared")
+            raise ValueError(f"hot_topic #{topic_id} not found")
+
+        return self._run_ai_steps(plan_id, topic, cfg)
+
+    def _run_ai_steps(self, plan_id: int, topic: dict, config: dict) -> dict:
+        """Inner AI execution shared between generate_plan (sync) and
+        continue_plan (called from background thread)."""
+        series_count = int(config.get("series_count") or DEFAULT_SERIES_COUNT)
+        previews_per_series = int(config.get("previews_per_series") or DEFAULT_PREVIEWS_PER_SERIES)
+        stickers_per_preview = int(config.get("stickers_per_preview") or DEFAULT_STICKERS_PER_PREVIEW)
+        extra_brief = config.get("extra_brief") or ""
+        main_model = config.get("main_model")
+        extract_model = config.get("extract_model")
+
         main_prompt = build_main_prompt(
             topic_name=topic["topic_name"],
             topic_query=topic.get("query"),
@@ -123,20 +187,15 @@ class TopicPlanService:
         )
         try:
             main_text = self.router.text_complete(
-                main_prompt,
-                model=main_model,
-                system=MAIN_SYSTEM_PROMPT,
-                temperature=0.8,
-                task="topic_plan:main",
-                related_table="topic_plans",
-                related_id=plan_id,
+                main_prompt, model=main_model, system=MAIN_SYSTEM_PROMPT,
+                temperature=0.8, task="topic_plan:main",
+                related_table="topic_plans", related_id=plan_id,
             )
         except Exception as e:
             logger.exception("main generation failed for plan %d", plan_id)
             self._mark_status(plan_id, "draft_main_failed", error=str(e))
             raise
 
-        # ---- Step 2: extract JSON -----------------------------------
         schema = build_extract_schema(
             series_count=series_count,
             previews_per_series=previews_per_series,
@@ -147,21 +206,16 @@ class TopicPlanService:
         series_payload: dict[str, Any] = {}
         try:
             series_payload = self.router.extract_json(
-                main_text,
-                schema=schema,
-                instructions=EXTRACT_INSTRUCTIONS,
-                model=extract_model,
-                max_retries=1,
+                main_text, schema=schema, instructions=EXTRACT_INSTRUCTIONS,
+                model=extract_model, max_retries=1,
                 task="topic_plan:extract",
-                related_table="topic_plans",
-                related_id=plan_id,
+                related_table="topic_plans", related_id=plan_id,
             )
         except Exception as e:
             logger.warning("extract failed for plan %d: %s", plan_id, e)
             extract_ok = False
             extract_error = str(e)[:500]
 
-        # ---- Persist results ----------------------------------------
         status = "ready" if extract_ok else "draft_extract_failed"
         with _open_db(self.db_path) as conn:
             conn.execute(
@@ -171,13 +225,8 @@ class TopicPlanService:
                        status = ?, updated_at = ?
                  WHERE id = ?
                 """,
-                (
-                    main_text,
-                    json.dumps(series_payload, ensure_ascii=False),
-                    status,
-                    int(time.time()),
-                    plan_id,
-                ),
+                (main_text, json.dumps(series_payload, ensure_ascii=False),
+                 status, int(time.time()), plan_id),
             )
             if extract_ok:
                 self._insert_series_rows(conn, plan_id, series_payload)
