@@ -41,6 +41,303 @@
       grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
       gap: 16px;
     }
+    .v2-workspace {
+      display: grid;
+      grid-template-columns: minmax(540px, 1.15fr) minmax(360px, .85fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .v2-detail-grid {
+      display: grid;
+      grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 18px;
+    }
+    .v2-manual-pack-form {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: minmax(280px, 1.2fr) minmax(220px, .9fr) minmax(150px, .5fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+    .v2-dialog {
+      position: fixed;
+      inset: 0;
+      margin: auto;
+      width: min(820px, calc(100vw - 32px));
+      max-height: calc(100vh - 48px);
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-xl);
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow-xl);
+      overflow: hidden;
+    }
+    .v2-dialog::backdrop {
+      background: rgba(15, 23, 42, 0.42);
+      backdrop-filter: blur(3px);
+    }
+    .v2-dialog-header,
+    .v2-dialog-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--surface);
+    }
+    .v2-dialog-footer {
+      border-top: 1px solid var(--line-soft);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+    .v2-dialog-body {
+      padding: 20px 22px;
+      overflow: auto;
+      max-height: calc(100vh - 190px);
+    }
+    .v2-dialog-close {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-pill);
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+    .v2-dialog-close:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+      box-shadow: none;
+      filter: none;
+    }
+    .v2-topic-form-grid {
+      display: grid;
+      grid-template-columns: 1.2fr .6fr .5fr .4fr;
+      gap: 12px;
+      align-items: end;
+    }
+    .v2-sticky-panel {
+      position: sticky;
+      top: 24px;
+    }
+    .v2-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .v2-chip-row,
+    .v2-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .v2-action-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .v2-action-grid form,
+    .v2-action-grid a {
+      min-width: 0;
+    }
+    .v2-button-full {
+      width: 100%;
+      text-align: center;
+      justify-content: center;
+    }
+    .v2-button-danger {
+      background: var(--danger-bg);
+      color: var(--danger);
+      border: 1px solid var(--danger-border);
+      box-shadow: none;
+    }
+    .v2-button-danger:hover {
+      background: rgba(239, 68, 68, 0.12);
+      box-shadow: none;
+      filter: none;
+    }
+    .v2-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 6px;
+      min-width: 0;
+    }
+    .v2-field label {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .v2-input,
+    .v2-select {
+      width: 100%;
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+    }
+    .v2-input:focus-visible,
+    .v2-select:focus-visible,
+    .v2-status-pill:focus-visible,
+    .v2-button-danger:focus-visible,
+    .button:focus-visible,
+    .button-secondary:focus-visible,
+    .btn-secondary:focus-visible,
+    .btn-sm:focus-visible,
+    .text-link:focus-visible {
+      outline: 2px solid rgba(99, 102, 241, 0.45);
+      outline-offset: 2px;
+    }
+    .v2-stat-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .v2-mini-stat {
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-md);
+      background: var(--bg);
+      padding: 10px;
+      min-width: 0;
+    }
+    .v2-mini-stat span {
+      display: block;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .03em;
+      text-transform: uppercase;
+    }
+    .v2-mini-stat strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 18px;
+      line-height: 1.1;
+      font-variant-numeric: tabular-nums;
+    }
+    .v2-pack-cover {
+      width: 64px;
+      height: 64px;
+      border-radius: var(--radius-md);
+      object-fit: contain;
+      background: var(--bg-subtle);
+      border: 1px solid var(--line-soft);
+      display: block;
+    }
+    .v2-cover-large {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border-radius: var(--radius-lg);
+      object-fit: contain;
+      background: var(--bg-subtle);
+      border: 1px solid var(--line-soft);
+      display: block;
+    }
+    .v2-empty-cover {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+    }
+    .v2-pack-row.is-selected td {
+      background: var(--accent-bg);
+    }
+    .v2-pack-title {
+      color: var(--text);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .v2-pack-title:hover {
+      color: var(--accent);
+    }
+    .v2-async-note {
+      border: 1px solid var(--warning-border);
+      border-radius: var(--radius-md);
+      background: var(--warning-bg);
+      color: var(--text-secondary);
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+    .v2-inline-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .v2-inline-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 0;
+      border-top: 1px solid var(--line-soft);
+      font-size: 12px;
+      min-width: 0;
+    }
+    .v2-preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .v2-sticker-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    .v2-thumb-card {
+      padding: 8px;
+    }
+    .v2-thumb-card img {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1 / 1;
+      object-fit: contain;
+      border-radius: var(--radius-sm);
+      background: var(--bg-subtle);
+      display: block;
+    }
+    @media (max-width: 1180px) {
+      .v2-workspace {
+        grid-template-columns: 1fr;
+      }
+      .v2-sticky-panel {
+        position: static;
+      }
+      .v2-topic-form-grid,
+      .v2-manual-pack-form {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+    @media (max-width: 760px) {
+      .v2-detail-grid,
+      .v2-topic-form-grid,
+      .v2-manual-pack-form,
+      .v2-stat-strip,
+      .v2-action-grid {
+        grid-template-columns: 1fr;
+      }
+      .v2-dialog {
+        width: calc(100vw - 20px);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .v2-input,
+      .v2-select,
+      .v2-pack-title {
+        transition: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -66,7 +363,7 @@
           </a>
 
           <!-- 卡包链路 -->
-          <div class="nav-group {% if not request.url.path.startswith('/v2/hot-topics') and not request.url.path.startswith('/v2/topic-plans') and not request.url.path.startswith('/v2/packs') and not request.url.path.startswith('/v2/gallery') %}collapsed{% endif %}">
+          <div class="nav-group {% if not request.url.path.startswith('/v2/hot-topics') and not request.url.path.startswith('/v2/topic-plans') and not request.url.path.startswith('/v2/packs') and not request.url.path.startswith('/v2/feedback') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
@@ -78,12 +375,12 @@
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/hot-topics') %}active{% endif %}" href="/v2/hot-topics">热点池</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/topic-plans') %}active{% endif %}" href="/v2/topic-plans">题材规划</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">卡包管理</a>
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/gallery') %}active{% endif %}" href="/v2/gallery">卡包画廊</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/feedback') %}active{% endif %}" href="/v2/feedback">反馈收集</a>
             </div>
           </div>
 
           <!-- TK 视频 -->
-          <div class="nav-group {% if not request.url.path.startswith('/v2/videos') and not request.url.path.startswith('/v2/analytics') %}collapsed{% endif %}">
+          <div class="nav-group {% if not request.url.path.startswith('/v2/videos') and not request.url.path.startswith('/v2/analytics') and not request.url.path.startswith('/v2/video-script-templates') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
@@ -93,6 +390,7 @@
             </div>
             <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/videos') %}active{% endif %}" href="/v2/videos">视频管理</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/video-script-templates') %}active{% endif %}" href="/v2/video-script-templates">脚本模板</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/analytics') %}active{% endif %}" href="/v2/analytics">数据看板</a>
             </div>
           </div>
@@ -108,6 +406,20 @@
             </div>
             <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/products') %}active{% endif %}" href="/v2/products">产品管理</a>
+            </div>
+          </div>
+
+          <!-- 🧪 实验室 -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/lab') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M9 2v6l-5 9a3 3 0 003 3h10a3 3 0 003-3l-5-9V2"/><line x1="9" y1="2" x2="15" y2="2"/></svg>
+                🧪 实验室
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/lab/multi-sku') %}active{% endif %}" href="/v2/lab/multi-sku">多 SKU 产品</a>
             </div>
           </div>
 

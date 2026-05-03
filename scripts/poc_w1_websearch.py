@@ -1,27 +1,4 @@
-#!/usr/bin/env python3
-"""POC W1.7 — verify whether the configured OpenAI endpoints can do web search.
 
-Two paths to try:
-
-A. **OpenAI Responses API** (``client.responses.create``) with the
-   ``web_search_preview`` tool. This is the official mechanism. Requires
-   the endpoint at OPENAI_BASE_URL to forward Responses API calls.
-
-B. **AiHubMix surfing model** (``gpt-5.4:surfing`` via Chat Completions).
-   Some middlemen advertise web search by appending a tag to the model
-   name; this checks whether ours does.
-
-We don't fail the script on either path; we capture what each returns
-(text, citation URLs if surfaced, latency, raw response shape) so the
-report can compare them and we can pick the winner for W2 / A.1.
-
-Output written to docs/POC_REPORTS/W1_websearch.md.
-
-Usage::
-
-    python scripts/poc_w1_websearch.py
-    python scripts/poc_w1_websearch.py --query "summer 2026 sticker trends"
-"""
 
 from __future__ import annotations
 

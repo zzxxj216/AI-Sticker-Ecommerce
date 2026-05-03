@@ -1,0 +1,203 @@
+<style>
+  .daily-sticker-panel {
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(124, 92, 252, 0.18);
+    background:
+      radial-gradient(circle at top left, rgba(124, 92, 252, 0.10), transparent 30%),
+      var(--surface);
+  }
+  .daily-sticker-header {
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .daily-sticker-form {
+    justify-content: flex-end;
+    align-items: end;
+  }
+  .daily-topic-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .daily-topic-card {
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-lg);
+    background: var(--bg);
+    padding: 14px;
+    min-width: 0;
+  }
+  .daily-topic-card h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    line-height: 1.35;
+  }
+  .daily-topic-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .daily-topic-images {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin: 10px 0;
+  }
+  .daily-topic-images img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-soft);
+    background: var(--bg-subtle);
+    display: block;
+  }
+  .daily-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .daily-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-bg);
+    color: var(--accent-dark);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .daily-run-note {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: var(--info-bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  @media (max-width: 1080px) {
+    .daily-topic-grid {
+      grid-template-columns: 1fr;
+    }
+    .daily-sticker-form {
+      justify-content: flex-start;
+    }
+  }
+</style>
+
+<section class="panel daily-sticker-panel">
+  <div class="panel-header daily-sticker-header">
+    <div>
+      <span class="v2-section-tag">Daily</span>
+      <h3 style="margin:8px 0 4px;font-size:16px;">每日贴纸热点采集</h3>
+      <p class="muted" style="margin:0;">
+        每天自动联网搜索，筛选 3 个适合做贴纸包的热点话题；保存结构化信息、来源链接和页面中可提取的图片。
+      </p>
+    </div>
+    <form method="post" action="/v2/hot-topics/daily-collect" class="v2-toolbar daily-sticker-form">
+      {% for provider in daily_default_providers %}
+      <input type="hidden" name="providers" value="{{ provider }}">
+      {% endfor %}
+      <input type="hidden" name="force" value="1">
+      <div class="v2-field" style="width:96px;">
+        <label for="daily-region">区域</label>
+        <select id="daily-region" name="region" class="v2-select" autocomplete="off">
+          <option value="US">US</option>
+          <option value="CN">CN</option>
+          <option value="JP">JP</option>
+          <option value="GLOBAL">GLOBAL</option>
+        </select>
+      </div>
+      <div class="v2-field" style="width:120px;">
+        <label for="daily-max-results">每词结果</label>
+        <select id="daily-max-results" name="max_results_per_query" class="v2-select" autocomplete="off">
+          {% for n in [3,5,8,10] %}
+          <option value="{{ n }}" {% if n == 5 %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="v2-field" style="width:120px;">
+        <label for="daily-max-images">每题图片</label>
+        <select id="daily-max-images" name="max_images_per_topic" class="v2-select" autocomplete="off">
+          {% for n in [0,1,3,5] %}
+          <option value="{{ n }}" {% if n == 3 %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="button" {% if daily_collect_running %}disabled aria-disabled="true"{% endif %}>
+        {% if daily_collect_running %}采集中…{% else %}立即采集 Top 3{% endif %}
+      </button>
+    </form>
+  </div>
+
+  {% if request.query_params.get('daily_started') %}
+  <div class="daily-run-note">已开始后台采集。页面会在 10 秒后自动刷新，你也可以稍后回到这里查看结果。</div>
+  <script>window.setTimeout(function(){ window.location.href = '/v2/hot-topics'; }, 10000);</script>
+  {% elif request.query_params.get('daily_running') %}
+  <div class="daily-run-note">已有一个每日采集任务正在运行，请稍后刷新查看。</div>
+  {% endif %}
+
+  {% if daily_latest_run %}
+  <div class="v2-stat-strip" style="margin-top:14px;">
+    <div class="v2-mini-stat"><span>最近日期</span><strong>{{ daily_latest_run.run_date }}</strong></div>
+    <div class="v2-mini-stat"><span>状态</span><strong>{{ daily_latest_run.status }}</strong></div>
+    <div class="v2-mini-stat"><span>搜索结果</span><strong>{{ daily_latest_run.total_results }}</strong></div>
+    <div class="v2-mini-stat"><span>入库话题</span><strong>{{ daily_latest_run.selected_count }}</strong></div>
+  </div>
+
+  {% if daily_latest_run.error %}
+  <div class="daily-run-note" style="background:var(--danger-bg);color:var(--danger);">
+    采集失败：{{ daily_latest_run.error }}
+  </div>
+  {% endif %}
+
+  <div class="daily-topic-grid">
+    {% for topic in daily_latest_run.topics %}
+    <article class="daily-topic-card">
+      <div class="row-subtitle">#{{ topic.rank }} · {{ topic.created_human or daily_latest_run.finished_human }}</div>
+      <h4>{{ topic.title }}</h4>
+      <p>{{ topic.summary or '暂无摘要' }}</p>
+
+      {% if topic.images %}
+      <div class="daily-topic-images">
+        {% for image in topic.images[:3] %}
+        <a href="{{ image.public_url }}" target="_blank" rel="noreferrer" title="打开保存图片">
+          <img src="{{ image.public_url }}" alt="{{ topic.title }} reference image {{ loop.index }}" loading="lazy">
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="row-subtitle" style="margin:10px 0;">未从来源页面提取到可保存图片</div>
+      {% endif %}
+
+      <p><strong>贴纸理由：</strong>{{ topic.reason_for_sticker_pack or '待人工补充' }}</p>
+      {% if topic.sticker_ideas %}
+      <div class="daily-chip-row">
+        {% for idea in topic.sticker_ideas[:6] %}
+        <span class="daily-chip">{{ idea }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="v2-action-row" style="margin-top:12px;">
+        {% if topic.hot_topic_id %}
+        <a class="btn-sm" href="/v2/hot-topics/{{ topic.hot_topic_id }}">进入热点详情</a>
+        {% endif %}
+        {% if topic.metadata_path %}
+        <span class="row-subtitle" title="{{ topic.metadata_path }}">metadata.json 已保存</span>
+        {% endif %}
+      </div>
+    </article>
+    {% else %}
+    <div class="daily-run-note" style="grid-column:1 / -1;">最近一次运行还没有选出话题。</div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="daily-run-note">
+    还没有每日采集记录。点击“立即采集 Top 3”后，会生成当天 3 个贴纸包热点候选。
+  </div>
+  {% endif %}
+</section>

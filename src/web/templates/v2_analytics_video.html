@@ -1,0 +1,113 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .anad-page { padding-top:14px; }
+  .anad-grid { display:grid; grid-template-columns:160px 1fr; gap:18px; align-items:start; margin-bottom:16px; }
+  .anad-cover { width:160px; aspect-ratio:9/16; border-radius:var(--radius-md); object-fit:cover; background:var(--bg-subtle); display:block; }
+  .anad-stat-row { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+  .anad-stat { border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:12px; background:var(--bg); }
+  .anad-stat span { color:var(--text-muted); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .anad-stat strong { display:block; font-size:22px; font-variant-numeric:tabular-nums; margin-top:4px; }
+  .anad-stat .delta { display:inline-block; font-size:11px; margin-left:8px; padding:1px 8px; border-radius:8px; vertical-align:middle; }
+  .anad-stat .delta.up { background:rgba(16,185,129,.12); color:var(--success); }
+  .anad-stat .delta.down { background:rgba(239,68,68,.12); color:var(--danger); }
+  .anad-stat .delta.zero { background:var(--bg-subtle); color:var(--text-muted); }
+  .anad-history { width:100%; font-size:12px; border-collapse:collapse; }
+  .anad-history th { text-align:left; color:var(--text-muted); font-size:11px; padding:8px 10px; background:var(--bg-subtle); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .anad-history td { padding:8px 10px; border-top:1px solid var(--line-soft); font-variant-numeric:tabular-nums; }
+  .anad-history td.num, .anad-history th.num { text-align:right; }
+  .delta-up { color:var(--success); font-size:11px; margin-left:6px; }
+  .delta-down { color:var(--danger); font-size:11px; margin-left:6px; }
+</style>
+
+<div class="anad-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">B.3 · Video Detail</p>
+      <h1>{{ video.title or video.video_description or '(无标题)' }}</h1>
+      <p class="page-subtitle">
+        tiktok_video_id <code>{{ video.tiktok_video_id }}</code>
+        · 发布时间 {{ video.create_human or '—' }}
+        · 最近快照 {{ video.fetched_human or '—' }}
+        {% if video.share_url %}· <a class="text-link" href="{{ video.share_url }}" target="_blank" rel="noopener">在 TikTok 打开 ↗</a>{% endif %}
+      </p>
+    </div>
+    <div class="v2-action-row">
+      <a href="/v2/analytics" class="button ghost">← 返回数据看板</a>
+      <form method="post" action="/v2/analytics/refresh" style="display:inline;">
+        <input type="hidden" name="open_id" value="{{ open_id }}">
+        <input type="hidden" name="return_to" value="/v2/analytics/video/{{ video.tiktok_video_id }}">
+        <button type="submit" class="button-secondary">立即刷新</button>
+      </form>
+    </div>
+  </section>
+
+  {% set first = history[0] if history else None %}
+  {% set prev  = history[1] if history|length > 1 else None %}
+
+  <section class="panel" style="padding:18px;">
+    <div class="anad-grid">
+      {% if video.cover_image_url %}
+      <img class="anad-cover" src="{{ video.cover_image_url }}" alt="">
+      {% else %}
+      <div class="anad-cover"></div>
+      {% endif %}
+      <div>
+        {% macro stat(label, val, delta) %}
+        <div class="anad-stat">
+          <span>{{ label }}</span>
+          <strong>{{ '{:,}'.format(val or 0) }}{% if delta is not none %}{% if delta > 0 %}<span class="delta up">+{{ '{:,}'.format(delta) }}</span>{% elif delta < 0 %}<span class="delta down">{{ '{:,}'.format(delta) }}</span>{% else %}<span class="delta zero">0</span>{% endif %}{% endif %}</strong>
+        </div>
+        {% endmacro %}
+        <div class="anad-stat-row">
+          {{ stat('播放', video.view_count,    (first.delta_view    if first else None)) }}
+          {{ stat('点赞', video.like_count,    (first.delta_like    if first else None)) }}
+          {{ stat('评论', video.comment_count, (first.delta_comment if first else None)) }}
+          {{ stat('分享', video.share_count,   (first.delta_share   if first else None)) }}
+        </div>
+        <p class="muted" style="margin:0;font-size:12px;">
+          标注的「+/-」为本次快照相对于上一次（{{ history[1].fetched_human if history|length > 1 else '尚无历史' }}）的变化量；首次抓取时不显示。
+        </p>
+        {% if video.video_description %}
+        <p style="margin-top:12px;color:var(--text-secondary);font-size:13px;line-height:1.5;">{{ video.video_description }}</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" style="margin-top:14px;padding:0;">
+    <div class="panel-header" style="padding:14px 18px;">
+      <h3 style="margin:0;font-size:15px;">快照历史 · {{ history|length }} 条</h3>
+      <span class="muted" style="font-size:11px;">由「立即刷新」/ 自动刷新写入</span>
+    </div>
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table class="anad-history">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th class="num">播放</th>
+            <th class="num">点赞</th>
+            <th class="num">评论</th>
+            <th class="num">分享</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in history %}
+          <tr>
+            <td>{{ h.fetched_human }}</td>
+            <td class="num">{{ '{:,}'.format(h.view_count or 0) }}{% if h.delta_view is not none and h.delta_view != 0 %}<span class="{{ 'delta-up' if h.delta_view > 0 else 'delta-down' }}">{{ '%+d'|format(h.delta_view) }}</span>{% endif %}</td>
+            <td class="num">{{ '{:,}'.format(h.like_count or 0) }}{% if h.delta_like is not none and h.delta_like != 0 %}<span class="{{ 'delta-up' if h.delta_like > 0 else 'delta-down' }}">{{ '%+d'|format(h.delta_like) }}</span>{% endif %}</td>
+            <td class="num">{{ '{:,}'.format(h.comment_count or 0) }}{% if h.delta_comment is not none and h.delta_comment != 0 %}<span class="{{ 'delta-up' if h.delta_comment > 0 else 'delta-down' }}">{{ '%+d'|format(h.delta_comment) }}</span>{% endif %}</td>
+            <td class="num">{{ '{:,}'.format(h.share_count or 0) }}{% if h.delta_share is not none and h.delta_share != 0 %}<span class="{{ 'delta-up' if h.delta_share > 0 else 'delta-down' }}">{{ '%+d'|format(h.delta_share) }}</span>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px;">还没有快照。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+{% endblock %}

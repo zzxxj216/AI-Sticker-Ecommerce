@@ -96,27 +96,62 @@ class TKVideoService:
     # Blotato account selection (replaces operator-typed open_id)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def list_blotato_accounts() -> dict[str, Any]:
-        """List Blotato-side TikTok accounts.
+    # In-process TTL cache for Blotato account listing. Each /v2/packs
+    # and /v2/videos page render used to do a synchronous HTTP call here
+    # (~1.5–2s, occasionally 21s on timeout). Account lists barely
+    # change, so a short TTL gives massively faster page loads while
+    # still picking up edits within a minute.
+    _blotato_cache: dict[str, Any] = {"at": 0.0, "value": None}
+    _BLOTATO_CACHE_TTL = 60.0  # seconds
+
+    @classmethod
+    def list_blotato_accounts(cls, *, force_refresh: bool = False) -> dict[str, Any]:
+        """List Blotato-side TikTok accounts (memoized for 60s).
 
         Returns ``{"accounts": [...], "ok": bool, "error": str}`` so the
         UI can distinguish three states:
           - ok=True, accounts=[...]   → render dropdown
           - ok=False, error="not_configured"  → BLOTATO_API_KEY missing
           - ok=False, error=<message> → transient API failure (retry)
+
+        Pass ``force_refresh=True`` to bypass the cache (e.g., after the
+        operator added/removed an account on Blotato).
         """
+        now = time.time()
+        cached = cls._blotato_cache.get("value")
+        if (
+            not force_refresh
+            and cached is not None
+            and (now - cls._blotato_cache.get("at", 0.0)) < cls._BLOTATO_CACHE_TTL
+        ):
+            return cached
+
         from src.services.tiktok.blotato_service import BlotaToService
         bsvc = BlotaToService()
         if not bsvc.is_configured():
-            return {"accounts": [], "ok": False, "error": "not_configured"}
-        try:
-            accs = bsvc.get_tiktok_accounts()
-            return {"accounts": accs, "ok": True, "error": ""}
-        except Exception as e:
-            err = f"{type(e).__name__}: {e}"
-            logger.warning("list_blotato_accounts failed: %s", err)
-            return {"accounts": [], "ok": False, "error": err[:200]}
+            value: dict[str, Any] = {"accounts": [], "ok": False, "error": "not_configured"}
+        else:
+            # Use a tighter timeout for this UI-fronting call: a slow Blotato
+            # shouldn't make every page render hang for 30s.
+            prev_timeout = getattr(bsvc, "_timeout", 30)
+            try:
+                bsvc._timeout = 5
+                accs = bsvc.get_tiktok_accounts()
+                value = {"accounts": accs, "ok": True, "error": ""}
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                logger.warning("list_blotato_accounts failed: %s", err)
+                # On error, return the previous value (if any) so transient
+                # network blips don't blank out the dropdown for the user.
+                if cached is not None and cached.get("ok"):
+                    value = {**cached, "error": f"stale (cause: {err[:120]})"}
+                else:
+                    value = {"accounts": [], "ok": False, "error": err[:200]}
+            finally:
+                bsvc._timeout = prev_timeout
+
+        cls._blotato_cache = {"at": now, "value": value}
+        return value
 
     def update_blotato_account(self, video_id: int, account_id: str) -> bool:
         with _open_db(self.db_path) as conn:
@@ -659,6 +694,7 @@ class TKVideoService:
         *,
         pack_id: Optional[int] = None,
         publish_status: Optional[str] = None,
+        q: Optional[str] = None,
         with_latest_metrics: bool = False,
         limit: int = 100,
     ) -> tuple[list[dict], int]:
@@ -669,10 +705,19 @@ class TKVideoService:
         if publish_status and publish_status != "all":
             clauses.append("v.publish_status = ?")
             params.append(publish_status)
+        q_norm = (q or "").strip()
+        if q_norm:
+            like = f"%{q_norm}%"
+            clauses.append(
+                "(p.display_name LIKE ? OR v.caption LIKE ? OR v.hashtags LIKE ? "
+                "OR v.video_one_liner LIKE ? OR v.blotato_post_id LIKE ? OR v.tiktok_video_id LIKE ?)"
+            )
+            params.extend([like, like, like, like, like, like])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with _open_db(self.db_path) as conn:
             total = conn.execute(
-                f"SELECT COUNT(*) FROM tk_videos v {where}", tuple(params),
+                f"SELECT COUNT(*) FROM tk_videos v LEFT JOIN packs p ON p.id = v.pack_id {where}",
+                tuple(params),
             ).fetchone()[0]
             rows = conn.execute(
                 f"""

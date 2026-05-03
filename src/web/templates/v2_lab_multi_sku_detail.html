@@ -1,0 +1,259 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .lab-page { padding-top:14px; }
+  .lab-banner { padding:10px 16px;background:linear-gradient(90deg,rgba(139,92,246,.10),rgba(236,72,153,.06));border:1px dashed rgba(139,92,246,.4);border-radius:8px;margin-bottom:16px;font-size:12px;color:var(--text-secondary); }
+  .lab-status-pill { padding:2px 10px; border-radius:10px; font-size:12px; font-weight:700; }
+  .lab-status-pill.draft  { background:#fef3c7; color:#92400e; }
+  .lab-status-pill.draft_on_platform { background:#dbeafe; color:#1e40af; }
+  .lab-status-pill.publishing { background:#e0e7ff; color:#3730a3; }
+  .lab-status-pill.published { background:#d1fae5; color:#065f46; }
+  .lab-status-pill.suspended { background:#fee2e2; color:#991b1b; }
+  .lab-status-pill.failed { background:#fee2e2; color:#991b1b; }
+  .lab-meta-form label { display:block; font-size:11px; color:var(--text-muted); margin:8px 0 3px; }
+  .lab-meta-form input, .lab-meta-form select, .lab-meta-form textarea {
+    width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; box-sizing:border-box; font-family:inherit;
+  }
+  .lab-meta-form textarea { font-family:monospace; resize:vertical; }
+  .sku-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+  .sku-table th { background:var(--bg-subtle); padding:8px; text-align:left; color:var(--text-secondary); font-weight:700; border-bottom:1px solid var(--line); }
+  .sku-table td { padding:8px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  .sku-table input { padding:4px 8px; border:1px solid var(--line); border-radius:4px; font-size:12px; box-sizing:border-box; }
+  .sku-table input.long { width:140px; }
+  .sku-table input.short { width:80px; }
+  .lab-banner.publishing { background:linear-gradient(90deg,rgba(99,102,241,.10),rgba(14,165,233,.06)); border:1px solid rgba(99,102,241,.3); display:flex; align-items:center; gap:12px; }
+  .v2-button-spinner { display:inline-block; width:12px; height:12px; border:2px solid var(--accent); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+</style>
+
+<div class="lab-page">
+  <section class="page-header" style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <p class="eyebrow">🧪 LAB · Multi-SKU Product</p>
+      <h1>#{{ product.id }} {{ product.title or '(未命名)' }}</h1>
+      <p class="page-subtitle">
+        <span class="lab-status-pill {{ product.publish_status }}">{{ product.publish_status }}</span>
+        · 维度 <code>{{ product.sales_attribute_name }}</code>
+        · {{ product.skus|length }} 个 SKU
+        {% if product.tiktok_product_id %} · 平台 ID <code>{{ product.tiktok_product_id }}</code>{% endif %}
+      </p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <a href="/v2/lab/multi-sku" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+      <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/delete" style="margin:0;"
+            onsubmit="return confirm('删除产品 #{{ product.id }}（含 {{ product.skus|length }} 个 SKU）?');">
+        <button type="submit" style="padding:8px 14px;background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">🗑 删除</button>
+      </form>
+    </div>
+  </section>
+
+  <div class="lab-banner">
+    🧪 实验性多 SKU 产品 · 主图源 pack: <strong>#{{ product.primary_pack_id or '—' }}</strong>{% if product.cover_url %}
+    <img src="{{ product.cover_url }}" style="height:36px;border-radius:4px;vertical-align:middle;margin-left:8px;">{% endif %}
+    {% if product.topic_id %}· 来自热点 #{{ product.topic_id }} {{ product.topic_name }}{% endif %}
+  </div>
+
+  {% if product.publish_status == 'publishing' %}
+  <div class="lab-banner publishing" id="publishing-banner">
+    <span class="v2-button-spinner"></span>
+    <div>
+      <strong style="color:var(--accent);">正在后台上架到 TikTok</strong>
+      <div style="margin-top:3px;color:var(--text-muted);font-size:12px;">
+        N 张图上传 + create_product + 多 SKU 创建，约 60-300 秒。<strong style="color:var(--success);">可关闭页面，后台会跑完。</strong>本页每 5 秒自动检查。
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      const PID = {{ product.id }};
+      let consecutive = 0;
+      const t = setInterval(async () => {
+        try {
+          const r = await fetch(`/v2/lab/multi-sku/${PID}/publish_status`);
+          const d = await r.json();
+          if (!d.ok) return;
+          if (!d.running && d.publish_status !== 'publishing') {
+            consecutive++;
+            if (consecutive >= 2) { clearInterval(t); location.reload(); }
+          } else { consecutive = 0; }
+        } catch(e) {}
+      }, 5000);
+    })();
+  </script>
+  {% endif %}
+
+  <!-- 平台控制 -->
+  <section class="panel" style="padding:18px;margin-bottom:16px;">
+    <h3 style="margin:0 0 8px;font-size:15px;">📤 TKShop 平台控制</h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      {% if not product.tiktok_product_id %}
+      <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/publish" style="display:inline;">
+        <button type="submit" name="auto_activate" value="0"
+                onclick="return confirm('在 TikTok 创建商品但 NOT 上架（status=DRAFT）。继续?');"
+                style="padding:9px 16px;background:var(--surface);color:var(--text-primary);border:1px solid var(--line);border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">📝 添加到平台（草稿）</button>
+        <button type="submit" name="auto_activate" value="1"
+                onclick="return confirm('创建商品并立即上架（status=LIVE）。继续?');"
+                style="padding:9px 22px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:14px;">🚀 发布并上架</button>
+      </form>
+      <span style="color:var(--text-muted);font-size:12px;">尚未在 TikTok 创建。需要至少有 1 个 SKU 和有效图源（主图源 pack 需有 tkshop_products 主图，或 series 有预览）。</span>
+      {% else %}
+      <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/update-on-platform" style="display:inline;"
+            onsubmit="return confirm('把当前本地的标题/描述/图片/SKU 推送到 TikTok（覆盖平台数据）。继续?');">
+        <button type="submit"
+                style="padding:9px 18px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">📤 推送更新到 TikTok</button>
+      </form>
+      <button type="button" id="btn-sync-status"
+              style="padding:9px 14px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🔄 同步平台状态</button>
+      <span id="sync-status-msg" style="font-size:12px;color:var(--text-muted);"></span>
+      <script>
+        document.getElementById('btn-sync-status').addEventListener('click', async () => {
+          const msg = document.getElementById('sync-status-msg');
+          msg.textContent = '⏳ 同步中…';
+          const r = await fetch(`/v2/lab/multi-sku/{{ product.id }}/sync-status`, {method:'POST'});
+          const d = await r.json();
+          if (d.ok) {
+            msg.style.color = 'var(--success)';
+            msg.textContent = `✓ 平台状态：${d.remote_status || '(未知)'}`;
+            setTimeout(() => location.reload(), 1200);
+          } else {
+            msg.style.color = 'var(--danger)';
+            msg.textContent = `❌ ${d.error || d.error_message || '失败'}`;
+          }
+        });
+      </script>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- Listing 元信息 -->
+  <section class="panel" style="padding:18px;margin-bottom:16px;">
+    <h3 style="margin:0 0 8px;font-size:15px;">📝 Listing 元信息</h3>
+    <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/edit-meta" class="lab-meta-form">
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
+        <div>
+          <label>title (≤255)</label>
+          <input type="text" name="title" value="{{ product.title }}" maxlength="255">
+        </div>
+        <div>
+          <label>category_id</label>
+          <input type="text" name="category_id" value="{{ product.category_id }}">
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;">
+        <div>
+          <label>变体维度名（sales_attribute_name）</label>
+          <input type="text" name="sales_attribute_name" value="{{ product.sales_attribute_name }}" maxlength="50">
+        </div>
+        <div>
+          <label>主图源 pack（primary_pack_id）</label>
+          <select name="primary_pack_id">
+            {% for pk in avail_packs %}
+            <option value="{{ pk.id }}" {% if product.primary_pack_id == pk.id %}selected{% endif %}>#{{ pk.id }} {{ pk.display_name or pk.pack_uid }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <label>description_html</label>
+      <textarea name="description_html" rows="6">{{ product.description_html }}</textarea>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;">
+        <div>
+          <label>selling_points（每行一条）</label>
+          <textarea name="selling_points" rows="5">{% for s in product.selling_points %}{{ s }}
+{% endfor %}</textarea>
+        </div>
+        <div>
+          <label>keywords（每行一条）</label>
+          <textarea name="keywords" rows="5">{% for k in product.keywords %}{{ k }}
+{% endfor %}</textarea>
+        </div>
+      </div>
+      <button type="submit" style="margin-top:14px;padding:9px 22px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">💾 保存元信息</button>
+    </form>
+  </section>
+
+  <!-- SKU 子行 -->
+  <section class="panel" style="padding:18px;margin-bottom:16px;" id="skus">
+    <h3 style="margin:0 0 8px;font-size:15px;">🏷 SKU 变体（{{ product.skus|length }}）</h3>
+    <p class="muted" style="font-size:11px;margin:0 0 10px;">价格留空 = 走 mca FIXED_CONFIG 默认价；库存留空 = FIXED 默认库存。 已发布到平台后 <code>tiktok_sku_id</code> 会自动回填。</p>
+    <table class="sku-table">
+      <thead>
+        <tr>
+          <th style="width:30px;">#</th>
+          <th>seller_sku</th>
+          <th>变体值（{{ product.sales_attribute_name }}）</th>
+          <th>价格(美分)</th>
+          <th>库存</th>
+          <th>来源 pack</th>
+          <th>tiktok_sku_id</th>
+          <th style="width:140px;text-align:right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in product.skus %}
+        <tr id="sku-{{ s.id }}">
+          <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/sku/{{ s.id }}/edit" id="sku-edit-{{ s.id }}">
+            <td>
+              <input type="number" name="sort_order" value="{{ s.sort_order }}" class="short" min="1" max="999">
+            </td>
+            <td><input type="text" name="seller_sku" value="{{ s.seller_sku }}" class="long"
+                       pattern="[A-Z0-9._-]+" style="text-transform:uppercase;"></td>
+            <td><input type="text" name="sales_attribute_value" value="{{ s.sales_attribute_value }}" class="long"></td>
+            <td><input type="text" name="price_amount_override" value="{{ s.price_amount_override }}" class="short" placeholder="(默认)"></td>
+            <td><input type="number" name="stock_override" value="{{ s.stock_override or '' }}" class="short" placeholder="(默认)" min="0"></td>
+            <td><code style="font-size:11px;color:var(--text-muted);">#{{ s.pack_id or '—' }} {{ (s.pack_name or '')[:28] }}</code></td>
+            <td><code style="font-size:11px;color:var(--text-muted);">{{ s.tiktok_sku_id or '—' }}</code></td>
+            <td style="text-align:right;white-space:nowrap;">
+              <button type="submit" style="padding:5px 10px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">💾 保存</button>
+          </form>
+              <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/sku/{{ s.id }}/delete" style="display:inline;"
+                    onsubmit="return confirm('删除 SKU {{ s.seller_sku }}?{% if s.tiktok_sku_id %} 注意：该 SKU 已在 TikTok 平台（{{ s.tiktok_sku_id }}），删除本地不会自动同步到平台。{% endif %}');">
+                <button type="submit" style="padding:5px 10px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">🗑</button>
+              </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">尚无 SKU，下方表单添加</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- 添加 SKU -->
+    <details style="margin-top:14px;">
+      <summary style="cursor:pointer;padding:8px 12px;background:var(--bg-subtle);border-radius:6px;font-size:12px;font-weight:700;">＋ 添加新 SKU</summary>
+      <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/sku/add" class="lab-meta-form" style="padding:12px;background:var(--bg-subtle);border-radius:6px;margin-top:8px;">
+        <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr;gap:10px;align-items:end;">
+          <div>
+            <label>来源 pack（可选）</label>
+            <select name="pack_id">
+              <option value="">(无)</option>
+              {% for pk in avail_packs %}
+              <option value="{{ pk.id }}">#{{ pk.id }} {{ (pk.display_name or pk.pack_uid)[:30] }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>seller_sku</label>
+            <input type="text" name="seller_sku" required pattern="[A-Z0-9._-]+" style="text-transform:uppercase;" placeholder="INK-FATHERSDAY-MEME">
+          </div>
+          <div>
+            <label>变体值</label>
+            <input type="text" name="sales_attribute_value" required placeholder="Meme">
+          </div>
+          <div>
+            <label>价格(美分,可空)</label>
+            <input type="text" name="price_amount_override" placeholder="(默认)">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+          <div>
+            <label>库存(可空)</label>
+            <input type="number" name="stock_override" placeholder="(默认)" min="0">
+          </div>
+        </div>
+        <button type="submit" style="margin-top:10px;padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">＋ 添加 SKU</button>
+      </form>
+    </details>
+  </section>
+</div>
+
+{% endblock %}

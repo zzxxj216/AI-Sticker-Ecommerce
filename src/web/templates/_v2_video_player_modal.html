@@ -1,0 +1,57 @@
+<style>
+  .vp-modal { width:min(820px, 96vw); max-height:92vh; padding:0; border-radius:12px; border:1px solid var(--line); background:var(--surface); position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); margin:0; }
+  .vp-modal::backdrop { background:rgba(0,0,0,.7); }
+  .vp-modal-h { padding:14px 18px; border-bottom:1px solid var(--line-soft); display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .vp-modal-h h3 { margin:0; font-size:14px; font-weight:700; max-width:75%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vp-modal-body { padding:14px 18px 18px; }
+  .vp-modal-body video { width:100%; max-height:70vh; background:#000; border-radius:8px; display:block; }
+  .vp-modal-foot { padding:10px 18px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:11px; color:var(--text-muted); flex-wrap:wrap; }
+</style>
+<dialog id="vp-modal" class="vp-modal">
+  <div class="vp-modal-h">
+    <h3 id="vp-title">视频播放</h3>
+    <button type="button" id="vp-close" style="background:none;border:1px solid var(--line);padding:4px 10px;font-size:12px;cursor:pointer;border-radius:6px;color:var(--text-secondary);">关闭</button>
+  </div>
+  <div class="vp-modal-body">
+    <video id="vp-player" controls preload="metadata" playsinline></video>
+  </div>
+  <div class="vp-modal-foot">
+    <span id="vp-meta">—</span>
+    <a id="vp-open-newtab" href="#" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">在新标签打开 ↗</a>
+  </div>
+</dialog>
+<script>
+(function(){
+  if (window.__vpInited) return;
+  window.__vpInited = true;
+  const modal = document.getElementById('vp-modal');
+  const player = document.getElementById('vp-player');
+  const titleEl = document.getElementById('vp-title');
+  const meta = document.getElementById('vp-meta');
+  const openNew = document.getElementById('vp-open-newtab');
+  function open(url, title) {
+    if (!url) return;
+    titleEl.textContent = title || '视频播放';
+    player.src = url;
+    openNew.href = url;
+    meta.textContent = url;
+    modal.showModal();
+    try { player.play(); } catch(e){}
+  }
+  function close() {
+    try { player.pause(); } catch(e){}
+    player.removeAttribute('src');
+    player.load();
+    modal.close();
+  }
+  document.getElementById('vp-close').addEventListener('click', close);
+  modal.addEventListener('close', () => { try { player.pause(); } catch(e){} });
+  // Delegated trigger: any element with [data-vp-url] opens the modal
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-vp-url]');
+    if (!el) return;
+    e.preventDefault();
+    open(el.dataset.vpUrl, el.dataset.vpTitle || el.textContent.trim());
+  });
+})();
+</script>

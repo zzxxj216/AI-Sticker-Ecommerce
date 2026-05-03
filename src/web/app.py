@@ -15,10 +15,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from src.web.template_compat import CompatJinja2Templates as Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.core.logger import get_logger
+from src.services.daily_sticker_topics import get_daily_sticker_topic_service
+from src.services.feedback import get_feedback_service
 from src.services.ops.trend_service import TrendService
 from src.services.tools.sticker_agent import StickerAgentService
 from src.services.tools.blog_agent import BlogAgentService
@@ -82,6 +84,14 @@ app.mount("/preview-images", StaticFiles(directory=str(PREVIEW_IMAGES_DIR)), nam
 V2_OUTPUTS_DIR = Path("output/packs")
 V2_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/v2-outputs", StaticFiles(directory=str(V2_OUTPUTS_DIR)), name="v2-outputs")
+
+DAILY_STICKER_ASSETS_DIR = Path("data/daily_sticker_topics")
+DAILY_STICKER_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/daily-sticker-assets",
+    StaticFiles(directory=str(DAILY_STICKER_ASSETS_DIR)),
+    name="daily-sticker-assets",
+)
 app.include_router(v2_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -107,6 +117,26 @@ def start_scheduler():
         'cron',
         hour=6,
         minute=0,
+    )
+    scheduler.add_job(
+        lambda: logger.info("V2 feedback collected: %s", get_feedback_service().collect_pending()),
+        'interval',
+        hours=6,
+        id='asset_feedback_collect',
+        replace_existing=True,
+    )
+    try:
+        daily_topic_hour = int(os.getenv("DAILY_STICKER_TOPIC_HOUR", "9"))
+        daily_topic_minute = int(os.getenv("DAILY_STICKER_TOPIC_MINUTE", "0"))
+    except ValueError:
+        daily_topic_hour, daily_topic_minute = 9, 0
+    scheduler.add_job(
+        lambda: get_daily_sticker_topic_service().run_daily_collect(force=False),
+        'cron',
+        hour=daily_topic_hour,
+        minute=daily_topic_minute,
+        id='daily_sticker_topic_collect',
+        replace_existing=True,
     )
     scheduler.start()
 

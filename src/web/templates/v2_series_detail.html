@@ -57,6 +57,11 @@
       </button>
     </form>
     {% if series.status_summary.ok > 0 %}
+    <a href="/v2/series/{{ series.id }}/previews.zip"
+       class="button ghost"
+       style="padding:10px 20px;border-radius:8px;font-weight:600;text-decoration:none;">
+      下载预览图 ZIP
+    </a>
     <form method="post" action="/v2/packs/from-series/{{ series.id }}" style="display:inline;">
       <button type="submit"
               style="padding:10px 20px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
@@ -132,17 +137,12 @@
 
 <script>
   // Submit kicks off a background task and 303s back here. No need to
-  // freeze the UI — operator can navigate away. Auto-refresh handles
-  // status updates.
+  // freeze the UI — operator can navigate away and manually refresh later.
   document.getElementById('gen-form').addEventListener('submit', function() {
     var btn = document.getElementById('gen-btn');
     btn.textContent = '已派发到后台...';
     btn.style.opacity = '0.6';
   });
-  // Auto-refresh while any preview is pending or generating.
-  {% if series.status_summary.generating > 0 or (series.expected_count - series.status_summary.ok - series.status_summary.error) > 0 %}
-  setTimeout(function() { location.reload(); }, 10000);
-  {% endif %}
 </script>
 
 {% endblock %}

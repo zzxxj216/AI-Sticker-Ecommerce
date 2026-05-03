@@ -1,0 +1,143 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .lab-page { padding-top:14px; }
+  .lab-banner { padding:10px 16px;background:linear-gradient(90deg,rgba(139,92,246,.10),rgba(236,72,153,.06));border:1px dashed rgba(139,92,246,.4);border-radius:8px;margin-bottom:16px;font-size:12px;color:var(--text-secondary); }
+  .lab-banner b { color:#8b5cf6; }
+  .lab-card { padding:14px; border:1px solid var(--line); border-radius:10px; margin-bottom:12px; background:var(--surface); display:flex; gap:14px; align-items:center; }
+  .lab-card-meta { flex:1; }
+  .lab-card-meta h4 { margin:0 0 4px; font-size:14px; }
+  .lab-card-meta .muted-line { font-size:11px; color:var(--text-muted); margin-top:3px; }
+  .lab-status-pill { padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; margin-right:6px; }
+  .lab-status-pill.draft  { background:#fef3c7; color:#92400e; }
+  .lab-status-pill.draft_on_platform { background:#dbeafe; color:#1e40af; }
+  .lab-status-pill.publishing { background:#e0e7ff; color:#3730a3; }
+  .lab-status-pill.published { background:#d1fae5; color:#065f46; }
+  .lab-status-pill.suspended { background:#fee2e2; color:#991b1b; }
+  .lab-status-pill.failed { background:#fee2e2; color:#991b1b; }
+  .lab-form { padding:18px; background:var(--bg-subtle); border:1px solid var(--line); border-radius:10px; margin-bottom:18px; }
+  .lab-form label { display:block; font-size:11px; color:var(--text-muted); margin:8px 0 4px; }
+  .lab-form input, .lab-form select, .lab-form textarea { width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; box-sizing:border-box; font-family:inherit; }
+  .lab-form textarea { font-family:monospace; resize:vertical; }
+  #lab-pack-list { max-height:280px; overflow:auto; border:1px solid var(--line); border-radius:6px; background:var(--surface); padding:6px; }
+  #lab-pack-list label { display:flex; gap:8px; align-items:center; padding:6px 8px; border-bottom:1px solid var(--line-soft); cursor:pointer; margin:0; font-size:12px; color:var(--text-primary); }
+  #lab-pack-list label:hover { background:var(--bg-subtle); }
+  #lab-pack-list input { width:auto; }
+  .lab-form .help { font-size:11px; color:var(--text-muted); margin-top:4px; line-height:1.6; }
+</style>
+
+<div class="lab-page">
+  <section class="page-header" style="margin-bottom:14px;">
+    <div>
+      <p class="eyebrow">🧪 LAB · Multi-SKU Products</p>
+      <h1>多 SKU 产品（实验室）</h1>
+      <p class="page-subtitle">把同一个热点下的多个系列做成一个 TikTok 商品的多个 SKU 变体（如 Father's Day → 黑金/手账/梗图 三种主题）。完全独立于现有 TKShop 产品流程。</p>
+    </div>
+  </section>
+
+  <div class="lab-banner">
+    🧪 <b>实验性功能</b> · 数据存于独立表 <code>lab_msku_products</code> / <code>lab_msku_product_skus</code>。发布走 multi-channel-api 新端点 <code>/products/sticker_multi_sku_publish</code>。不影响现有 TKShop 产品。
+  </div>
+
+  <!-- 创建表单 -->
+  <section class="panel" style="padding:18px;margin-bottom:18px;">
+    <h3 style="margin:0 0 8px;font-size:15px;">＋ 新建多 SKU 产品</h3>
+    <form method="post" action="/v2/lab/multi-sku/create" class="lab-form" id="lab-create-form">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div>
+          <label for="lab-topic">热点（topic）</label>
+          <select id="lab-topic" name="topic_id" required>
+            <option value="">— 选择 —</option>
+            {% for t in topics %}
+            <option value="{{ t.id }}">#{{ t.id }} {{ t.topic_name }} · {{ t.pack_count }} 个 pack</option>
+            {% endfor %}
+          </select>
+          <p class="help">只显示已经有 ≥ 1 个 pack 的 topic。</p>
+        </div>
+        <div>
+          <label for="lab-attr-name">变体维度名（sales_attribute_name）</label>
+          <input type="text" id="lab-attr-name" name="sales_attribute_name" value="Theme" maxlength="50">
+          <p class="help">TikTok 上买家看到的下拉菜单标题，如 <code>Theme</code> / <code>Style</code> / <code>Pack Type</code>。</p>
+        </div>
+      </div>
+      <label>选择要变成 SKU 的 packs（这个 topic 下的）</label>
+      <div id="lab-pack-list">
+        <p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">先选 topic，pack 列表会自动加载</p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px;">
+        <div>
+          <label for="lab-title">标题（可选，留空 AI 后自动用 topic 名）</label>
+          <input type="text" id="lab-title" name="title" maxlength="255" placeholder="例如：Father's Day Sticker Bundle - 3 Pack Themes">
+        </div>
+        <div>
+          <label for="lab-desc">商品描述 HTML（可选，可后续在详情页编辑）</label>
+          <textarea id="lab-desc" name="description_html" rows="4" placeholder="<p>...</p>"></textarea>
+        </div>
+      </div>
+      <button type="submit" style="margin-top:14px;padding:9px 22px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">＋ 创建</button>
+    </form>
+  </section>
+
+  <!-- 已有产品 -->
+  <section class="panel" style="padding:18px;">
+    <h3 style="margin:0 0 12px;font-size:15px;">已有 {{ products|length }} 个 Lab 多 SKU 产品</h3>
+    {% for p in products %}
+    <div class="lab-card">
+      <div class="lab-card-meta">
+        <h4>#{{ p.id }} {{ p.title or '(未命名)' }}</h4>
+        <div class="muted-line">
+          <span class="lab-status-pill {{ p.publish_status }}">{{ p.publish_status }}</span>
+          {{ p.sku_count }} 个 SKU · 维度 <code>{{ p.sales_attribute_name }}</code>
+          {% if p.topic_name %} · 来自热点 {{ p.topic_name }}{% endif %}
+        </div>
+        {% if p.tiktok_product_id %}<div class="muted-line">tiktok_product_id: <code>{{ p.tiktok_product_id }}</code></div>{% endif %}
+        <div class="muted-line">{{ p.created_human }} 创建 · {{ p.updated_human }} 更新</div>
+      </div>
+      <a href="/v2/lab/multi-sku/{{ p.id }}" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;">编辑 →</a>
+      <form method="post" action="/v2/lab/multi-sku/{{ p.id }}/delete" style="margin:0;"
+            onsubmit="return confirm('删除产品 #{{ p.id }}?\n\n会一并删除其所有 SKU 子行，但不会删 TikTok 上已上架的商品。');">
+        <button type="submit" style="padding:7px 12px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🗑 删除</button>
+      </form>
+    </div>
+    {% else %}
+    <p class="muted" style="text-align:center;padding:40px 0;">尚无 Lab 多 SKU 产品。用上面的表单创建第一个。</p>
+    {% endfor %}
+  </section>
+</div>
+
+<script>
+(function(){
+  const topicSel = document.getElementById('lab-topic');
+  const list = document.getElementById('lab-pack-list');
+  topicSel.addEventListener('change', async () => {
+    const tid = topicSel.value;
+    if (!tid) {
+      list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">先选 topic，pack 列表会自动加载</p>';
+      return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">⏳ 加载中…</p>';
+    try {
+      const r = await fetch(`/v2/lab/multi-sku/topics/${tid}/packs`);
+      const d = await r.json();
+      if (!d.ok || !d.packs.length) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">该 topic 下没有 pack。</p>';
+        return;
+      }
+      list.innerHTML = '';
+      d.packs.forEach(p => {
+        const lbl = document.createElement('label');
+        lbl.innerHTML = `
+          <input type="checkbox" name="pack_ids" value="${p.id}">
+          <span><b>#${p.id}</b> ${p.display_name || p.pack_uid || '(unnamed)'}
+            <span style="color:var(--text-muted);">· ${p.total_stickers || 0} 张 · ${p.pack_archetype || ''} · ${p.palette || ''}</span>
+          </span>`;
+        list.appendChild(lbl);
+      });
+    } catch (e) {
+      list.innerHTML = `<p style="color:var(--danger);font-size:12px;text-align:center;padding:14px;margin:0;">加载失败: ${e.message}</p>`;
+    }
+  });
+})();
+</script>
+
+{% endblock %}

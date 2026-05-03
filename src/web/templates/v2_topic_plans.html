@@ -1,85 +1,1011 @@
 {% extends 'v2_base.html' %}
 {% block content %}
 
-<section class="page-header">
-  <div>
-    <p class="eyebrow">A.2 · Topic Plans</p>
-    <h1>题材规划</h1>
-    <p class="page-subtitle">从热点选一条 → 配数量（套数 / 每套预览 / 每张含 sticker）→ 两步生成（主模型自由产出 + 提取模型转 JSON）。</p>
+<style>
+  .topic-plan-page {
+    padding-top: 14px;
+  }
+  .topic-plan-panel {
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .topic-plan-panel .panel-header {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+  }
+  .topic-plan-filters {
+    gap: 12px;
+    align-items: end;
+  }
+  .topic-plan-filters .v2-field {
+    gap: 6px;
+  }
+  .topic-plan-filters .v2-input,
+  .topic-plan-filters .v2-select {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+  .topic-plan-table-wrap {
+    max-height: calc(100vh - 340px);
+    min-height: 430px;
+    overflow: auto;
+  }
+  .topic-plan-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 10px 12px;
+  }
+  .topic-plan-table td {
+    padding: 12px 12px;
+    font-size: 13px;
+  }
+  .topic-plan-title-cell,
+  .topic-plan-raw-cell {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topic-plan-title-cell { max-width: 360px; }
+  .topic-plan-raw-cell { max-width: 520px; }
+  .topic-plan-batchbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .topic-plan-pagination {
+    margin-top: 14px;
+  }
+  .topic-plan-series-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+  .topic-plan-series-dialog {
+    width: min(1040px, calc(100vw - 40px));
+  }
+  .topic-plan-manual-box {
+    margin: 0 0 16px;
+    padding: 0;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-lg);
+    background:
+      linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(14, 165, 233, 0.04)),
+      var(--surface);
+    overflow: hidden;
+  }
+  .topic-plan-manual-box > summary {
+    list-style: none;
+  }
+  .topic-plan-manual-box > summary::-webkit-details-marker {
+    display: none;
+  }
+  .topic-plan-manual-summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .topic-plan-manual-summary strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 800;
+  }
+  .topic-plan-manual-summary small {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .topic-plan-manual-form {
+    padding: 0 14px 14px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .topic-plan-manual-section {
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+  }
+  .topic-plan-manual-section-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .topic-plan-manual-section-title strong {
+    font-size: 13px;
+  }
+  .topic-plan-manual-section-title small {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .topic-plan-manual-grid {
+    display: grid;
+    gap: 12px;
+    align-items: end;
+  }
+  .topic-plan-manual-grid.basic {
+    grid-template-columns: minmax(260px, 1.4fr) 120px minmax(160px, .75fr) minmax(180px, .85fr);
+  }
+  .topic-plan-manual-grid.writing {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .topic-plan-manual-grid.preview-config {
+    grid-template-columns: 160px 160px minmax(220px, 1fr);
+  }
+  .topic-plan-manual-grid.content {
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.15fr);
+    align-items: stretch;
+  }
+  .topic-plan-manual-grid .full {
+    grid-column: 1 / -1;
+  }
+  .topic-plan-manual-grid textarea.v2-input {
+    min-height: 88px;
+    resize: vertical;
+  }
+  .topic-plan-manual-grid.content textarea.v2-input {
+    min-height: 150px;
+  }
+  .topic-plan-manual-check-card {
+    min-height: 38px;
+    padding: 9px 12px;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-md);
+    background: var(--bg-subtle);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .topic-plan-manual-advanced {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-md);
+    background: var(--bg-subtle);
+  }
+  .topic-plan-manual-advanced > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .topic-plan-manual-actions {
+    justify-content: flex-end;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .topic-plan-added-note {
+    display: none;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(34, 197, 94, 0.28);
+    border-radius: var(--radius-md);
+    background: rgba(34, 197, 94, 0.08);
+    color: var(--success);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .topic-plan-series-edit-dialog {
+    width: min(1120px, calc(100vw - 36px));
+  }
+  .topic-plan-series-edit-body {
+    display: grid;
+    gap: 14px;
+  }
+  .topic-plan-series-edit-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 1.4fr) 130px minmax(180px, .8fr) minmax(200px, .9fr);
+    gap: 12px;
+  }
+  .topic-plan-series-edit-prompts {
+    display: grid;
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.15fr);
+    gap: 14px;
+    align-items: stretch;
+  }
+  .topic-plan-series-edit textarea.v2-input {
+    min-height: 160px;
+    resize: vertical;
+  }
+  .topic-plan-series-edit .style-textarea {
+    min-height: 150px;
+  }
+  .topic-plan-series-edit-prompts textarea.v2-input {
+    min-height: 300px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    line-height: 1.55;
+  }
+  @media (max-width: 860px) {
+    .topic-plan-table-wrap {
+      max-height: none;
+      min-height: 0;
+    }
+    .topic-plan-manual-grid.basic,
+    .topic-plan-manual-grid.writing,
+    .topic-plan-manual-grid.preview-config,
+    .topic-plan-manual-grid.content,
+    .topic-plan-series-edit-grid,
+    .topic-plan-series-edit-prompts {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<div class="topic-plan-page">
+
+<section class="panel topic-plan-panel">
+  <div class="panel-header">
+    <div>
+      <h3 style="margin:0;font-size:16px;">筛选 / 搜索</h3>
+      <p class="muted" style="margin-top:4px;">搜索热点标题、来源或方案状态。</p>
+    </div>
   </div>
-  <div>
-    <a href="/v2/topic-plans/new" class="button"
-       style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;text-decoration:none;font-weight:600;">
-      + 新建题材方案
-    </a>
-  </div>
+  <form method="get" action="/v2/topic-plans" class="v2-toolbar topic-plan-filters">
+    <div class="v2-field" style="flex:1;min-width:240px;">
+      <label for="plan-q">关键词</label>
+      <input id="plan-q" class="v2-input" type="search" name="q" value="{{ q or '' }}" autocomplete="off" placeholder="输入热点标题、来源或状态…">
+    </div>
+    <div class="v2-field" style="min-width:170px;">
+      <label for="plan-status">状态</label>
+      <select id="plan-status" name="status" class="v2-select" autocomplete="off">
+        {% for st, label in [('all','全部'),('ready','已就绪'),('generating','生成中'),('draft_extract_failed','提取失败'),('draft_main_failed','主模型失败')] %}
+        <option value="{{ st }}" {% if status_filter == st %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="v2-field" style="min-width:130px;">
+      <label for="plan-topic-id">Topic ID</label>
+      <input id="plan-topic-id" class="v2-input" type="number" name="topic_id" value="{{ topic_id_filter or '' }}" min="1" inputmode="numeric" autocomplete="off" placeholder="可选…">
+    </div>
+    <div class="v2-field" style="min-width:105px;">
+      <label for="plan-limit">每页</label>
+      <select id="plan-limit" name="limit" class="v2-select" autocomplete="off">
+        {% for n in [10,25,50,100] %}
+        <option value="{{ n }}" {% if limit == n %}selected{% endif %}>{{ n }} 条</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="page" value="1">
+    <div class="v2-action-row">
+      <button type="submit" class="button">搜索</button>
+      <a href="/v2/topic-plans" class="button ghost">重置</a>
+    </div>
+  </form>
 </section>
 
-<section class="panel" style="margin-bottom:12px;">
-  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
-    <span style="font-size:13px;font-weight:600;">状态：</span>
-    {% for st, label in [('all','全部'),('ready','已就绪'),('generating','生成中'),('draft_extract_failed','提取失败'),('draft_main_failed','主模型失败')] %}
-    <a href="?status={{ st }}{% if topic_id_filter %}&topic_id={{ topic_id_filter }}{% endif %}"
-       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}ok{% else %}pending{% endif %}"
-       style="text-decoration:none;cursor:pointer;">
-       {{ label }}
-    </a>
-    {% endfor %}
-    {% if topic_id_filter %}
-      <span style="font-size:12px;color:var(--text-muted);">过滤：topic #{{ topic_id_filter }}
-        <a href="?status={{ status_filter or 'all' }}" style="color:var(--accent);text-decoration:none;margin-left:6px;">清除</a>
-      </span>
-    {% endif %}
-  </div>
-</section>
+<dialog class="v2-dialog" id="new-plan-dialog" aria-labelledby="new-plan-dialog-title">
+  <form method="post" action="/v2/topic-plans/generate">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="new-plan-dialog-title" style="margin:0;font-size:18px;">新增题材方案</h3>
+        <p class="muted" style="margin-top:4px;">选择一个热点并配置生成数量；提交后进入后台生成。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭新增题材方案弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="v2-topic-form-grid">
+        <div class="v2-field" style="grid-column:1 / span 2;">
+          <label for="new-plan-topic-id">热点</label>
+          <select id="new-plan-topic-id" name="topic_id" class="v2-select" required autocomplete="off">
+            <option value="">选择热点…</option>
+            {% for t in topic_candidates %}
+            <option value="{{ t.id }}">#{{ t.id }} · {{ t.topic_name }} · {{ t.source }} · {{ t.status }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="v2-field">
+          <label for="new-plan-series-count">套数</label>
+          <input id="new-plan-series-count" class="v2-input" type="number" name="series_count" min="1" max="10" value="{{ defaults.series_count }}" required inputmode="numeric" autocomplete="off">
+        </div>
+        <div class="v2-field">
+          <label for="new-plan-previews">每套预览图</label>
+          <input id="new-plan-previews" class="v2-input" type="number" name="previews_per_series" min="1" max="10" value="{{ defaults.previews_per_series }}" required inputmode="numeric" autocomplete="off">
+        </div>
+        <div class="v2-field">
+          <label for="new-plan-stickers">每图 sticker</label>
+          <input id="new-plan-stickers" class="v2-input" type="number" name="stickers_per_preview" min="1" max="20" value="{{ defaults.stickers_per_preview }}" required inputmode="numeric" autocomplete="off">
+        </div>
+        <div class="v2-field" style="grid-column:1 / span 3;">
+          <label for="new-plan-extra">额外说明</label>
+          <textarea id="new-plan-extra" name="extra_brief" rows="4" placeholder="例如：偏 Y2K 风、避开军事题材、本批面向 Z 世代…"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">生成方案</button>
+    </div>
+  </form>
+</dialog>
 
-<section class="panel">
-  <div class="panel-header" style="padding:16px 24px;">
-    <h3 style="margin:0;font-size:16px;">{{ total }} 个方案</h3>
+<section class="panel topic-plan-panel">
+  <div class="panel-header">
+    <div>
+      <h3 style="margin:0;font-size:15px;">题材方案列表</h3>
+      <p class="muted" style="margin-top:2px;">共 {{ total }} 个 · 第 {{ pagination.page }} / {{ pagination.pages }} 页</p>
+    </div>
+    <div class="topic-plan-batchbar">
+      <button type="button" class="btn-sm" id="batch-retry-plan-button">批量重试提取</button>
+      <button type="button" class="btn-sm" id="batch-delete-plan-button" style="color:var(--danger);">批量删除</button>
+      <button type="button" class="button" data-open-dialog="new-plan-dialog">＋ 新增题材方案</button>
+    </div>
   </div>
-  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
-    <table style="width:100%;font-size:13px;min-width:900px;">
+
+  <form method="post" action="/v2/topic-plans/batch-retry-extract" id="plan-batch-retry-form" style="display:none;">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="plan-batch-ids"></div>
+  </form>
+  <form method="post" action="/v2/topic-plans/batch-delete" id="plan-batch-delete-form" style="display:none;">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="plan-batch-ids"></div>
+  </form>
+
+  <div class="table-wrap topic-plan-table-wrap">
+    <table class="topic-plan-table" style="min-width:1100px;">
       <thead>
-        <tr style="text-align:left;color:var(--text-muted);">
-          <th style="padding:8px 0;">#</th>
-          <th>topic</th>
-          <th style="text-align:right;">配置</th>
-          <th>状态</th>
-          <th style="text-align:right;">系列</th>
-          <th>updated</th>
-          <th style="text-align:right;">操作</th>
+        <tr>
+          <th style="width:42px;"><input type="checkbox" id="plan-select-all" aria-label="选择当前页全部题材方案"></th>
+          <th style="width:72px;">ID</th>
+          <th style="min-width:280px;">热点 / 来源</th>
+          <th style="width:150px;text-align:right;">配置</th>
+          <th style="width:130px;">状态</th>
+          <th style="width:90px;text-align:right;">系列</th>
+          <th style="width:130px;">更新时间</th>
+          <th style="width:210px;text-align:right;">操作</th>
         </tr>
       </thead>
       <tbody>
         {% for p in plans %}
-        <tr style="border-top:1px solid var(--line-soft);">
-          <td style="padding:8px 0;color:var(--text-muted);">{{ p.id }}</td>
+        <tr>
+          <td><input type="checkbox" class="plan-row-check" value="{{ p.id }}" aria-label="选择方案 #{{ p.id }}"></td>
+          <td class="mono-cell">#{{ p.id }}</td>
           <td>
-            <a href="/v2/topic-plans/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ (p.topic_name or '—')[:60] }}</a>
-            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;"><code>{{ p.topic_source or '—' }}</code> · #{{ p.topic_id }}</div>
+            <div class="topic-plan-title-cell"><span class="primary-link">{{ p.topic_name or '—' }}</span></div>
+            <div class="row-subtitle"><code>{{ p.topic_source or '—' }}</code> · topic #{{ p.topic_id }}</div>
           </td>
-          <td style="text-align:right;color:var(--text-muted);font-size:12px;">
-            {{ p.config.get('series_count', '?') }}套×{{ p.config.get('previews_per_series', '?') }}图×{{ p.config.get('stickers_per_preview', '?') }}贴
-          </td>
+          <td style="text-align:right;color:var(--text-muted);">{{ p.config_label }}</td>
           <td>
             <span class="v2-status-pill {% if p.status == 'ready' %}ok{% elif p.status == 'generating' %}running{% elif 'failed' in p.status %}error{% else %}pending{% endif %}">{{ p.status }}</span>
           </td>
+          <td style="text-align:right;">{% if p.series_count %}{{ p.selected_count }}/{{ p.series_count }}{% else %}—{% endif %}</td>
+          <td class="muted">{{ p.updated_human }}</td>
           <td style="text-align:right;">
-            {% if p.series_count %}{{ p.selected_count }}/{{ p.series_count }}{% else %}—{% endif %}
-          </td>
-          <td style="color:var(--text-muted);font-size:12px;">{{ p.updated_human }}</td>
-          <td style="text-align:right;">
-            <a href="/v2/topic-plans/{{ p.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a>
+            <div class="v2-action-row" style="justify-content:flex-end;">
+              <button type="button" class="btn-sm" data-open-dialog="plan-detail-{{ p.id }}">详情</button>
+              <button type="button" class="btn-sm" data-open-dialog="plan-series-{{ p.id }}">系列</button>
+              <button type="button" class="btn-sm" data-open-dialog="plan-delete-{{ p.id }}" style="color:var(--danger);">删除</button>
+            </div>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="7" style="padding:30px 0;text-align:center;color:var(--text-muted);">
-          {% if total == 0 %}暂无题材方案 — 先去 <a href="/v2/hot-topics" style="color:var(--accent);">热点池</a>选一条进入“题材规划”{% else %}当前过滤无结果{% endif %}
-        </td></tr>
+        <tr>
+          <td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+            暂无题材方案。可以点击右上角“新增题材方案”生成。
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
+  {% if pagination.pages > 1 %}
+  <div class="v2-toolbar topic-plan-pagination">
+    <div class="muted">显示 {{ offset + 1 if total else 0 }}–{{ [offset + limit, total]|min }} / {{ total }} 个</div>
+    <div class="v2-action-row">
+      {% if pagination.page > 1 %}
+      <a class="button ghost" href="{{ pagination.first_url }}">首页</a>
+      <a class="button ghost" href="{{ pagination.prev_url }}">上一页</a>
+      {% endif %}
+      {% if pagination.page < pagination.pages %}
+      <a class="button ghost" href="{{ pagination.next_url }}">下一页</a>
+      <a class="button ghost" href="{{ pagination.last_url }}">末页</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </section>
+
+{% for p in plans %}
+<dialog class="v2-dialog" id="plan-detail-{{ p.id }}" aria-labelledby="plan-detail-title-{{ p.id }}">
+  <div class="v2-dialog-header">
+    <div>
+      <h3 id="plan-detail-title-{{ p.id }}" style="margin:0;font-size:18px;">方案 #{{ p.id }} 详情</h3>
+      <p class="muted" style="margin-top:4px;">{{ p.topic_name or '—' }}</p>
+    </div>
+    <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭方案详情弹窗">×</button>
+  </div>
+  <div class="v2-dialog-body">
+    <dl class="meta-list">
+      <dt>状态</dt>
+      <dd><span class="v2-status-pill {% if p.status == 'ready' %}ok{% elif p.status == 'generating' %}running{% elif 'failed' in p.status %}error{% else %}pending{% endif %}">{{ p.status }}</span></dd>
+      <dt>热点</dt>
+      <dd>{{ p.topic_name or '—' }} <span class="muted">#{{ p.topic_id }}</span></dd>
+      <dt>配置</dt>
+      <dd>{{ p.config_label }}</dd>
+      <dt>模型</dt>
+      <dd><code>{{ p.config.get('main_model', '—') }}</code> → <code>{{ p.config.get('extract_model', '—') }}</code></dd>
+      <dt>更新时间</dt>
+      <dd>{{ p.updated_human or '—' }}</dd>
+    </dl>
+
+    {% if 'failed' in p.status %}
+    <div class="v2-async-note" style="margin-top:16px;">
+      生成未完成。{% if p.status == 'draft_extract_failed' %}主模型已写出 markdown，可重试提取。{% else %}主模型调用失败，请查看 AI 调用日志。{% endif %}
+    </div>
+    {% if p.status == 'draft_extract_failed' and p.main_raw_text %}
+    <form method="post" action="/v2/topic-plans/{{ p.id }}/retry-extract" style="margin-top:12px;">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button type="submit" class="button">重试提取</button>
+    </form>
+    {% endif %}
+    {% endif %}
+
+    <details style="margin-top:16px;" {% if not p.series %}open{% endif %}>
+      <summary style="cursor:pointer;font-weight:700;">主模型 markdown 原文 ({{ p.main_raw_text|length }} 字符)</summary>
+      <pre style="margin-top:10px;white-space:pre-wrap;">{{ p.main_raw_text or '—' }}</pre>
+    </details>
+    <details style="margin-top:16px;">
+      <summary style="cursor:pointer;font-weight:700;">提取后 series_payload</summary>
+      <pre style="margin-top:10px;white-space:pre-wrap;">{{ p.series_payload_json }}</pre>
+    </details>
+  </div>
+  <div class="v2-dialog-footer">
+    <button type="button" class="button ghost" data-close-dialog>关闭</button>
+  </div>
+</dialog>
+
+<dialog class="v2-dialog topic-plan-series-dialog" id="plan-series-{{ p.id }}" aria-labelledby="plan-series-title-{{ p.id }}">
+  <div class="v2-dialog-header">
+    <div>
+      <h3 id="plan-series-title-{{ p.id }}" style="margin:0;font-size:18px;">方案 #{{ p.id }} 系列</h3>
+      <p class="muted" style="margin-top:4px;">这里直接生成预览图；提交后会进入卡包管理页查看进度和后续切图。</p>
+    </div>
+    <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭方案系列弹窗">×</button>
+  </div>
+  <div class="v2-dialog-body">
+    <div class="topic-plan-added-note" data-series-added-note="plan-{{ p.id }}">
+      系列已保存，已添加到下方列表。
+    </div>
+    <details class="topic-plan-manual-box" {% if not p.series %}open{% endif %}>
+      <summary class="topic-plan-manual-summary">
+        <span>
+          <strong>＋ 手动添加系列</strong>
+          <small>不调用 AI，直接录入系列、预览主题和 sticker brief。</small>
+        </span>
+        <span class="v2-status-pill pending">Manual</span>
+      </summary>
+      <form method="post" action="/v2/topic-plans/{{ p.id }}/series/manual" class="topic-plan-manual-form" data-manual-series-form>
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>基础信息</strong>
+            <small>只保留生成和管理真正需要的信息</small>
+          </div>
+          <div class="topic-plan-manual-grid basic">
+            <div class="v2-field">
+              <label for="manual-series-name-{{ p.id }}">系列名称</label>
+              <input id="manual-series-name-{{ p.id }}" class="v2-input" type="text" name="series_name" maxlength="200" required autocomplete="off" placeholder="例如：Cozy Desk Cats">
+            </div>
+            <div class="v2-field">
+              <label for="manual-series-priority-{{ p.id }}">优先级</label>
+              <select id="manual-series-priority-{{ p.id }}" name="priority" class="v2-select" autocomplete="off">
+                <option value="medium" selected>medium</option>
+                <option value="high">high</option>
+                <option value="low">low</option>
+              </select>
+            </div>
+            <div class="v2-field">
+              <label for="manual-series-archetype-{{ p.id }}">卡包类型</label>
+              <input id="manual-series-archetype-{{ p.id }}" class="v2-input" type="text" name="pack_archetype" autocomplete="off" placeholder="meme / cute / holiday…">
+            </div>
+            <div class="v2-field">
+              <label for="manual-series-palette-{{ p.id }}">色彩</label>
+              <input id="manual-series-palette-{{ p.id }}" class="v2-input" type="text" name="palette" autocomplete="off" placeholder="pastel pink, cream, mint">
+            </div>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>风格与提示词</strong>
+            <small>这里会作为后续生成预览图的重要基础</small>
+          </div>
+          <div class="topic-plan-manual-grid writing">
+            <div class="v2-field">
+              <label for="manual-series-style-{{ p.id }}">风格锚点 / 生成提示词基础</label>
+              <textarea id="manual-series-style-{{ p.id }}" class="v2-input" name="style_anchor" rows="3" placeholder="描述整体画风、线条、构图、贴纸边框、禁止元素等。"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>预览配置</strong>
+            <small>保存后可直接生成预览图并进入卡包</small>
+          </div>
+          <div class="topic-plan-manual-grid preview-config">
+            <div class="v2-field">
+              <label for="manual-series-preview-count-{{ p.id }}">预览图数量</label>
+              <input id="manual-series-preview-count-{{ p.id }}" class="v2-input" type="number" name="preview_count" min="1" max="20" value="{{ p.config.get('previews_per_series', defaults.previews_per_series) }}" inputmode="numeric" required>
+            </div>
+            <div class="v2-field">
+              <label for="manual-series-stickers-{{ p.id }}">每图 sticker 数</label>
+              <input id="manual-series-stickers-{{ p.id }}" class="v2-input" type="number" name="stickers_per_preview" min="1" max="30" value="{{ p.config.get('stickers_per_preview', defaults.stickers_per_preview) }}" inputmode="numeric" required>
+            </div>
+            <label class="topic-plan-manual-check-card">
+              <input type="checkbox" name="is_selected" value="1" checked>
+              保存后默认选用，下一步可生成预览图
+            </label>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>预览内容</strong>
+            <small>左侧控制每张预览主题，右侧按顺序分配 sticker brief</small>
+          </div>
+          <div class="topic-plan-manual-grid content">
+            <div class="v2-field">
+              <label for="manual-series-themes-{{ p.id }}">预览主题（每行一张）</label>
+              <textarea id="manual-series-themes-{{ p.id }}" class="v2-input" name="preview_themes" rows="5" placeholder="封面大图主题&#10;日常使用场景&#10;套装元素总览"></textarea>
+            </div>
+            <div class="v2-field">
+              <label for="manual-series-briefs-{{ p.id }}">Sticker brief（每行一个）</label>
+              <textarea id="manual-series-briefs-{{ p.id }}" class="v2-input" name="sticker_briefs" rows="5" placeholder="sleepy cat with coffee cup&#10;laptop sticker with tiny paw marks&#10;planner icon with pastel tabs"></textarea>
+            </div>
+          </div>
+          <details class="topic-plan-manual-advanced">
+            <summary>高级：直接粘贴 preview_briefs JSON</summary>
+            <div class="v2-field" style="margin-top:8px;">
+              <textarea class="v2-input" name="preview_briefs_json" rows="4" placeholder='[{"preview_idx":1,"theme":"主题","stickers":["sticker brief 1","sticker brief 2"]}]'></textarea>
+            </div>
+          </details>
+        </div>
+
+        <div class="v2-action-row topic-plan-manual-actions">
+          <button type="submit" class="button">保存系列</button>
+        </div>
+      </form>
+    </details>
+
+    {% if p.series %}
+    <div class="topic-plan-series-grid">
+      {% for s in p.series %}
+      <div class="panel" style="padding:14px;margin:0;{% if not s.is_selected %}opacity:.58;{% endif %}">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <div style="min-width:0;">
+            <div class="muted" style="font-size:11px;">系列 #{{ s.series_idx }}</div>
+            <h4 style="margin:2px 0 0;font-size:14px;">{{ s.series_name }}</h4>
+          </div>
+          <form method="post" action="/v2/topic-plans/{{ p.id }}/series/{{ s.id }}/toggle">
+            <input type="hidden" name="return_to" value="{{ return_to }}">
+            <input type="hidden" name="is_selected" value="{{ 0 if s.is_selected else 1 }}">
+            <button type="submit" class="btn-sm">{% if s.is_selected %}✓ 已选用{% else %}+ 选用{% endif %}</button>
+          </form>
+        </div>
+        <div class="v2-action-row" style="margin-top:8px;">
+          <span class="v2-status-pill {% if s.priority == 'high' %}ok{% elif s.priority == 'low' %}pending{% else %}running{% endif %}">{{ s.priority }}</span>
+          {% if s.pack_archetype %}<span class="v2-status-pill pending">{{ s.pack_archetype }}</span>{% endif %}
+          <span class="v2-status-pill {% if s.preview_generating_count %}running{% elif s.preview_error_count %}error{% elif s.preview_ok_count >= s.preview_expected_count and s.preview_expected_count %}ok{% else %}pending{% endif %}">
+            预览 {{ s.preview_ok_count }}/{{ s.preview_expected_count or s.preview_total_count }}
+          </span>
+          {% if s.sticker_ok_count %}
+          <span class="v2-status-pill ok">切图 {{ s.sticker_ok_count }}</span>
+          {% endif %}
+        </div>
+        {% if s.metadata.positioning_cn %}
+        <p class="muted" style="margin:8px 0 0;">{{ s.metadata.positioning_cn }}</p>
+        {% endif %}
+        {% if s.metadata.preview_briefs %}
+        <details style="margin-top:8px;">
+          <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);">{{ s.metadata.preview_briefs|length }} 张预览概要</summary>
+          <div style="margin-top:8px;font-size:12px;">
+            {% for pb in s.metadata.preview_briefs %}
+            <div style="padding:6px 0;border-top:1px dashed var(--line-soft);">
+              <strong>预览 #{{ pb.preview_idx }}</strong> — {{ pb.theme }}
+            </div>
+            {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft);display:grid;gap:8px;">
+          <button type="button" class="button ghost v2-button-full" data-open-dialog="series-edit-{{ s.id }}">编辑系列</button>
+          <button type="button" class="button ghost v2-button-full" data-open-dialog="series-upload-{{ s.id }}">上传手动卡包</button>
+          {% if s.is_selected %}
+            {% if s.pack_id %}
+            <a href="/v2/packs/{{ s.pack_id }}" class="button ghost" style="display:block;text-align:center;">打开卡包详情</a>
+            {% endif %}
+            {% if s.preview_ok_count %}
+            <a href="/v2/series/{{ s.id }}/previews.zip" class="button ghost v2-button-full" style="display:block;text-align:center;">下载预览图 ZIP</a>
+            {% endif %}
+            {% if s.preview_brief_count %}
+              <form method="post" action="/v2/series/{{ s.id }}/generate-previews" data-series-generate-form>
+                <input type="hidden" name="go_pack" value="1">
+                <button type="submit" class="button v2-button-full">
+                  {% if s.preview_generating_count %}
+                    预览生成中…
+                  {% elif s.preview_ok_count %}
+                    补齐 / 重试预览图并进入卡包
+                  {% else %}
+                    生成预览图并进入卡包
+                  {% endif %}
+                </button>
+              </form>
+            {% else %}
+              <span class="muted">缺少 preview brief；请先编辑系列补充预览主题和 sticker brief</span>
+            {% endif %}
+          {% else %}
+          <span class="muted">先选用才能生成预览</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted" style="margin:0;">暂无系列。若状态为生成中，请稍后刷新；若提取失败，可在详情里重试提取。</p>
+    {% endif %}
+  </div>
+  <div class="v2-dialog-footer">
+    <button type="button" class="button ghost" data-close-dialog>关闭</button>
+  </div>
+</dialog>
+
+{% for s in p.series %}
+<dialog class="v2-dialog topic-plan-series-edit-dialog" id="series-edit-{{ s.id }}" aria-labelledby="series-edit-title-{{ s.id }}">
+  <form method="post" action="/v2/topic-plans/{{ p.id }}/series/{{ s.id }}/edit" class="topic-plan-series-edit" data-series-edit-form>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="series-edit-title-{{ s.id }}" style="margin:0;font-size:18px;">编辑系列 #{{ s.series_idx }}</h3>
+        <p class="muted" style="margin-top:4px;">{{ s.series_name }} · 更大的编辑区，方便查看完整提示词和 sticker brief。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭编辑系列弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="topic-plan-series-edit-body">
+        <div class="topic-plan-manual-section" style="margin-top:0;">
+          <div class="topic-plan-manual-section-title">
+            <strong>基础信息</strong>
+            <small>名称、类型和色彩会影响后续生成</small>
+          </div>
+          <div class="topic-plan-series-edit-grid">
+            <div class="v2-field">
+              <label for="edit-series-name-{{ s.id }}">系列名称</label>
+              <input id="edit-series-name-{{ s.id }}" class="v2-input" type="text" name="series_name" value="{{ s.series_name }}" maxlength="200" required autocomplete="off">
+            </div>
+            <div class="v2-field">
+              <label for="edit-series-priority-{{ s.id }}">优先级</label>
+              <select id="edit-series-priority-{{ s.id }}" name="priority" class="v2-select" autocomplete="off">
+                <option value="medium" {% if s.priority == 'medium' %}selected{% endif %}>medium</option>
+                <option value="high" {% if s.priority == 'high' %}selected{% endif %}>high</option>
+                <option value="low" {% if s.priority == 'low' %}selected{% endif %}>low</option>
+              </select>
+            </div>
+            <div class="v2-field">
+              <label for="edit-series-archetype-{{ s.id }}">卡包类型</label>
+              <input id="edit-series-archetype-{{ s.id }}" class="v2-input" type="text" name="pack_archetype" value="{{ s.pack_archetype or '' }}" autocomplete="off">
+            </div>
+            <div class="v2-field">
+              <label for="edit-series-palette-{{ s.id }}">色彩</label>
+              <input id="edit-series-palette-{{ s.id }}" class="v2-input" type="text" name="palette" value="{{ s.palette or '' }}" autocomplete="off">
+            </div>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>风格锚点 / 生成提示词基础</strong>
+            <small>这里可以写完整风格约束、画面要求和禁止元素</small>
+          </div>
+          <div class="v2-field">
+            <textarea id="edit-series-style-{{ s.id }}" class="v2-input style-textarea" name="style_anchor" rows="6">{{ s.style_anchor or '' }}</textarea>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>预览配置</strong>
+            <small>若已有成功生成的预览图，修改只影响后续补齐/重试</small>
+          </div>
+          <div class="topic-plan-manual-grid preview-config">
+            <div class="v2-field">
+              <label for="edit-series-preview-count-{{ s.id }}">预览图数量</label>
+              <input id="edit-series-preview-count-{{ s.id }}" class="v2-input" type="number" name="preview_count" min="1" max="20" value="{{ s.edit_preview_count }}" inputmode="numeric" required>
+            </div>
+            <div class="v2-field">
+              <label for="edit-series-stickers-{{ s.id }}">每图 sticker 数</label>
+              <input id="edit-series-stickers-{{ s.id }}" class="v2-input" type="number" name="stickers_per_preview" min="1" max="30" value="{{ s.edit_stickers_per_preview }}" inputmode="numeric" required>
+            </div>
+            <div class="muted" style="align-self:center;font-size:12px;">主题和 brief 可在下方大文本框中完整编辑。</div>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>预览内容</strong>
+            <small>左侧每行一张预览主题；右侧每行一个 sticker brief，按顺序分配</small>
+          </div>
+          <div class="topic-plan-series-edit-prompts">
+            <div class="v2-field">
+              <label for="edit-series-themes-{{ s.id }}">预览主题</label>
+              <textarea id="edit-series-themes-{{ s.id }}" class="v2-input" name="preview_themes" rows="12">{{ s.preview_themes_text or '' }}</textarea>
+            </div>
+            <div class="v2-field">
+              <label for="edit-series-briefs-{{ s.id }}">Sticker brief</label>
+              <textarea id="edit-series-briefs-{{ s.id }}" class="v2-input" name="sticker_briefs" rows="12">{{ s.sticker_briefs_text or '' }}</textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">保存修改</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="v2-dialog topic-plan-series-edit-dialog" id="series-upload-{{ s.id }}" aria-labelledby="series-upload-title-{{ s.id }}">
+  <form method="post" action="/v2/series/{{ s.id }}/manual-pack-upload" enctype="multipart/form-data" data-series-upload-form>
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="series-upload-title-{{ s.id }}" style="margin:0;font-size:18px;">上传手动卡包 · 系列 #{{ s.series_idx }}</h3>
+        <p class="muted" style="margin-top:4px;">{{ s.series_name }} · 上传后会自动创建/更新卡包，并跳转到卡包详情。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭上传手动卡包弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="topic-plan-series-edit-body">
+        <div class="topic-plan-manual-section" style="margin-top:0;">
+          <div class="topic-plan-manual-section-title">
+            <strong>卡包信息</strong>
+            <small>适合已经在线下或其他工具中完成 sticker 切图的情况</small>
+          </div>
+          <div class="topic-plan-series-edit-grid">
+            <div class="v2-field" style="grid-column:span 2;">
+              <label for="upload-display-name-{{ s.id }}">卡包名称</label>
+              <input id="upload-display-name-{{ s.id }}" class="v2-input" type="text" name="display_name" value="{{ s.series_name }}" maxlength="200" autocomplete="off">
+            </div>
+            <label class="topic-plan-manual-check-card" style="align-self:end;">
+              <input type="checkbox" name="replace_existing" value="1">
+              清空当前系列已有预览/贴纸后上传
+            </label>
+          </div>
+        </div>
+
+        <div class="topic-plan-manual-section">
+          <div class="topic-plan-manual-section-title">
+            <strong>上传文件</strong>
+            <small>支持 PNG / JPG / WEBP；可以多选图片，也可以上传 zip</small>
+          </div>
+          <div class="topic-plan-series-edit-prompts" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr);">
+            <div class="v2-field">
+              <label for="upload-sticker-files-{{ s.id }}">Sticker 图片（可多选）</label>
+              <input id="upload-sticker-files-{{ s.id }}" class="v2-input" type="file" name="sticker_files" accept="image/png,image/jpeg,image/webp" multiple>
+              <p class="muted" style="margin:4px 0 0;font-size:12px;">推荐上传已经抠好的透明 PNG。文件名会作为 sticker 名称。</p>
+            </div>
+            <div class="v2-field">
+              <label for="upload-sticker-zip-{{ s.id }}">Sticker ZIP（可选）</label>
+              <input id="upload-sticker-zip-{{ s.id }}" class="v2-input" type="file" name="sticker_zip" accept=".zip,application/zip">
+              <p class="muted" style="margin:4px 0 0;font-size:12px;">ZIP 内的 PNG/JPG/WEBP 会按文件名排序导入。</p>
+            </div>
+          </div>
+          <div class="v2-field" style="margin-top:12px;">
+            <label for="upload-cover-file-{{ s.id }}">封面 / 预览图（可选）</label>
+            <input id="upload-cover-file-{{ s.id }}" class="v2-input" type="file" name="cover_file" accept="image/png,image/jpeg,image/webp">
+            <p class="muted" style="margin:4px 0 0;font-size:12px;">不上传时，会自动使用第一张 sticker 作为卡包封面。</p>
+          </div>
+        </div>
+
+        <div class="v2-async-note">
+          上传会直接写入该系列并创建卡包，不需要进入 AI 预览生成。之后可在卡包详情里继续新建 TK 视频、生成 TK 商品、下载 ZIP。
+        </div>
+      </div>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">上传并进入卡包</button>
+    </div>
+  </form>
+</dialog>
+{% endfor %}
+
+<dialog class="v2-dialog" id="plan-delete-{{ p.id }}" aria-labelledby="plan-delete-title-{{ p.id }}">
+  <form method="post" action="/v2/topic-plans/{{ p.id }}/delete">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="plan-delete-title-{{ p.id }}" style="margin:0;font-size:18px;color:var(--danger);">删除方案 #{{ p.id }}</h3>
+        <p class="muted" style="margin-top:4px;">如果已有预览图或卡包，系统会阻止删除。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭删除确认弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <p style="margin:0 0 8px;font-weight:700;">确认删除以下方案？</p>
+      <p style="margin:0;color:var(--text-secondary);">{{ p.topic_name or '—' }}</p>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button v2-button-danger">确认删除</button>
+    </div>
+  </form>
+</dialog>
+{% endfor %}
+
+<script>
+  (function () {
+    let lastOpener = null;
+
+    function openDialogById(id, opener) {
+      const dialog = document.getElementById(id);
+      if (!dialog) return;
+      lastOpener = opener || null;
+      if (typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      } else {
+        dialog.setAttribute('open', '');
+      }
+      window.setTimeout(function () {
+        const first = dialog.querySelector('input, select, textarea, button, a[href]');
+        if (first) first.focus();
+      }, 0);
+    }
+
+    function closeDialog(dialog) {
+      if (!dialog) return;
+      if (typeof dialog.close === 'function') {
+        dialog.close();
+      } else {
+        dialog.removeAttribute('open');
+      }
+      if (lastOpener) lastOpener.focus();
+    }
+
+    document.querySelectorAll('[data-open-dialog]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        openDialogById(button.getAttribute('data-open-dialog'), button);
+      });
+    });
+
+    document.querySelectorAll('.v2-dialog').forEach(function (dialog) {
+      dialog.addEventListener('click', function (event) {
+        if (event.target === dialog) closeDialog(dialog);
+      });
+      dialog.querySelectorAll('[data-close-dialog]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          closeDialog(dialog);
+        });
+      });
+    });
+
+    const selectAll = document.getElementById('plan-select-all');
+    const rowChecks = Array.from(document.querySelectorAll('.plan-row-check'));
+    function selectedPlanIds() {
+      return rowChecks.filter(function (box) { return box.checked; }).map(function (box) { return box.value; });
+    }
+    function syncSelectAllState() {
+      if (!selectAll) return;
+      const selected = selectedPlanIds().length;
+      selectAll.checked = rowChecks.length > 0 && selected === rowChecks.length;
+      selectAll.indeterminate = selected > 0 && selected < rowChecks.length;
+    }
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        rowChecks.forEach(function (box) { box.checked = selectAll.checked; });
+        syncSelectAllState();
+      });
+    }
+    rowChecks.forEach(function (box) { box.addEventListener('change', syncSelectAllState); });
+
+    function submitBatch(formId) {
+      const ids = selectedPlanIds();
+      if (!ids.length) {
+        alert('请先勾选至少 1 个题材方案。');
+        return;
+      }
+      if (formId === 'plan-batch-delete-form' && !confirm('确认删除选中的题材方案？已有预览图或卡包的方案会被系统阻止。')) {
+        return;
+      }
+      const form = document.getElementById(formId);
+      const holder = form.querySelector('.plan-batch-ids');
+      holder.innerHTML = '';
+      ids.forEach(function (id) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'plan_ids';
+        input.value = id;
+        holder.appendChild(input);
+      });
+      form.submit();
+    }
+
+    const retryButton = document.getElementById('batch-retry-plan-button');
+    const deleteButton = document.getElementById('batch-delete-plan-button');
+    if (retryButton) retryButton.addEventListener('click', function () { submitBatch('plan-batch-retry-form'); });
+    if (deleteButton) deleteButton.addEventListener('click', function () { submitBatch('plan-batch-delete-form'); });
+
+    document.querySelectorAll('[data-series-generate-form]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+          button.disabled = true;
+          button.textContent = '已提交生成，正在进入卡包管理…';
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-manual-series-form]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+          button.disabled = true;
+          button.textContent = '正在保存系列…';
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-series-edit-form]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+          button.disabled = true;
+          button.textContent = '正在保存修改…';
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-series-upload-form]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+          button.disabled = true;
+          button.textContent = '正在上传并创建卡包…';
+        }
+      });
+    });
+
+    const params = new URLSearchParams(window.location.search || '');
+    const openSeriesPlanId = params.get('open_series');
+    if (openSeriesPlanId) {
+      const dialogId = 'plan-series-' + openSeriesPlanId;
+      const opener = document.querySelector('[data-open-dialog="' + dialogId + '"]');
+      window.setTimeout(function () {
+        openDialogById(dialogId, opener);
+        const note = document.querySelector('[data-series-added-note="plan-' + openSeriesPlanId + '"]');
+        if (note) {
+          const addedIdx = params.get('series_added');
+          const updatedIdx = params.get('series_updated');
+          if (updatedIdx) {
+            note.textContent = '系列 #' + updatedIdx + ' 已保存修改。';
+          } else {
+            note.textContent = addedIdx ? ('系列 #' + addedIdx + ' 已保存，已添加到下方列表。') : '系列已保存，已添加到下方列表。';
+          }
+          note.style.display = 'block';
+        }
+      }, 0);
+    }
+
+  })();
+</script>
+
+</div>
 
 {% endblock %}

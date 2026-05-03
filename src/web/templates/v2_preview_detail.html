@@ -7,13 +7,13 @@
     <h1>预览 #{{ preview.preview_idx }} <span style="font-weight:400;color:var(--text-muted);">— {{ preview.series_name }}</span></h1>
     <p class="page-subtitle">
       系列 <a href="/v2/series/{{ preview.series_id }}" style="color:var(--accent);">#{{ preview.series_idx }}</a>
-      · pack_uid: <code>{{ preview.pack_uid }}</code>
       · model: <code>{{ preview.model_used or '—' }}</code>
       · <span class="v2-status-pill {% if preview.generation_status == 'ok' %}ok{% elif preview.generation_status == 'error' %}error{% elif preview.generation_status == 'generating' %}running{% else %}pending{% endif %}">{{ preview.generation_status }}</span>
     </p>
   </div>
-  <div>
-    <a href="/v2/series/{{ preview.series_id }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回系列</a>
+  <div class="v2-action-row">
+    {% if preview.pack_id %}<a href="/v2/packs/{{ preview.pack_id }}" class="button ghost">回到卡包详情</a>{% endif %}
+    <a href="/v2/series/{{ preview.series_id }}" class="button ghost">返回系列</a>
   </div>
 </section>
 
@@ -41,7 +41,14 @@
         <h3 style="margin:0;font-size:14px;">操作</h3>
       </div>
       <div style="padding:0 16px 14px;display:flex;flex-direction:column;gap:8px;">
+        <button type="button" class="button v2-button-full" data-open-dialog="preview-regenerate-dialog">
+          改提示词 / AI 重生
+        </button>
+        <button type="button" class="button ghost v2-button-full" data-open-dialog="feedback-preview-dialog">
+          记录这张图反馈
+        </button>
         <form method="post" action="/v2/previews/{{ preview.id }}/regenerate" id="regen-form">
+          <input type="hidden" name="return_to" value="/v2/previews/{{ preview.id }}">
           <button type="submit" id="regen-btn"
                   style="width:100%;padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
             ↻ 重新生成（约 30-60s）
@@ -49,6 +56,7 @@
         </form>
         {% if preview.generation_status == 'ok' and preview.sticker_summary.expected > 0 %}
         <form method="post" action="/v2/previews/{{ preview.id }}/split" id="split-form">
+          <input type="hidden" name="return_to" value="/v2/previews/{{ preview.id }}">
           <button type="submit" id="split-btn"
                   style="width:100%;padding:8px 14px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
             ✂ 切 / 补齐 sticker（{{ preview.sticker_summary.expected - preview.sticker_summary.ok }} 张待办）
@@ -117,7 +125,97 @@
   </details>
 </section>
 
+<dialog class="v2-dialog" id="preview-regenerate-dialog" aria-labelledby="preview-regenerate-title">
+  <form method="post" action="/v2/previews/{{ preview.id }}/regenerate-prompt" data-async-form data-pending-text="已提交重生任务…">
+    <input type="hidden" name="return_to" value="/v2/previews/{{ preview.id }}">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="preview-regenerate-title" style="margin:0;font-size:18px;">修改提示词并覆盖重生</h3>
+        <p class="muted" style="margin-top:4px;">可以输入不满意原因让 AI 优化 prompt，也可以直接手动修改 prompt 后重生。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭重生弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="v2-field">
+        <label for="preview-feedback-text">想要怎么改</label>
+        <textarea id="preview-feedback-text" class="v2-input" name="feedback_text" rows="4" placeholder="例如：画面太暗、主体太散，希望更可爱，减少文字元素，保持透明边缘适合贴纸…"></textarea>
+      </div>
+      <div class="v2-field" style="margin-top:12px;">
+        <label for="preview-prompt-text">当前 / 手动修改后的提示词</label>
+        <textarea id="preview-prompt-text" class="v2-input" name="prompt_text" rows="10">{{ preview.prompt_text or '' }}</textarea>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px;color:var(--text-secondary);font-size:13px;">
+        <input type="checkbox" name="use_ai" value="1" checked>
+        使用 AI 根据“不满意原因”改写提示词；不勾选则直接使用手动 prompt。
+      </label>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">提交重生</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="v2-dialog" id="feedback-preview-dialog" aria-labelledby="feedback-preview-title">
+  <form method="post" action="/v2/feedback">
+    <input type="hidden" name="return_to" value="/v2/previews/{{ preview.id }}">
+    <input type="hidden" name="target_type" value="preview">
+    <input type="hidden" name="target_id" value="{{ preview.id }}">
+    {% if preview.pack_id %}<input type="hidden" name="pack_id" value="{{ preview.pack_id }}">{% endif %}
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="feedback-preview-title" style="margin:0;font-size:18px;">记录全图反馈</h3>
+        <p class="muted" style="margin-top:4px;">反馈会进入“反馈收集”，方便后续定时汇总复盘。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭反馈弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="v2-field">
+        <label for="feedback-rating">反馈类型</label>
+        <select id="feedback-rating" name="rating" class="v2-select">
+          <option value="bad_image">这张图不好</option>
+          <option value="prompt_issue">提示词问题</option>
+          <option value="style_issue">风格问题</option>
+          <option value="other">其他</option>
+        </select>
+      </div>
+      <div class="v2-field" style="margin-top:12px;">
+        <label for="feedback-reason">原因记录</label>
+        <textarea id="feedback-reason" class="v2-input" name="reason" rows="5" required placeholder="请描述不满意原因，或希望如何调整。"></textarea>
+      </div>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">保存反馈</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
+  (function () {
+    let lastOpener = null;
+    function closeDialog(dialog) {
+      if (!dialog) return;
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+      if (lastOpener) lastOpener.focus();
+    }
+    document.querySelectorAll('[data-open-dialog]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        const dialog = document.getElementById(button.getAttribute('data-open-dialog'));
+        if (!dialog) return;
+        lastOpener = button;
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+      });
+    });
+    document.querySelectorAll('.v2-dialog').forEach(function (dialog) {
+      dialog.addEventListener('click', function (event) { if (event.target === dialog) closeDialog(dialog); });
+      dialog.querySelectorAll('[data-close-dialog]').forEach(function (button) {
+        button.addEventListener('click', function () { closeDialog(dialog); });
+      });
+    });
+  })();
   document.getElementById('regen-form').addEventListener('submit', function() {
     var btn = document.getElementById('regen-btn');
     btn.textContent = '已派发到后台...';
@@ -131,11 +229,15 @@
       btn.style.opacity = '0.6';
     });
   }
-  // Auto-refresh while preview is generating OR any sticker is pending/generating.
-  {% set st = preview.sticker_summary %}
-  {% if preview.generation_status == 'generating' or st.generating > 0 or (st.expected - st.ok - st.error) > 0 %}
-  setTimeout(function() { location.reload(); }, 10000);
-  {% endif %}
+  document.querySelectorAll('[data-async-form]').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      var btn = form.querySelector('button[type="submit"]');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = form.dataset.pendingText || '已派发到后台…';
+      }
+    });
+  });
 </script>
 
 {% endblock %}

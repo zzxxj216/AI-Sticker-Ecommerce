@@ -1,0 +1,20 @@
+<div class="img-card {% if img.role == 'main' %}main{% endif %}" data-img-id="{{ img.id }}" data-role="{{ img.role }}">
+  {% if img.url %}<img src="{{ img.url }}" alt="">{% endif %}
+  <div class="meta">
+    <span class="badge {% if img.role == 'main' %}main{% elif img.source == 'ai' %}ai{% endif %}">
+      {% if img.role == 'main' %}🌟 main{% else %}{{ img.role }} #{{ img.sort_order }}{% endif %}
+    </span>
+    <span class="badge"
+          {% if img.source == 'ai' and img.ai_prompt %}title="{{ img.ai_prompt|e }}"{% endif %}>{{ img.source }}</span>
+  </div>
+  <div class="actions">
+    <button type="button" data-act="up" title="上移">↑</button>
+    <button type="button" data-act="dn" title="下移">↓</button>
+    {% if img.role != 'main' %}
+    <button type="button" data-act="set-main" class="primary" title="设为主图">设主图</button>
+    {% else %}
+    <span></span>
+    {% endif %}
+    <button type="button" data-act="del" class="danger" title="删除">删除</button>
+  </div>
+</div>

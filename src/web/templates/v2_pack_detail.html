@@ -1,189 +1,253 @@
 {% extends 'v2_base.html' %}
 {% block content %}
 
+{% set ps = pack.preview_summary %}
+{% set ss = pack.sticker_summary %}
+
 <section class="page-header">
   <div>
     <p class="eyebrow">A.4 · Pack Detail</p>
     <h1>{{ pack.display_name }}</h1>
     <p class="page-subtitle">
-      pack_uid <code>{{ pack.pack_uid }}</code>
-      · 系列 <a href="/v2/series/{{ pack.series_id }}" style="color:var(--accent);">#{{ pack.series_idx }}</a>
-      · topic <a href="/v2/hot-topics/{{ pack.topic_id }}" style="color:var(--accent);">{{ pack.topic_name or '—' }}</a>
+      ID #{{ pack.id }}
+      · 创建 {{ pack.created_human or '—' }}
+      · 系列 <a class="text-link" href="/v2/series/{{ pack.series_id }}">#{{ pack.series_idx }}</a>
+      · topic <a class="text-link" href="/v2/hot-topics/{{ pack.topic_id }}">{{ pack.topic_name or '—' }}</a>
       · {{ pack.total_stickers }} 张贴纸
     </p>
   </div>
-  <div>
-    <a href="/v2/packs" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+  <div class="v2-action-row">
+    <a href="/v2/packs?status=all" class="button ghost">← 回到工作台</a>
+    {% if ps.ok > 0 %}
+    <a href="/v2/packs/{{ pack.id }}/previews.zip" class="button ghost">下载预览图 ZIP</a>
+    {% endif %}
+    <a href="/v2/packs/{{ pack.id }}/stickers.zip" class="button ghost">下载贴纸 ZIP</a>
   </div>
 </section>
 
-<div style="display:grid;grid-template-columns:320px 1fr;gap:16px;margin-bottom:16px;">
-
-  <!-- 封面 + 状态 -->
-  <section class="panel" style="padding:14px;">
+<div class="v2-detail-grid">
+  <section class="panel">
     {% if pack.cover_url %}
-    <img src="{{ pack.cover_url }}" alt="cover"
-         style="width:100%;border-radius:8px;display:block;background:#f5f5f5;aspect-ratio:1/1;object-fit:contain;">
+    <img class="v2-cover-large" src="{{ pack.cover_url }}" alt="{{ pack.display_name }} 封面" width="320" height="320" fetchpriority="high">
     {% else %}
-    <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);">无封面</div>
+    <div class="v2-cover-large v2-empty-cover">无封面</div>
     {% endif %}
-    <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;">
+    <div class="v2-action-row" style="justify-content:space-between;margin-top:12px;">
       <span class="v2-status-pill {% if pack.status == 'active' %}ok{% else %}error{% endif %}">{{ pack.status }}</span>
-      <span style="font-size:11px;color:var(--text-muted);">{{ pack.created_human }}</span>
+      <span class="muted">{{ pack.created_human }}</span>
     </div>
   </section>
 
-  <!-- 操作 -->
-  <div>
-    <section class="panel" style="margin-bottom:14px;">
-      <div class="panel-header" style="padding:14px 20px;">
-        <h3 style="margin:0;font-size:14px;">改名</h3>
+  <section class="panel">
+    <div class="panel-header">
+      <div>
+        <h3 style="margin:0;font-size:16px;">生产状态</h3>
+        <p class="muted" style="margin-top:4px;">卡包、预览、切图、下游对象集中展示。</p>
       </div>
-      <form method="post" action="/v2/packs/{{ pack.id }}/rename" style="padding:0 20px 16px;display:flex;gap:8px;">
-        <input type="text" name="display_name" value="{{ pack.display_name }}" required
-               style="flex:1;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
-        <button type="submit"
-                style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">保存</button>
-      </form>
-    </section>
+    </div>
+    <div class="v2-stat-strip">
+      <div class="v2-mini-stat"><span>预览图</span><strong>{{ ps.ok }}/{{ ps.expected or ps.total }}</strong></div>
+      <div class="v2-mini-stat"><span>贴纸</span><strong>{{ ss.selected_ok or ss.ok }}/{{ ss.expected or pack.total_stickers }}</strong></div>
+      <div class="v2-mini-stat"><span>视频</span><strong>{{ pack.videos|length }}</strong></div>
+      <div class="v2-mini-stat"><span>产品</span><strong>{{ pack.products|length }}</strong></div>
+    </div>
+    <div class="v2-action-row" style="margin-top:14px;">
+      {% if ps.error %}<span class="v2-status-pill error">预览失败 {{ ps.error }}</span>{% endif %}
+      {% if ss.error %}<span class="v2-status-pill error">贴纸失败 {{ ss.error }}</span>{% endif %}
+      {% if pack.has_inflight_generation %}<span class="v2-status-pill running">后台处理中</span>{% endif %}
+      {% if pack.pack_archetype %}<span class="v2-status-pill pending">{{ pack.pack_archetype }}</span>{% endif %}
+    </div>
+    {% if pack.has_inflight_generation %}
+    <div id="pack-async-status" class="v2-async-note" aria-live="polite" style="margin-top:14px;">
+      后台任务进行中：预览生成 {{ ps.generating }}，贴纸切图 {{ ss.generating }}。页面不会自动刷新，可稍后手动刷新查看进度。
+    </div>
+    {% else %}
+    <div id="pack-async-status" class="v2-async-note" aria-live="polite" style="margin-top:14px;display:none;"></div>
+    {% endif %}
+  </section>
+</div>
 
-    <section class="panel" style="margin-bottom:14px;">
-      <div class="panel-header" style="padding:14px 20px;">
-        <h3 style="margin:0;font-size:14px;">状态</h3>
+<section class="panel">
+  <div class="panel-header"><h3 style="margin:0;font-size:16px;">一页式操作</h3></div>
+  <div class="v2-workspace">
+    <div>
+      <h4 style="margin:0 0 10px;font-size:13px;color:var(--text-secondary);">长耗时任务</h4>
+      <div class="v2-action-grid">
+        <form method="post" action="/v2/packs/{{ pack.id }}/generate-previews" data-async-form data-pending-text="已派发生成预览图…">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <button type="submit" class="button v2-button-full" {% if pack.preview_task_running %}disabled{% endif %}>
+            {% if pack.preview_task_running %}生成中…{% else %}生成 / 补齐预览图{% endif %}
+          </button>
+        </form>
+        <form method="post" action="/v2/packs/{{ pack.id }}/split-stickers" data-async-form data-pending-text="已派发切图任务…">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <button type="submit" class="button v2-button-full" {% if pack.split_task_running or ps.ok == 0 %}disabled{% endif %}>
+            {% if pack.split_task_running %}切图中…{% else %}切 / 补齐 Stickers{% endif %}
+          </button>
+        </form>
       </div>
-      <div style="padding:0 20px 16px;display:flex;gap:8px;flex-wrap:wrap;">
+      <p class="muted" style="margin-top:10px;">每张图通常 30–60 秒，任务会进入后台；需要进度时手动刷新即可。</p>
+
+      <h4 style="margin:18px 0 10px;font-size:13px;color:var(--text-secondary);">下游动作</h4>
+      <div class="v2-action-grid">
+        <a class="button ghost v2-button-full" href="/v2/videos?pack_id={{ pack.id }}">新建 TK 视频</a>
+        <form method="post" action="/v2/products/from-pack/{{ pack.id }}">
+          <button type="submit" class="button ghost v2-button-full">生成 TKShop 产品</button>
+        </form>
+        <a class="button ghost v2-button-full" href="/v2/videos?pack_id={{ pack.id }}">查看已有视频</a>
+        <a class="button ghost v2-button-full" href="/v2/products?pack_id={{ pack.id }}">查看已有产品</a>
+      </div>
+    </div>
+
+    <div>
+      <h4 style="margin:0 0 10px;font-size:13px;color:var(--text-secondary);">编辑 / 删除</h4>
+      <form method="post" action="/v2/packs/{{ pack.id }}/rename" class="v2-field">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <label for="pack-display-name">显示名称</label>
+        <div style="display:flex;gap:8px;">
+          <input id="pack-display-name" class="v2-input" type="text" name="display_name" value="{{ pack.display_name }}" required maxlength="200" autocomplete="off">
+          <button type="submit" class="button">保存</button>
+        </div>
+      </form>
+      <div class="v2-action-row" style="margin-top:12px;">
         {% if pack.status != 'active' %}
-        <form method="post" action="/v2/packs/{{ pack.id }}/status" style="display:inline;">
+        <form method="post" action="/v2/packs/{{ pack.id }}/status">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
           <input type="hidden" name="status" value="active">
-          <button type="submit" style="padding:6px 14px;background:var(--success);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">恢复活跃</button>
+          <button type="submit" class="button-secondary">恢复活跃</button>
         </form>
         {% endif %}
         {% if pack.status != 'archived' %}
-        <form method="post" action="/v2/packs/{{ pack.id }}/status" style="display:inline;">
+        <form method="post" action="/v2/packs/{{ pack.id }}/status">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
           <input type="hidden" name="status" value="archived">
-          <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;">归档</button>
+          <button type="submit" class="button-secondary">归档</button>
         </form>
         {% endif %}
-        <form method="post" action="/v2/packs/{{ pack.id }}/refresh-total" style="display:inline;">
-          <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;">↻ 重数 stickers</button>
+        <form method="post" action="/v2/packs/{{ pack.id }}/refresh-total">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <button type="submit" class="button-secondary">重数 Stickers</button>
+        </form>
+        <form method="post" action="/v2/packs/{{ pack.id }}/delete" onsubmit="return confirm('只删除 pack 聚合行，原始系列/预览/贴纸会保留。确认删除？')">
+          <input type="hidden" name="return_to" value="/v2/packs">
+          <button type="submit" class="button v2-button-danger" {% if pack.downstream_count > 0 %}disabled title="已有下游对象，不能直接删除。"{% endif %}>删除</button>
         </form>
       </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header" style="padding:14px 20px;">
-        <h3 style="margin:0;font-size:14px;">下游</h3>
-      </div>
-      <div style="padding:0 20px 16px;display:flex;gap:8px;flex-wrap:wrap;">
-        <a href="/v2/videos?pack_id={{ pack.id }}"
-           style="padding:6px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:6px;font-weight:600;text-decoration:none;font-size:12px;">→ TK 视频 (B.1 / W3)</a>
-        <form method="post" action="/v2/products/from-pack/{{ pack.id }}" style="display:inline;">
-          <button type="submit"
-                  style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">→ TKShop 产品 (C)</button>
-        </form>
-        <a href="/v2/products?pack_id={{ pack.id }}"
-           style="padding:6px 14px;background:transparent;color:var(--text-muted);border:none;font-weight:600;text-decoration:underline;font-size:11px;">已有产品</a>
-      </div>
-    </section>
+      {% if pack.downstream_count > 0 %}<p class="muted" style="margin-top:8px;">已有 {{ pack.downstream_count }} 个下游对象，删除被禁用；可以先归档。</p>{% endif %}
+    </div>
   </div>
-</div>
+</section>
 
-<!-- Sticker 网格（点击 = 设为封面） -->
-<section class="panel" style="margin-bottom:16px;">
-  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
-    <h3 style="margin:0;font-size:16px;">Stickers ({{ pack.stickers|length }})</h3>
-    <span style="font-size:12px;color:var(--text-muted);">点击下方“设为封面”按钮可换封面</span>
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <h3 style="margin:0;font-size:16px;">Stickers ({{ pack.stickers|length }})</h3>
+      <p class="muted" style="margin-top:4px;">可以直接设为封面；停用/重切等细节仍可进入单张贴纸。</p>
+    </div>
   </div>
-  <div style="padding:0 24px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;">
+  <div class="v2-sticker-grid">
     {% for s in pack.stickers %}
-    <div class="panel" style="padding:8px;{% if not s.is_selected or s.generation_status != 'ok' %}opacity:.5;{% endif %}">
+    <div class="panel v2-thumb-card" style="margin:0;{% if not s.is_selected or s.generation_status != 'ok' %}opacity:.55;{% endif %}">
       {% if s.image_url %}
       <a href="/v2/stickers/{{ s.id }}">
-        <img src="{{ s.image_url }}" alt="sticker {{ s.sticker_idx }}"
-             style="width:100%;border-radius:6px;display:block;background:#f5f5f5;aspect-ratio:1/1;object-fit:contain;">
+        <img src="{{ s.image_url }}" alt="{{ s.name or ('贴纸 ' ~ s.sticker_idx) }}" width="180" height="180" loading="lazy">
       </a>
       {% else %}
-      <div style="aspect-ratio:1/1;background:var(--bg-subtle);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:11px;">{{ s.generation_status }}</div>
+      <div class="v2-cover-large v2-empty-cover" style="font-size:12px;">{{ s.generation_status }}</div>
       {% endif %}
-      <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
+      <div class="v2-action-row" style="justify-content:space-between;margin-top:8px;">
         <span class="v2-section-tag">{{ s.preview_idx }}.{{ s.sticker_idx }}</span>
-        {% if s.image_path and s.image_path == pack.cover_image_path %}
-        <span class="v2-status-pill ok" style="font-size:10px;">封面</span>
-        {% endif %}
+        <span class="v2-status-pill {% if s.generation_status == 'ok' %}ok{% elif s.generation_status == 'error' %}error{% elif s.generation_status == 'generating' %}running{% else %}pending{% endif %}">{{ s.generation_status }}</span>
       </div>
-      <div style="margin-top:4px;font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ s.name or '—' }}</div>
-      {% if s.image_path and s.image_path != pack.cover_image_path and s.generation_status == 'ok' %}
-      <form method="post" action="/v2/packs/{{ pack.id }}/cover" style="margin-top:6px;">
+      <div class="row-subtitle" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ s.name or '—' }}</div>
+      {% if s.image_path and s.image_path == pack.cover_image_path %}
+      <span class="v2-status-pill ok" style="margin-top:6px;">封面</span>
+      {% elif s.image_path and s.generation_status == 'ok' %}
+      <form method="post" action="/v2/packs/{{ pack.id }}/cover" style="margin-top:8px;">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
         <input type="hidden" name="sticker_id" value="{{ s.id }}">
-        <button type="submit" style="width:100%;padding:4px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:4px;font-size:10px;cursor:pointer;">设为封面</button>
+        <button type="submit" class="btn-sm" style="width:100%;">设为封面</button>
       </form>
       {% endif %}
     </div>
+    {% else %}
+    <div style="grid-column:1/-1;padding:28px;text-align:center;color:var(--text-muted);">暂无 stickers。先点击“切 / 补齐 Stickers”。</div>
     {% endfor %}
   </div>
 </section>
 
-<!-- 下游：视频 + 产品 -->
 {% if pack.videos or pack.products %}
-<section class="panel" style="margin-bottom:16px;">
-  <div class="panel-header" style="padding:16px 24px;">
-    <h3 style="margin:0;font-size:16px;">下游</h3>
-  </div>
-  <div style="padding:0 24px 18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+<section class="panel">
+  <div class="panel-header"><h3 style="margin:0;font-size:16px;">下游对象</h3></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     <div>
-      <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">TK 视频 ({{ pack.videos|length }})</h4>
-      {% if pack.videos %}
-      <ul style="margin:0;padding-left:0;list-style:none;">
+      <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted);text-transform:uppercase;">TK 视频 ({{ pack.videos|length }})</h4>
+      <ul class="v2-inline-list">
         {% for v in pack.videos %}
-        <li style="padding:6px 0;border-top:1px solid var(--line-soft);font-size:12px;display:flex;justify-content:space-between;align-items:center;">
-          <a href="/v2/videos/{{ v.id }}" style="color:var(--text);text-decoration:none;">#{{ v.id }} <span style="color:var(--text-muted);">{{ (v.caption or '—')[:50] }}</span></a>
-          <span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% else %}pending{% endif %}" style="font-size:10px;">{{ v.publish_status }}</span>
+        <li>
+          <a class="text-link" href="/v2/videos/{{ v.id }}">#{{ v.id }} {{ (v.caption or '未填写 caption')[:50] }}</a>
+          <span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% else %}pending{% endif %}">{{ v.publish_status }}</span>
         </li>
         {% endfor %}
       </ul>
-      {% else %}
-      <p style="color:var(--text-muted);font-size:12px;margin:0;">暂无视频</p>
-      {% endif %}
     </div>
     <div>
-      <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">TKShop 产品 ({{ pack.products|length }})</h4>
-      {% if pack.products %}
-      <ul style="margin:0;padding-left:0;list-style:none;">
-        {% for p in pack.products %}
-        <li style="padding:6px 0;border-top:1px solid var(--line-soft);font-size:12px;display:flex;justify-content:space-between;align-items:center;">
-          <a href="/v2/products/{{ p.id }}" style="color:var(--text);text-decoration:none;">#{{ p.id }} <span style="color:var(--text-muted);">{{ (p.title or '—')[:50] }}</span></a>
-          <span class="v2-status-pill {% if p.publish_status == 'published' %}ok{% elif p.publish_status == 'failed' %}error{% else %}pending{% endif %}" style="font-size:10px;">{{ p.publish_status }}</span>
+      <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-muted);text-transform:uppercase;">TKShop 产品 ({{ pack.products|length }})</h4>
+      <ul class="v2-inline-list">
+        {% for pr in pack.products %}
+        <li>
+          <a class="text-link" href="/v2/products/{{ pr.id }}">#{{ pr.id }} {{ (pr.title or '未生成标题')[:50] }}</a>
+          <span class="v2-status-pill {% if pr.publish_status == 'published' %}ok{% elif pr.publish_status == 'failed' %}error{% else %}pending{% endif %}">{{ pr.publish_status }}</span>
         </li>
         {% endfor %}
       </ul>
-      {% else %}
-      <p style="color:var(--text-muted);font-size:12px;margin:0;">暂无产品</p>
-      {% endif %}
     </div>
   </div>
 </section>
 {% endif %}
 
-<!-- 预览图（缩略） -->
 {% if pack.previews %}
 <section class="panel">
   <details>
-    <summary style="padding:14px 24px;cursor:pointer;font-size:14px;font-weight:600;">来源预览图 ({{ pack.previews|length }})</summary>
-    <div style="padding:0 24px 18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;">
+    <summary style="cursor:pointer;font-size:14px;font-weight:700;">来源预览图 ({{ pack.previews|length }})</summary>
+    <div class="v2-preview-grid" style="margin-top:14px;">
       {% for p in pack.previews %}
-      <div class="panel" style="padding:6px;">
+      <div class="panel v2-thumb-card" style="margin:0;">
         {% if p.image_url %}
         <a href="/v2/previews/{{ p.id }}">
-          <img src="{{ p.image_url }}" alt="preview {{ p.preview_idx }}"
-               style="width:100%;border-radius:4px;display:block;aspect-ratio:1/1;object-fit:contain;background:#f5f5f5;">
+          <img src="{{ p.image_url }}" alt="预览图 {{ p.preview_idx }}" width="180" height="180" loading="lazy">
         </a>
+        {% else %}
+        <div class="v2-cover-large v2-empty-cover">{{ p.generation_status }}</div>
         {% endif %}
-        <div style="margin-top:4px;text-align:center;font-size:10px;color:var(--text-muted);">预览 #{{ p.preview_idx }}</div>
+        <div class="v2-action-row" style="justify-content:space-between;margin-top:8px;">
+          <span class="v2-section-tag">#{{ p.preview_idx }}</span>
+          <span class="v2-status-pill {% if p.generation_status == 'ok' %}ok{% elif p.generation_status == 'error' %}error{% elif p.generation_status == 'generating' %}running{% else %}pending{% endif %}">{{ p.generation_status }}</span>
+        </div>
       </div>
       {% endfor %}
     </div>
   </details>
 </section>
 {% endif %}
+
+<script>
+  (function () {
+    const live = document.getElementById('pack-async-status');
+    document.querySelectorAll('[data-async-form]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+          button.disabled = true;
+          button.textContent = form.dataset.pendingText || '已派发到后台…';
+        }
+        if (live) {
+          live.style.display = 'block';
+          live.textContent = '任务已提交到后台，页面不会自动刷新；稍后手动刷新查看进度。你可以继续处理其他内容。';
+        }
+      });
+    });
+  })();
+</script>
 
 {% endblock %}

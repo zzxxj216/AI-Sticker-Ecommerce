@@ -12,26 +12,41 @@
       {% if product.tiktok_product_id %}· tiktok_id: <code>{{ product.tiktok_product_id }}</code>{% endif %}
     </p>
   </div>
-  <div>
+  <div style="display:flex;gap:8px;align-items:center;">
     <a href="/v2/products" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--text);font-size:13px;">← 返回列表</a>
+    {% if product.tiktok_product_id %}
+    <form method="post" action="/v2/products/{{ product.id }}/update_on_platform" style="margin:0;"
+          onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（覆盖平台数据，product_id={{ product.tiktok_product_id }}）。继续?');">
+      <button type="submit" style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">📤 推送更新到 TikTok</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/v2/products/{{ product.id }}/delete" style="margin:0;"
+          onsubmit="return confirm('删除产品 #{{ product.id }} 及其所有图片、发布日志、磁盘文件。{% if product.tiktok_product_id %}⚠ 该产品已上架到 TikTok（id={{ product.tiktok_product_id }}），删除本地数据不会下架；如需下架请到 TikTok 卖家中心操作。{% endif %}\n\n确认删除?');">
+      <button type="submit" style="padding:8px 14px;background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">🗑 删除产品</button>
+    </form>
   </div>
 </section>
 
 <!-- AI 详情生成 -->
 <section class="panel" style="margin-bottom:16px;">
-  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
-    <h3 style="margin:0;font-size:16px;">AI 详情（英文 / 两步生成）</h3>
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <div>
+      <h3 style="margin:0;font-size:16px;">产品信息（可编辑）</h3>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">
+        修改下方字段后点「💾 保存修改」入库；点「↻ AI 重新生成」会用 gpt-5.4 覆盖所有字段。
+      </p>
+    </div>
     <form method="post" action="/v2/products/{{ product.id }}/generate-detail" id="gen-form" style="display:inline;">
       <button type="submit" id="gen-btn"
-              style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
-        {% if product.title %}↻ 重新生成{% else %}生成 title + description + 卖点 + 关键词{% endif %}
+              style="padding:8px 14px;background:var(--surface);color:var(--accent);border:1px solid var(--accent);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">
+        {% if product.title %}↻ AI 重新生成{% else %}🤖 AI 生成 title + 描述 + 卖点 + 关键词{% endif %}
       </button>
     </form>
   </div>
   <form method="post" action="/v2/products/{{ product.id }}/edit-detail" style="padding:0 24px 18px;">
     <div style="margin-bottom:10px;">
-      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">title (en, 60-100 chars)</label>
-      <input type="text" name="title" value="{{ product.title }}" maxlength="200"
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">title (en, ≤255 chars，推荐 90-180)</label>
+      <input type="text" name="title" value="{{ product.title }}" maxlength="255"
              style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
     </div>
     <div style="margin-bottom:10px;">
@@ -53,13 +68,61 @@
 {% endfor %}</textarea>
       </div>
     </div>
-    <div style="margin-bottom:10px;">
-      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">category_id (TikTok Shop)</label>
-      <input type="text" name="category_id" value="{{ product.category_id }}"
-             style="width:200px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+    <div style="margin-bottom:10px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">category_id (TikTok Shop)</label>
+        <input type="text" name="category_id" value="{{ product.category_id }}"
+               style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">seller_sku (≤25 chars, A-Z 0-9 -)</label>
+        <input type="text" name="seller_sku" value="{{ product.seller_sku or '' }}" maxlength="25"
+               pattern="[A-Z0-9-]{1,25}"
+               style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:monospace;text-transform:uppercase;">
+      </div>
     </div>
-    <button type="submit" style="padding:6px 14px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;">手工保存</button>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:6px;padding-top:14px;border-top:1px solid var(--line-soft);">
+      <button type="submit" style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">💾 保存修改</button>
+      {% if product.tiktok_product_id %}
+      <button type="submit" formaction="/v2/products/{{ product.id }}/edit-detail-then-push" style="padding:10px 20px;background:linear-gradient(90deg,#10b981,#059669);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;"
+              onclick="return confirm('保存本地修改后立即推送到 TikTok（覆盖平台数据）。继续?');">💾📤 保存并推送到 TikTok</button>
+      {% endif %}
+      <span style="font-size:11px;color:var(--text-muted);">
+        {% if product.tiktok_product_id %}已上架到 TikTok（{{ product.tiktok_product_id }}）— 修改完记得「推送」才会生效到平台{% else %}尚未发布 — 保存后用底部「发布」按钮上架{% endif %}
+      </span>
+    </div>
   </form>
+</section>
+
+<!-- SKU info / TikTok-side identifiers / self-heal trail -->
+<section class="panel" style="margin-bottom:16px;">
+  <div class="panel-header" style="padding:14px 24px;">
+    <h3 style="margin:0;font-size:14px;">SKU info</h3>
+  </div>
+  <div style="padding:0 24px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;font-size:12px;">
+    <div>
+      <div style="color:var(--text-muted);margin-bottom:2px;">seller_sku</div>
+      <code style="font-size:12px;">{{ product.seller_sku or '—' }}</code>
+    </div>
+    <div>
+      <div style="color:var(--text-muted);margin-bottom:2px;">tiktok_product_id</div>
+      <code style="font-size:12px;">{{ product.tiktok_product_id or '—' }}</code>
+    </div>
+    <div>
+      <div style="color:var(--text-muted);margin-bottom:2px;">tiktok_sku_id</div>
+      <code style="font-size:12px;">{{ product.tiktok_sku_id or '—' }}</code>
+    </div>
+    <div>
+      <div style="color:var(--text-muted);margin-bottom:2px;">auto_fix_attempts</div>
+      <strong>{{ product.auto_fix_attempts or 0 }}</strong>
+    </div>
+  </div>
+  {% if product.last_fix_diff %}
+  <details style="padding:0 24px 14px;">
+    <summary style="cursor:pointer;font-size:12px;color:var(--accent);">last_fix_diff（AI 自动修复历史）</summary>
+    <pre style="margin-top:8px;padding:10px;font-size:11px;background:var(--bg-subtle);border-radius:6px;white-space:pre-wrap;color:var(--text-secondary);">{{ product.last_fix_diff }}</pre>
+  </details>
+  {% endif %}
 </section>
 
 <!-- 详情 HTML 预览 -->
@@ -74,65 +137,495 @@
 </section>
 {% endif %}
 
-<!-- 产品图 -->
-<section class="panel" style="margin-bottom:16px;">
-  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
-    <h3 style="margin:0;font-size:16px;">产品图 ({{ product.images|length }})</h3>
-  </div>
-  <form method="post" action="/v2/products/{{ product.id }}/images" enctype="multipart/form-data" style="padding:0 24px 14px;display:flex;gap:8px;align-items:center;">
-    <input type="file" name="image_file" accept="image/png,image/jpeg,image/webp" required
-           style="font-size:12px;">
-    <select name="role" style="padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;">
-      <option value="main">main</option>
-      <option value="secondary">secondary</option>
-      <option value="lifestyle">lifestyle</option>
-      <option value="size_chart">size_chart</option>
-    </select>
-    <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">+ 上传</button>
-  </form>
-  <div style="padding:0 24px 18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;">
-    {% for img in product.images %}
-    <div class="panel" style="padding:8px;">
-      {% if img.url %}
-      <img src="{{ img.url }}" style="width:100%;border-radius:6px;display:block;background:#f5f5f5;aspect-ratio:1/1;object-fit:contain;">
-      {% endif %}
-      <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;">
-        <span class="v2-section-tag">{{ img.role }} #{{ img.sort_order }}</span>
-        <span class="v2-status-pill {% if img.source == 'manual' %}ok{% else %}pending{% endif %}" style="font-size:10px;">{{ img.source }}</span>
-      </div>
-      <form method="post" action="/v2/products/images/{{ img.id }}/delete" style="margin-top:6px;">
-        <input type="hidden" name="back" value="/v2/products/{{ product.id }}">
-        <button type="submit" onclick="return confirm('确定删除?')"
-                style="width:100%;padding:4px;background:var(--surface);color:var(--danger);border:1px solid var(--line);border-radius:4px;font-size:10px;cursor:pointer;">删除</button>
-      </form>
+<!-- 产品图（重构：主图/附图分组、AJAX 删除、↑↓ 重排、AI 弹窗多图选择） -->
+<style>
+  .img-section-h { padding:14px 24px 6px; display:flex; justify-content:space-between; align-items:center; }
+  .img-section-h h4 { margin:0; font-size:13px; color:var(--text-secondary); letter-spacing:.04em; text-transform:uppercase; }
+  .img-grid { padding:0 24px 16px; display:grid; gap:12px; }
+  .img-grid.main { grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); }
+  .img-grid.sec  { grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
+  .img-card { padding:8px; border-radius:8px; border:1px solid var(--line-soft); background:var(--surface); position:relative; transition:transform .15s, opacity .2s; }
+  .img-card.main { border-color:var(--accent); box-shadow:0 0 0 2px rgba(99,102,241,.12); }
+  .img-card img { width:100%; border-radius:6px; display:block; background:#f5f5f5; aspect-ratio:1/1; object-fit:contain; }
+  .img-card .meta { margin-top:6px; display:flex; justify-content:space-between; align-items:center; gap:6px; }
+  .img-card .actions { margin-top:6px; display:grid; grid-template-columns:auto auto auto 1fr; gap:4px; }
+  .img-card .actions button { padding:3px 6px; font-size:11px; border-radius:4px; cursor:pointer; border:1px solid var(--line); background:var(--surface); color:var(--text); }
+  .img-card .actions button.danger { color:var(--danger); border-color:var(--line); grid-column:4; justify-self:end; }
+  .img-card .actions button.primary { color:#fff; background:var(--accent); border-color:var(--accent); }
+  .img-card .badge { font-size:10px; padding:2px 6px; border-radius:10px; background:var(--bg-subtle); color:var(--text-secondary); }
+  .img-card .badge.main { background:var(--accent); color:#fff; }
+  .img-card .badge.ai { background:rgba(139,92,246,.15); color:#7c3aed; }
+  .ai-modal { width:min(900px, 96vw); max-height:90vh; overflow:auto; padding:0; border-radius:12px; border:1px solid var(--line); background:var(--surface); position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); margin:0; }
+  .ai-modal::backdrop { background:rgba(0,0,0,.55); }
+  .ai-modal-h { padding:16px 22px; border-bottom:1px solid var(--line-soft); display:flex; justify-content:space-between; align-items:center; }
+  .ai-modal-body { padding:18px 22px; }
+  .ai-modal-form { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:14px; }
+  .ai-modal-form label { display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px; }
+  .ai-modal-form input, .ai-modal-form select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; }
+  .ai-result-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-top:14px; }
+  .ai-result-card { padding:8px; border-radius:8px; border:2px solid var(--line); background:var(--surface); cursor:pointer; transition:border-color .15s; position:relative; }
+  .ai-result-card.picked { border-color:var(--accent); box-shadow:0 0 0 2px rgba(99,102,241,.12); }
+  .ai-result-card.picked::after { content:'✓'; position:absolute; top:6px; right:6px; background:var(--accent); color:#fff; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold; }
+  .ai-result-card img { width:100%; border-radius:6px; aspect-ratio:1/1; object-fit:contain; background:#f5f5f5; }
+  .ai-result-card .lbl { margin-top:6px; font-size:11px; color:var(--text-secondary); }
+  .ai-modal-footer { padding:14px 22px; border-top:1px solid var(--line-soft); display:flex; justify-content:flex-end; gap:8px; }
+  .v2-button-spinner { display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle; margin-right:6px; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+</style>
+
+<section class="panel" style="margin-bottom:16px;" id="img-section">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <div>
+      <h3 style="margin:0;font-size:16px;">产品图 <span id="img-count">({{ product.images|length }})</span></h3>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">主图（main）= 1 张，TikTok 强制；其余为附图（secondary）。 ↑↓ 调整顺序，「设为主图」切换。</p>
     </div>
+    <div style="display:flex;gap:8px;">
+      <form method="post" action="/v2/products/{{ product.id }}/import_pack_previews" style="margin:0;">
+        <button type="submit" title="把当前 pack 的所有 ok 预览图一键复制到产品图"
+                style="padding:6px 12px;background:var(--surface);color:var(--text-primary);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">📥 从 pack 预览导入</button>
+      </form>
+      <button type="button" id="ai-modal-open"
+              style="padding:6px 12px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">🎨 AI 生成主图+附图…</button>
+    </div>
+  </div>
+
+  <!-- 上传 -->
+  <form method="post" action="/v2/products/{{ product.id }}/images"
+        enctype="multipart/form-data" style="padding:0 24px 14px;" id="v2-image-upload-form">
+    <label for="v2-image-files-input" id="v2-image-dropzone"
+           style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:18px 16px;border:2px dashed var(--line);border-radius:10px;cursor:pointer;background:var(--bg-subtle);transition:border-color .15s,background .15s;">
+      <span style="font-size:22px;line-height:1;">📁</span>
+      <span style="font-size:13px;color:var(--text-primary);font-weight:600;">点击或拖拽多张图片到此处上传</span>
+      <span id="v2-image-hint" style="font-size:11px;color:var(--text-muted);">第一张自动作为 main（如已存在则全部归为 secondary）</span>
+    </label>
+    <input id="v2-image-files-input" type="file" name="image_files" accept="image/png,image/jpeg,image/webp" multiple style="display:none;">
+    <div style="margin-top:8px;display:flex;justify-content:flex-end;">
+      <button type="submit" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">+ 上传所选</button>
+    </div>
+  </form>
+
+  <!-- 主图 -->
+  <div class="img-section-h"><h4>🌟 主图（main） · 1 张</h4></div>
+  <div class="img-grid main" id="grid-main">
+    {% for img in product.images if img.role == 'main' %}
+    {% include '_v2_product_image_card.html' %}
     {% else %}
-    <div style="grid-column:1/-1;padding:18px;text-align:center;color:var(--text-muted);font-size:12px;">无产品图。最少上传一张 <strong>main</strong>。</div>
+    <div style="grid-column:1/-1;padding:14px;text-align:center;color:var(--text-muted);font-size:12px;border:1px dashed var(--line);border-radius:8px;">尚无主图 — 上传或对某张附图点「设为主图」</div>
+    {% endfor %}
+  </div>
+
+  <!-- 附图 -->
+  <div class="img-section-h"><h4>📷 附图（secondary） · {{ (product.images | rejectattr('role', 'equalto', 'main') | list) | length }} 张</h4></div>
+  <div class="img-grid sec" id="grid-sec">
+    {% for img in product.images if img.role != 'main' %}
+    {% include '_v2_product_image_card.html' %}
+    {% else %}
+    <div style="grid-column:1/-1;padding:14px;text-align:center;color:var(--text-muted);font-size:12px;border:1px dashed var(--line);border-radius:8px;">尚无附图</div>
     {% endfor %}
   </div>
 </section>
 
-<!-- 发布 -->
-<section class="panel" style="margin-bottom:16px;">
-  <div class="panel-header" style="padding:16px 24px;">
-    <h3 style="margin:0;font-size:16px;">发布到 TKShop</h3>
+<!-- AI 生成弹窗 -->
+<dialog id="ai-modal" class="ai-modal">
+  <div class="ai-modal-h">
+    <div>
+      <h3 style="margin:0;font-size:16px;">🎨 AI 生成主图 + 附图</h3>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">gpt-5.4 设计 → image-2.0 图生图。<strong style="color:var(--success);">在后台运行</strong>：关闭弹窗、跳页都不会中断。</p>
+    </div>
+    <button type="button" id="ai-modal-close" title="关闭弹窗（后台任务继续）"
+            style="background:none;border:1px solid var(--line);padding:4px 10px;font-size:12px;cursor:pointer;color:var(--text-secondary);border-radius:6px;">关闭（任务继续）</button>
   </div>
+  <div class="ai-modal-body">
+    <div class="ai-modal-form">
+      <div>
+        <label for="ai-count">总数量（含 1 张主图）</label>
+        <input id="ai-count" type="number" min="1" max="8" value="4" step="1">
+      </div>
+      <div>
+        <label for="ai-language">目标市场风格</label>
+        <select id="ai-language">
+          <option value="en" selected>英语市场（US/UK/AU/CA）</option>
+          <option value="zh">中文市场（CN）</option>
+          <option value="ja">日本市场（JP kawaii）</option>
+        </select>
+      </div>
+      <div>
+        <label for="ai-size">尺寸</label>
+        <select id="ai-size">
+          <option value="1024x1024" selected>1024×1024 (方)</option>
+          <option value="1024x1280">1024×1280 (4:5 立)</option>
+          <option value="1280x1024">1280×1024 (5:4 横)</option>
+          <option value="768x1024">768×1024 (3:4 立)</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
+      <p style="margin:0;font-size:11px;color:var(--text-muted);">⚠ 会替换已有 AI 生成的图（手动上传的图保留）。</p>
+      <button type="button" id="ai-gen-go"
+              style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 开始生成</button>
+    </div>
+    <div id="ai-gen-status" style="margin-top:12px;font-size:12px;color:var(--text-muted);"></div>
+    <div id="ai-result-grid" class="ai-result-grid" style="display:none;"></div>
+  </div>
+  <div class="ai-modal-footer">
+    <button type="button" id="ai-keep-all" style="padding:8px 14px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;display:none;">全部保留</button>
+    <button type="button" id="ai-keep-picked" style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;display:none;">保留选中（删除其余）</button>
+    <button type="button" id="ai-modal-done" style="padding:8px 16px;background:#111827;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-size:13px;">✓ 完成</button>
+  </div>
+</dialog>
+
+<script>
+(function() {
+  const PRODUCT_ID = {{ product.id }};
+
+  // ---------- drop-zone ----------
+  const dropForm = document.getElementById('v2-image-upload-form');
+  const dropInput = document.getElementById('v2-image-files-input');
+  const dropZone  = document.getElementById('v2-image-dropzone');
+  const dropHint  = document.getElementById('v2-image-hint');
+  if (dropZone && dropInput) {
+    const updateHint = () => {
+      const n = dropInput.files ? dropInput.files.length : 0;
+      dropHint.textContent = n
+        ? `已选 ${n} 张 — 第一张作 main（若已存在则全部 secondary）`
+        : '第一张自动作为 main（如已存在则全部归为 secondary）';
+    };
+    dropInput.addEventListener('change', updateHint);
+    ['dragenter','dragover'].forEach(ev => dropZone.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation();
+      dropZone.style.borderColor = 'var(--accent)';
+      dropZone.style.background  = 'rgba(99,102,241,0.08)';
+    }));
+    ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation();
+      dropZone.style.borderColor = ''; dropZone.style.background = '';
+    }));
+    dropZone.addEventListener('drop', e => {
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) { dropInput.files = dt.files; updateHint(); }
+    });
+  }
+
+  // ---------- AJAX delete + reorder + set main ----------
+  function bindCard(card) {
+    if (!card || card.__bound) return;
+    card.__bound = true;
+    const id = card.dataset.imgId;
+    card.querySelector('[data-act="del"]')?.addEventListener('click', async () => {
+      if (!confirm('删除此图?')) return;
+      const r = await fetch(`/v2/products/images/${id}/delete-json`, {method:'POST'});
+      if (r.ok) {
+        card.style.opacity = '0';
+        setTimeout(() => { card.remove(); recountImages(); }, 200);
+      } else {
+        alert('删除失败');
+      }
+    });
+    card.querySelector('[data-act="set-main"]')?.addEventListener('click', async () => {
+      const r = await fetch(`/v2/products/images/${id}/move`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({role:'main'}),
+      });
+      if (r.ok) location.reload();
+      else alert('设主图失败');
+    });
+    card.querySelector('[data-act="up"]')?.addEventListener('click', () => moveCard(card, -1));
+    card.querySelector('[data-act="dn"]')?.addEventListener('click', () => moveCard(card,  1));
+  }
+  async function moveCard(card, delta) {
+    const grid = card.parentElement;
+    const cards = Array.from(grid.querySelectorAll('.img-card'));
+    const idx = cards.indexOf(card);
+    const newIdx = idx + delta;
+    if (newIdx < 0 || newIdx >= cards.length) return;
+    grid.insertBefore(card, delta > 0 ? cards[newIdx].nextSibling : cards[newIdx]);
+    // Persist new sort orders 1..N
+    const updated = Array.from(grid.querySelectorAll('.img-card'));
+    await Promise.all(updated.map((c, i) =>
+      fetch(`/v2/products/images/${c.dataset.imgId}/move`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({sort_order: i+1}),
+      })
+    ));
+  }
+  function recountImages() {
+    const total = document.querySelectorAll('.img-card').length;
+    document.getElementById('img-count').textContent = `(${total})`;
+  }
+  document.querySelectorAll('.img-card').forEach(bindCard);
+
+  // ---------- AI modal ----------
+  const modal = document.getElementById('ai-modal');
+  document.getElementById('ai-modal-open').addEventListener('click', () => modal.showModal());
+  document.getElementById('ai-modal-close').addEventListener('click', () => modal.close());
+  document.getElementById('ai-modal-done').addEventListener('click', () => {
+    modal.close();
+    // Refresh page so the newly-saved AI images show in the main grid.
+    location.reload();
+  });
+
+  let lastImages = [];
+  let pollTimer = null;
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function renderResultGrid(images) {
+    lastImages = images || [];
+    const grid = document.getElementById('ai-result-grid');
+    grid.innerHTML = '';
+    lastImages.forEach(img => {
+      const card = document.createElement('div');
+      card.className = 'ai-result-card picked';
+      card.dataset.imgId = img.id;
+      card.innerHTML = `<img src="${img.url}"><div class="lbl"><strong>${img.role}</strong> #${img.sort_order}</div>`;
+      card.addEventListener('click', () => card.classList.toggle('picked'));
+      grid.appendChild(card);
+    });
+    grid.style.display = lastImages.length ? 'grid' : 'none';
+  }
+
+  async function pollStatus() {
+    try {
+      const r = await fetch(`/v2/products/${PRODUCT_ID}/auto_design_status`);
+      const data = await r.json();
+      if (!data.ok) return;
+      const status = document.getElementById('ai-gen-status');
+      if (data.running) {
+        status.textContent = `⏳ 后台生成中…（已完成 ${data.images.length} 张，每张约 30s）你可以关闭弹窗、切到其它页继续工作。`;
+        renderResultGrid(data.images);
+      } else {
+        // Done
+        stopPolling();
+        renderResultGrid(data.images);
+        status.textContent = `✓ 完成 — 共 ${data.images.length} 张 AI 生成图。点击图片可切换勾选，下方决定保留哪些。`;
+        document.getElementById('ai-keep-all').style.display = 'inline-block';
+        document.getElementById('ai-keep-picked').style.display = 'inline-block';
+        const goBtn = document.getElementById('ai-gen-go');
+        goBtn.disabled = false;
+        goBtn.textContent = '🚀 重新生成';
+      }
+    } catch (e) { /* keep polling */ }
+  }
+
+  document.getElementById('ai-gen-go').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="v2-button-spinner"></span>启动中…';
+    document.getElementById('ai-gen-status').textContent = '⏳ 正在启动后台任务…';
+    document.getElementById('ai-result-grid').style.display = 'none';
+    document.getElementById('ai-keep-all').style.display = 'none';
+    document.getElementById('ai-keep-picked').style.display = 'none';
+    try {
+      const body = {
+        count:    parseInt(document.getElementById('ai-count').value, 10) || 4,
+        language: document.getElementById('ai-language').value,
+        size:     document.getElementById('ai-size').value,
+      };
+      const r = await fetch(`/v2/products/${PRODUCT_ID}/auto_design_images_sync`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!data.ok) {
+        document.getElementById('ai-gen-status').textContent = '❌ ' + (data.error || '启动失败');
+        btn.disabled = false; btn.textContent = '🚀 开始生成';
+        return;
+      }
+      btn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+      document.getElementById('ai-gen-status').innerHTML =
+        `🟢 ${data.message}<br><small style="color:var(--text-muted)">task_id: <code>${data.task_id}</code></small>`;
+      // Begin polling every 4s
+      stopPolling();
+      pollTimer = setInterval(pollStatus, 4000);
+      // First poll fast
+      setTimeout(pollStatus, 1500);
+    } catch (err) {
+      document.getElementById('ai-gen-status').textContent = '❌ ' + err.message;
+      btn.disabled = false; btn.textContent = '🚀 开始生成';
+    }
+  });
+
+  // Stop polling when modal closes (task itself keeps running on server)
+  modal.addEventListener('close', stopPolling);
+
+  document.getElementById('ai-keep-all').addEventListener('click', () => {
+    document.getElementById('ai-gen-status').textContent = '✓ 全部保留。点「完成」回到详情页。';
+  });
+  document.getElementById('ai-keep-picked').addEventListener('click', async () => {
+    const grid = document.getElementById('ai-result-grid');
+    const cards = Array.from(grid.querySelectorAll('.ai-result-card'));
+    const toDelete = cards.filter(c => !c.classList.contains('picked'));
+    if (!toDelete.length) {
+      document.getElementById('ai-gen-status').textContent = '✓ 没有未选的，全部保留。';
+      return;
+    }
+    document.getElementById('ai-gen-status').textContent = `🗑 删除 ${toDelete.length} 张未选…`;
+    await Promise.all(toDelete.map(c =>
+      fetch(`/v2/products/images/${c.dataset.imgId}/delete-json`, {method:'POST'})
+        .then(() => c.remove())
+    ));
+    document.getElementById('ai-gen-status').textContent = `✓ 已删除未选 ${toDelete.length} 张。点「完成」回到详情页。`;
+  });
+})();
+</script>
+
+<!-- 发布 / 平台控制 -->
+<section class="panel" style="margin-bottom:16px;" id="publish-section">
+  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <div>
+      <h3 style="margin:0;font-size:16px;">TKShop 平台控制</h3>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">当前状态：
+        <span id="publish-status-pill" class="v2-status-pill {% if product.publish_status == 'published' %}ok{% elif product.publish_status == 'failed' %}error{% elif product.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ product.publish_status }}</span>
+        {% if product.tiktok_product_id %}
+        · <code style="font-size:11px;color:var(--text-muted);">{{ product.tiktok_product_id }}</code>
+        {% endif %}
+      </p>
+    </div>
+    {% if product.tiktok_product_id %}
+    <button type="button" id="btn-sync-status"
+            style="padding:6px 12px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-size:12px;cursor:pointer;">🔄 同步平台状态</button>
+    {% endif %}
+  </div>
+
   <div style="padding:0 24px 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-    <form method="post" action="/v2/products/{{ product.id }}/publish" style="display:inline;">
-      <input type="hidden" name="dry_run" value="1">
-      <button type="submit" style="padding:8px 16px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:pointer;">
-        🧪 dry-run（构建 payload + 写日志，不调服务器）
-      </button>
+    {% if not product.tiktok_product_id %}
+    <!-- 未发布：两个动作 + 共享 AI 自动修复勾选 -->
+    <form method="post" action="/v2/products/{{ product.id }}/publish" style="display:flex;gap:10px;align-items:center;margin:0;flex-wrap:wrap;">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;user-select:none;">
+        <input type="checkbox" name="auto_fix" value="on" {% if product.auto_fix_default %}checked{% endif %}>
+        AI 自动修复并重试
+      </label>
+      <button type="submit" name="auto_activate" value="0"
+              onclick="return confirm('在 TikTok 创建商品但 NOT 上架（status=DRAFT）。后续可手动「上架」让买家可见。继续?');"
+              style="padding:10px 18px;background:var(--surface);color:var(--text-primary);border:1px solid var(--line);border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">📝 添加到平台（草稿）</button>
+      <button type="submit" name="auto_activate" value="1"
+              onclick="return confirm('创建商品并立即上架（status=LIVE，买家可见）。继续?');"
+              style="padding:10px 22px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:14px;">🚀 发布并上架</button>
     </form>
-    <form method="post" action="/v2/products/{{ product.id }}/publish" style="display:inline;">
-      <button type="submit" onclick="return confirm('确认发布到 TKShop?')"
-              style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">
-        🚀 发布（POST 192.168.121.1）
-      </button>
-    </form>
-    <span style="color:var(--text-muted);font-size:12px;">每次发布写一行 tkshop_publish_logs，可在下方查看完整 request/response。</span>
+    <span style="color:var(--text-muted);font-size:12px;">尚未在 TikTok 创建。<br>「📝 草稿」= 仅创建不可见；「🚀 发布」= 创建并立即上架。</span>
+    {% else %}
+    <!-- 已发布：上架/下架 + 推送更新 -->
+    <button type="button" id="btn-activate"
+            style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">▶ 上架（activate）</button>
+    <button type="button" id="btn-deactivate"
+            style="padding:8px 16px;background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">⏸ 下架（deactivate）</button>
+    <span style="color:var(--text-muted);font-size:12px;">已发布。「上架」让商品对买家可见；「下架」临时隐藏（可再次上架）。修改了字段后用上方「📤 推送更新到 TikTok」同步。</span>
+    {% endif %}
   </div>
+
+  {% if product.publish_status == 'publishing' %}
+  <div id="publishing-banner" style="margin:0 24px 14px;padding:12px 14px;border-radius:8px;background:linear-gradient(90deg,rgba(99,102,241,.10),rgba(14,165,233,.06));border:1px solid rgba(99,102,241,.3);font-size:13px;display:flex;align-items:center;gap:12px;">
+    <span class="v2-button-spinner" style="border-color:var(--accent);border-top-color:transparent;"></span>
+    <div>
+      <strong style="color:var(--accent);">正在后台上架到 TikTok</strong>
+      <div style="margin-top:3px;color:var(--text-muted);font-size:12px;">
+        完整流程约 60-300 秒（图片下载 + 上传 TikTok + create + activate）。
+        <strong style="color:var(--success);">你可以关闭页面或切到其它产品 — 后台会跑完。</strong>
+        本页每 5 秒自动检查一次状态，完成后自动刷新。
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      const PID = {{ product.id }};
+      let consecutiveDone = 0;
+      const interval = setInterval(async () => {
+        try {
+          const r = await fetch(`/v2/products/${PID}/publish_status`);
+          const data = await r.json();
+          if (!data.ok) return;
+          if (!data.running && data.publish_status !== 'publishing') {
+            consecutiveDone++;
+            // Wait for 2 consecutive non-publishing reads (avoid race) then refresh.
+            if (consecutiveDone >= 2) {
+              clearInterval(interval);
+              location.reload();
+            }
+          } else {
+            consecutiveDone = 0;
+          }
+        } catch (e) { /* keep polling */ }
+      }, 5000);
+    })();
+  </script>
+  {% endif %}
+  <div id="publish-action-result" style="margin:0 24px 14px;font-size:12px;"></div>
+
+  {% set last_log = product.publish_logs[0] if product.publish_logs else None %}
+  {% if last_log and not last_log.success %}
+  <div style="margin:0 24px 16px;padding:12px 14px;border-radius:8px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);font-size:12px;">
+    <div style="font-weight:700;color:var(--danger);margin-bottom:4px;">最近一次发布失败</div>
+    <div style="color:var(--text-secondary);">
+      <strong>error_code:</strong> <code>{{ last_log.error_code or '—' }}</code><br>
+      <strong>error_message:</strong> {{ last_log.error_message or '—' }}
+      {% if last_log.response_obj and last_log.response_obj.field_hints %}
+      <br><strong>field_hints:</strong>
+      {% for h in last_log.response_obj.field_hints %}<code style="margin-right:4px;">{{ h }}</code>{% endfor %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </section>
+
+<script>
+(function() {
+  const PID = {{ product.id }};
+  const result = document.getElementById('publish-action-result');
+  const pill = document.getElementById('publish-status-pill');
+
+  function setMsg(html, ok) {
+    if (!result) return;
+    result.style.color = ok ? 'var(--success)' : 'var(--danger)';
+    result.innerHTML = html;
+  }
+  function setPill(text, kind) {
+    if (!pill) return;
+    pill.textContent = text;
+    pill.className = 'v2-status-pill ' + (kind || 'pending');
+  }
+
+  async function callAction(path, label) {
+    setMsg(`⏳ ${label}…`, true);
+    try {
+      const r = await fetch(`/v2/products/${PID}/${path}`, {method:'POST'});
+      const data = await r.json();
+      if (data.ok) {
+        setMsg(`✓ ${label} 成功`, true);
+        if (path === 'activate')   setPill('published', 'ok');
+        if (path === 'deactivate') setPill('suspended', 'pending');
+        if (path === 'sync_status' && data.remote_status) {
+          const cls = data.remote_status === 'live' ? 'ok' :
+                      (data.remote_status === 'deleted' || data.remote_status === 'failed') ? 'error' : 'pending';
+          setPill(data.remote_status, cls);
+          setMsg(`✓ 平台真实状态：<strong>${data.remote_status}</strong>`, true);
+        }
+      } else {
+        const errMsg = data.error_message || data.error || '未知';
+        setMsg(`❌ ${label} 失败：${errMsg.replace(/\n/g, '<br>')}`, false);
+        // If the operation was rejected for state reasons, immediately
+        // refresh status so the operator sees the truth.
+        if (/status invalid|12052901/i.test(errMsg) && path !== 'sync_status') {
+          setTimeout(() => callAction('sync_status', '自动同步'), 600);
+        }
+      }
+    } catch (e) {
+      setMsg(`❌ ${label} 请求失败：${e.message}`, false);
+    }
+  }
+
+  document.getElementById('btn-activate')?.addEventListener('click', () => {
+    if (confirm('上架到 TikTok（让买家可见）?\n\n仅当商品处于 DRAFT/INACTIVE/审核通过后状态才会成功。')) callAction('activate', '上架');
+  });
+  document.getElementById('btn-deactivate')?.addEventListener('click', () => {
+    if (confirm('从 TikTok 下架（临时隐藏，仍可再次上架）?\n\n仅当商品处于 LIVE 状态才会成功；DRAFT/PENDING 商品不能下架。')) callAction('deactivate', '下架');
+  });
+  document.getElementById('btn-sync-status')?.addEventListener('click', () => {
+    callAction('sync_status', '同步平台状态');
+  });
+})();
+</script>
 
 <!-- 发布日志 -->
 {% if product.publish_logs %}
@@ -178,10 +671,6 @@
     btn.textContent = '已派发到后台...';
     btn.style.opacity = '0.6';
   });
-  // Refresh while detail is generating (raw_text present but title not yet extracted)
-  {% if not product.title and product.detail_main_raw_text %}
-  setTimeout(function() { location.reload(); }, 8000);
-  {% endif %}
 </script>
 
 {% endblock %}

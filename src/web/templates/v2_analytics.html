@@ -1,71 +1,410 @@
 {% extends 'v2_base.html' %}
 {% block content %}
 
-<section class="page-header">
-  <div>
-    <p class="eyebrow">B.3 · Analytics</p>
-    <h1>视频数据看板</h1>
-    <p class="page-subtitle">所有 published 视频。Metrics 由调度任务每 2h 刷新（B.2，独立脚本）。</p>
-  </div>
-</section>
+<style>
+  .ana-page { padding-top: 14px; }
+  .ana-acct-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:14px 18px; }
+  .ana-acct-chip { display:inline-flex; align-items:center; gap:6px; padding:5px 12px 5px 5px; border-radius:999px; border:1.5px solid var(--line); background:var(--surface); cursor:pointer; font-size:12px; color:var(--text); text-decoration:none; }
+  .ana-acct-chip:hover { border-color:var(--accent); }
+  .ana-acct-chip.active { border-color:var(--accent); background:var(--accent-bg); font-weight:600; color:var(--accent-dark); }
+  .ana-acct-chip img { width:22px; height:22px; border-radius:50%; object-fit:cover; }
+  .ana-acct-add { display:inline-flex; align-items:center; gap:5px; padding:6px 12px; border-radius:999px; border:1.5px dashed var(--line); background:none; cursor:pointer; font-size:12px; color:var(--text-muted); }
+  .ana-acct-add:hover { border-color:var(--accent); color:var(--accent); }
 
-<section class="panel">
-  <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
-    <h3 style="margin:0;font-size:16px;">{{ total }} 个已发布视频（按互动率排序）</h3>
-    <span style="font-size:11px;color:var(--text-muted);">互动率 = (赞+评+转) / 播放</span>
-  </div>
-  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
-    <table style="width:100%;font-size:13px;min-width:1000px;">
-      <thead>
-        <tr style="text-align:left;color:var(--text-muted);">
-          <th style="padding:8px 0;width:60px;">封面</th>
-          <th>pack / caption</th>
-          <th>tiktok_id</th>
-          <th>published</th>
-          <th style="text-align:right;">views</th>
-          <th style="text-align:right;">likes</th>
-          <th style="text-align:right;">comments</th>
-          <th style="text-align:right;">shares</th>
-          <th style="text-align:right;">互动率</th>
-          <th style="text-align:right;">metrics 时间</th>
-          <th style="text-align:right;">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for v in videos %}
-        <tr style="border-top:1px solid var(--line-soft);">
-          <td style="padding:8px 0;">
-            {% if v.pack_cover_url %}
-            <img src="{{ v.pack_cover_url }}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;background:#f5f5f5;">
-            {% endif %}
-          </td>
-          <td>
-            <a href="/v2/videos/{{ v.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ v.pack_name or '—' }}</a>
-            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ (v.caption or '')[:80] }}</div>
-          </td>
-          <td><code style="font-size:10px;color:var(--text-muted);">{{ (v.tiktok_video_id or '—')[:14] }}{% if v.tiktok_video_id|length > 14 %}…{% endif %}</code></td>
-          <td style="color:var(--text-muted);font-size:11px;">{{ v.published_human or '—' }}</td>
-          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.view_count) }}{% else %}—{% endif %}</td>
-          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.like_count) }}{% else %}—{% endif %}</td>
-          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.comment_count) }}{% else %}—{% endif %}</td>
-          <td style="text-align:right;">{% if v.latest_metrics %}{{ '{:,}'.format(v.share_count) }}{% else %}—{% endif %}</td>
-          <td style="text-align:right;{% if v.interaction_rate >= 0.05 %}color:var(--success);font-weight:600;{% endif %}">
-            {% if v.latest_metrics %}{{ '%.2f'|format(v.interaction_rate * 100) }}%{% else %}—{% endif %}
-          </td>
-          <td style="text-align:right;color:var(--text-muted);font-size:10px;">{{ v.metrics_fetched_human or '—' }}</td>
-          <td style="text-align:right;"><a href="/v2/videos/{{ v.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a></td>
-        </tr>
-        {% else %}
-        <tr><td colspan="11" style="padding:30px 0;text-align:center;color:var(--text-muted);">
-          暂无已发布视频。
-        </td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    <p style="padding:14px 0 0;font-size:11px;color:var(--text-muted);">
-      Metrics 由调度任务每 2h 刷新（B.2）。tiktok_id 由 tk_dispatch_status_poll 每 5min 解析，无 ID 的视频 metrics 会显示 —。
-    </p>
-  </div>
-</section>
+  .ana-profile { display:flex; gap:14px; align-items:center; padding:14px 18px; }
+  .ana-profile img { width:54px; height:54px; border-radius:50%; object-fit:cover; border:2px solid var(--line-soft); }
+  .ana-profile-name { font-size:16px; font-weight:700; }
+  .ana-profile-stats { display:flex; gap:18px; flex-wrap:wrap; }
+  .ana-profile-stats div { text-align:center; }
+  .ana-profile-stats strong { display:block; font-size:16px; font-variant-numeric:tabular-nums; }
+  .ana-profile-stats span { font-size:11px; color:var(--text-muted); }
+
+  .ana-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 18px; border-top:1px solid var(--line-soft); }
+  .ana-toolbar .muted { font-size:12px; color:var(--text-muted); }
+  .ana-toolbar input[type=checkbox] { vertical-align:middle; }
+
+  .ana-table { width:100%; font-size:13px; border-collapse:collapse; }
+  .ana-table th { text-align:left; color:var(--text-muted); font-size:11px; font-weight:600; padding:8px 10px; text-transform:uppercase; letter-spacing:.04em; background:var(--bg-subtle); }
+  .ana-table td { padding:10px; border-top:1px solid var(--line-soft); vertical-align:top; }
+  .ana-table th.num, .ana-table td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .ana-cover { width:46px; height:60px; border-radius:6px; object-fit:cover; background:var(--bg-subtle); display:block; }
+  .ana-title { font-weight:600; color:var(--text); text-decoration:none; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; max-width:380px; }
+  .ana-title:hover { color:var(--accent); }
+  .ana-desc { color:var(--text-muted); font-size:11px; margin-top:2px; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; max-width:380px; }
+  .ana-delta { display:inline-block; font-size:10px; margin-left:6px; padding:1px 6px; border-radius:8px; }
+  .ana-delta.up { background:rgba(16,185,129,.12); color:var(--success); }
+  .ana-delta.down { background:rgba(239,68,68,.12); color:var(--danger); }
+  .ana-delta.zero { background:var(--bg-subtle); color:var(--text-muted); }
+
+  .ana-step { display:flex; gap:14px; padding:14px 0; border-bottom:1px solid var(--line-soft); }
+  .ana-step:last-child { border-bottom:0; }
+  .ana-step-num { width:26px; height:26px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0; margin-top:2px; }
+  .ana-step-body { flex:1; min-width:0; }
+  .ana-step-title { font-size:14px; font-weight:600; }
+
+  .ana-flash { padding:10px 14px; border-radius:var(--radius-md); margin-bottom:12px; font-size:13px; }
+  .ana-flash.ok { background:rgba(16,185,129,.10); color:var(--success); border:1px solid rgba(16,185,129,.3); }
+  .ana-flash.err { background:rgba(239,68,68,.10); color:var(--danger); border:1px solid rgba(239,68,68,.3); }
+</style>
+
+<div class="ana-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">B.3 · Analytics</p>
+      <h1>TK 视频数据看板</h1>
+      <p class="page-subtitle">查询已授权 TikTok 账号的视频与播放量。点「立即刷新」会调用 TikTok Display API 写入新快照；勾选「自动刷新」每 N 分钟在浏览器后台刷新。</p>
+    </div>
+  </section>
+
+  <div id="ana-flash"></div>
+
+  {% if not tiktok_configured %}
+  <section class="panel" style="padding:36px 24px;text-align:center;">
+    <h3 style="margin:0 0 8px;">TikTok API 未配置</h3>
+    <p class="muted" style="margin:0 auto;max-width:480px;">请在 <code>.env</code> 中设置 <code>TIKTOK_CLIENT_KEY</code> 和 <code>TIKTOK_CLIENT_SECRET</code> 后重启服务。</p>
+  </section>
+  {% else %}
+
+  <section class="panel" style="padding:0;margin-bottom:14px;">
+    <div class="ana-acct-row">
+      <span style="font-size:13px;font-weight:600;margin-right:4px;">账号：</span>
+      {% for a in accounts %}
+      <a class="ana-acct-chip {% if a.open_id == active_id %}active{% endif %}" href="/v2/analytics?open_id={{ a.open_id }}" title="{{ a.display_name }}">
+        {% if a.avatar_url %}<img src="{{ a.avatar_url }}" alt="">{% endif %}
+        <span>{{ a.display_name or a.open_id[:8] }}</span>
+        {% if a.expired %}<span class="v2-status-pill error" style="font-size:9px;">已过期</span>{% endif %}
+      </a>
+      {% else %}
+      <span class="muted">尚未授权任何账号。</span>
+      {% endfor %}
+      <button type="button" class="ana-acct-add" onclick="document.getElementById('add-account-dialog').showModal()">+ 添加账号</button>
+    </div>
+
+    {% if active_account %}
+    <div class="ana-profile" style="border-top:1px solid var(--line-soft);">
+      {% if active_account.avatar_url %}<img src="{{ active_account.avatar_url }}" alt="">{% endif %}
+      <div style="flex:1;min-width:0;">
+        <div class="ana-profile-name">{{ active_account.display_name or 'TikTok User' }}</div>
+        {% if active_account.bio_description %}<div class="muted" style="font-size:12px;">{{ active_account.bio_description[:120] }}</div>{% endif %}
+      </div>
+      <div class="ana-profile-stats">
+        <div><strong>{{ '{:,}'.format(active_account.follower_count or 0) }}</strong><span>粉丝</span></div>
+        <div><strong>{{ '{:,}'.format(active_account.following_count or 0) }}</strong><span>关注</span></div>
+        <div><strong>{{ '{:,}'.format(active_account.likes_count or 0) }}</strong><span>获赞</span></div>
+        <div><strong>{{ '{:,}'.format(active_account.video_count or 0) }}</strong><span>视频</span></div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if active_id %}
+    <div class="ana-toolbar">
+      <form method="post" action="/v2/analytics/refresh" style="display:inline;">
+        <input type="hidden" name="open_id" value="{{ active_id }}">
+        <input type="hidden" name="return_to" value="/v2/analytics">
+        <button type="submit" class="button-secondary">立即刷新</button>
+      </form>
+      <label class="muted" style="display:inline-flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="ana-auto" checked> 自动刷新（每
+        <select id="ana-interval" class="v2-select" style="width:auto;min-height:28px;padding:2px 6px;">
+          <option value="60">1</option>
+          <option value="120">2</option>
+          <option value="300" selected>5</option>
+          <option value="600">10</option>
+          <option value="1800">30</option>
+        </select>
+        分钟）
+      </label>
+      <label class="muted" style="display:inline-flex;align-items:center;gap:6px;">每页
+        <select id="ana-limit" class="v2-select" style="width:auto;min-height:28px;padding:2px 6px;">
+          {% for n in page_sizes %}<option value="{{ n }}" {% if n == limit %}selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
+        条
+      </label>
+      <span class="muted" style="margin-left:auto;">最近快照：<span id="ana-last">{{ last_snapshot_human or '尚未抓取' }}</span></span>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if active_id %}
+  <section class="panel" style="padding:0;">
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table class="ana-table">
+        <thead>
+          <tr>
+            <th style="width:60px;">封面</th>
+            <th>视频</th>
+            <th class="num">播放</th>
+            <th class="num">点赞</th>
+            <th class="num">评论</th>
+            <th class="num">分享</th>
+            <th class="num">互动率</th>
+            <th>发布时间</th>
+            <th class="num">操作</th>
+          </tr>
+        </thead>
+        <tbody id="ana-tbody">
+          {% include 'v2_analytics_rows.html' %}
+        </tbody>
+      </table>
+    </div>
+    <div class="ana-pager" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:12px 18px;border-top:1px solid var(--line-soft);">
+      <div class="muted" style="font-size:12px;">
+        共 <span id="ana-total">{{ total }}</span> 个视频 ·
+        显示 <span id="ana-range">{{ (offset + 1) if total else 0 }}–{{ [offset + limit, total] | min }}</span>
+        · 第 <span id="ana-page">{{ page }}</span> / <span id="ana-pages">{{ pages }}</span> 页
+      </div>
+      <div class="v2-action-row" id="ana-pager-buttons">
+        <button type="button" class="button ghost" data-page="first"  {% if page <= 1 %}disabled{% endif %}>首页</button>
+        <button type="button" class="button ghost" data-page="prev"   {% if page <= 1 %}disabled{% endif %}>上一页</button>
+        <button type="button" class="button ghost" data-page="next"   {% if page >= pages %}disabled{% endif %}>下一页</button>
+        <button type="button" class="button ghost" data-page="last"   {% if page >= pages %}disabled{% endif %}>末页</button>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <dialog id="add-account-dialog" class="v2-dialog" style="max-width:560px;width:min(560px,calc(100vw - 32px));">
+    <div class="v2-dialog-header">
+      <h3 style="margin:0;font-size:16px;">添加 TikTok 账号（手动 OAuth）</h3>
+      <button type="button" class="v2-dialog-close" onclick="document.getElementById('add-account-dialog').close()" aria-label="关闭">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="ana-step">
+        <div class="ana-step-num">1</div>
+        <div class="ana-step-body">
+          <div class="ana-step-title">生成授权链接</div>
+          <button type="button" class="button-secondary" id="ana-gen-url" onclick="anaGenUrl()" style="margin-top:8px;">生成链接</button>
+          <div id="ana-url-box" style="display:none;margin-top:10px;">
+            <div style="display:flex;gap:8px;">
+              <input type="text" id="ana-url" readonly class="v2-input" style="flex:1;font-family:monospace;font-size:11px;">
+              <button type="button" class="button-secondary" onclick="anaCopyUrl()">复制</button>
+            </div>
+            <p class="muted" style="margin-top:6px;font-size:11px;">在<strong>能访问 TikTok 的浏览器</strong>打开此链接并登录授权。</p>
+          </div>
+        </div>
+      </div>
+      <div class="ana-step">
+        <div class="ana-step-num">2</div>
+        <div class="ana-step-body">
+          <div class="ana-step-title">粘贴回调 URL</div>
+          <p class="muted" style="font-size:12px;margin-top:4px;">授权后浏览器会跳转到一个新页面（可能显示无法访问），不要关闭，复制地址栏完整 URL 粘贴到下方：</p>
+          <textarea id="ana-callback" rows="3" class="v2-input" style="font-family:monospace;font-size:11px;margin-top:6px;" placeholder="https://your-callback-uri/?code=...&state=..."></textarea>
+          <button type="button" class="button" id="ana-submit" onclick="anaSubmitAuth()" style="margin-top:8px;" disabled>提交授权</button>
+          <div id="ana-auth-result" style="margin-top:10px;font-size:13px;"></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  const params = new URLSearchParams(window.location.search || '');
+  const flash = document.getElementById('ana-flash');
+  function showFlash(msg, ok) {
+    if (!flash) return;
+    flash.innerHTML = '<div class="ana-flash ' + (ok ? 'ok' : 'err') + '">' + msg + '</div>';
+  }
+  if (params.get('refreshed')) {
+    showFlash('已写入新快照（' + (params.get('snapped') || 0) + ' 条视频）。', true);
+  } else if (params.get('refresh_error')) {
+    showFlash('刷新失败：' + params.get('refresh_error'), false);
+  }
+
+  const cb = document.getElementById('ana-callback');
+  if (cb) cb.addEventListener('input', () => {
+    document.getElementById('ana-submit').disabled = !cb.value.trim();
+  });
+
+  // ── auto-refresh poller + pagination ────────────────────────────────
+  const auto = document.getElementById('ana-auto');
+  const interval = document.getElementById('ana-interval');
+  const tbody = document.getElementById('ana-tbody');
+  const lastSpan = document.getElementById('ana-last');
+  const limitSel = document.getElementById('ana-limit');
+  const pagerBtns = document.getElementById('ana-pager-buttons');
+  const totalEl = document.getElementById('ana-total');
+  const rangeEl = document.getElementById('ana-range');
+  const pageEl  = document.getElementById('ana-page');
+  const pagesEl = document.getElementById('ana-pages');
+  let timer = null;
+  const activeId = {{ (active_id or '')|tojson }};
+  let curPage  = {{ page or 1 }};
+  let curLimit = {{ limit or 20 }};
+  let curPages = {{ pages or 1 }};
+  let curTotal = {{ total or 0 }};
+
+  function fmtNum(n) {
+    if (n == null) return '—';
+    return Number(n).toLocaleString('en-US');
+  }
+  function deltaPill(n) {
+    if (n == null) return '';
+    if (n > 0)  return '<span class="ana-delta up">+' + fmtNum(n) + '</span>';
+    if (n < 0)  return '<span class="ana-delta down">' + fmtNum(n) + '</span>';
+    return '<span class="ana-delta zero">0</span>';
+  }
+  function fmtTs(t) {
+    if (!t) return '—';
+    const d = new Date(t * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+         + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function rateText(r) { return (r * 100).toFixed(2) + '%'; }
+
+  function updatePager() {
+    if (totalEl) totalEl.textContent = curTotal;
+    const start = curTotal ? ((curPage - 1) * curLimit + 1) : 0;
+    const end   = Math.min(curPage * curLimit, curTotal);
+    if (rangeEl) rangeEl.textContent = start + '–' + end;
+    if (pageEl)  pageEl.textContent  = curPage;
+    if (pagesEl) pagesEl.textContent = curPages;
+    if (pagerBtns) {
+      const first = pagerBtns.querySelector('[data-page="first"]');
+      const prev  = pagerBtns.querySelector('[data-page="prev"]');
+      const next  = pagerBtns.querySelector('[data-page="next"]');
+      const last  = pagerBtns.querySelector('[data-page="last"]');
+      const atFirst = curPage <= 1, atLast = curPage >= curPages;
+      if (first) first.disabled = atFirst;
+      if (prev)  prev.disabled  = atFirst;
+      if (next)  next.disabled  = atLast;
+      if (last)  last.disabled  = atLast;
+    }
+  }
+  function renderRows(videos) {
+    if (!tbody) return;
+    if (!videos.length) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px;">该账号暂无快照，请点「立即刷新」。</td></tr>';
+      return;
+    }
+    const rows = videos.map(v => {
+      const cover = v.cover_image_url
+        ? '<img class="ana-cover" src="' + v.cover_image_url + '" alt="">' : '<div class="ana-cover"></div>';
+      const title = (v.title || v.video_description || '(无标题)').replace(/</g, '&lt;');
+      const desc = v.video_description ? '<div class="ana-desc">' + v.video_description.replace(/</g, '&lt;') + '</div>' : '';
+      return '<tr>' +
+        '<td>' + cover + '</td>' +
+        '<td><a class="ana-title" href="/v2/analytics/video/' + encodeURIComponent(v.tiktok_video_id) + '">' + title + '</a>' + desc + '</td>' +
+        '<td class="num">' + fmtNum(v.view_count)    + (v.has_prev ? deltaPill(v.delta_view) : '') + '</td>' +
+        '<td class="num">' + fmtNum(v.like_count)    + (v.has_prev ? deltaPill(v.delta_like) : '') + '</td>' +
+        '<td class="num">' + fmtNum(v.comment_count) + (v.has_prev ? deltaPill(v.delta_comment) : '') + '</td>' +
+        '<td class="num">' + fmtNum(v.share_count)   + (v.has_prev ? deltaPill(v.delta_share) : '') + '</td>' +
+        '<td class="num">' + rateText(v.interaction_rate || 0) + '</td>' +
+        '<td style="color:var(--text-muted);font-size:11px;">' + fmtTs(v.create_time) + '</td>' +
+        '<td class="num"><a class="text-link" href="/v2/analytics/video/' + encodeURIComponent(v.tiktok_video_id) + '">详情 →</a></td>' +
+      '</tr>';
+    });
+    tbody.innerHTML = rows.join('');
+  }
+
+  async function fetchPage({ refresh }) {
+    if (!activeId) return;
+    const url = '/v2/analytics/data?open_id=' + encodeURIComponent(activeId)
+              + '&page=' + curPage + '&limit=' + curLimit
+              + '&refresh=' + (refresh ? 1 : 0);
+    try {
+      const r = await fetch(url, { credentials: 'same-origin' });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || '加载失败');
+      curTotal = data.total || 0;
+      curPages = data.pages || 1;
+      curLimit = data.limit || curLimit;
+      curPage  = data.page  || curPage;
+      if (curPage > curPages) {
+        curPage = curPages;
+        return fetchPage({ refresh: false });
+      }
+      if (data.error) {
+        showFlash('刷新失败：' + data.error, false);
+      } else if (refresh) {
+        if (flash) flash.innerHTML = '';
+      }
+      renderRows(data.videos || []);
+      updatePager();
+      if (lastSpan && data.last_snapshot_at) lastSpan.textContent = fmtTs(data.last_snapshot_at);
+    } catch (e) {
+      showFlash('刷新失败：' + e.message, false);
+    }
+  }
+  function reschedule() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (auto && auto.checked && activeId) {
+      const ms = (parseInt(interval.value, 10) || 300) * 1000;
+      timer = setInterval(() => fetchPage({ refresh: true }), ms);
+    }
+  }
+  if (auto)     auto.addEventListener('change', reschedule);
+  if (interval) interval.addEventListener('change', reschedule);
+  if (limitSel) limitSel.addEventListener('change', () => {
+    curLimit = parseInt(limitSel.value, 10) || 20;
+    curPage = 1;
+    fetchPage({ refresh: false });
+  });
+  if (pagerBtns) pagerBtns.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-page]');
+    if (!btn || btn.disabled) return;
+    const action = btn.dataset.page;
+    if      (action === 'first') curPage = 1;
+    else if (action === 'prev')  curPage = Math.max(1, curPage - 1);
+    else if (action === 'next')  curPage = Math.min(curPages, curPage + 1);
+    else if (action === 'last')  curPage = curPages;
+    else return;
+    fetchPage({ refresh: false });
+  });
+  updatePager();
+  reschedule();
+})();
+
+// ── Manual OAuth flow (re-uses v1 endpoints) ─────────────────────────
+async function anaGenUrl() {
+  const btn = document.getElementById('ana-gen-url');
+  btn.disabled = true; btn.textContent = '生成中…';
+  try {
+    const r = await fetch('/api/tiktok/auth-url');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || '生成失败');
+    document.getElementById('ana-url').value = data.auth_url;
+    document.getElementById('ana-url-box').style.display = 'block';
+    btn.textContent = '已生成';
+  } catch (e) {
+    alert('生成授权链接失败：' + e.message);
+    btn.disabled = false; btn.textContent = '生成链接';
+  }
+}
+function anaCopyUrl() {
+  const inp = document.getElementById('ana-url');
+  inp.select();
+  navigator.clipboard.writeText(inp.value).then(() => {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = '已复制!';
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  });
+}
+async function anaSubmitAuth() {
+  const url = document.getElementById('ana-callback').value.trim();
+  const btn = document.getElementById('ana-submit');
+  const result = document.getElementById('ana-auth-result');
+  btn.disabled = true; btn.textContent = '验证中…';
+  result.innerHTML = '';
+  try {
+    const r = await fetch('/api/tiktok/manual-auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_url: url }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || '授权失败');
+    result.innerHTML = '<div style="color:var(--success);">授权成功，正在刷新页面…</div>';
+    setTimeout(() => { window.location.reload(); }, 800);
+  } catch (e) {
+    result.innerHTML = '<div style="color:var(--danger);">授权失败：' + e.message + '</div>';
+    btn.disabled = false; btn.textContent = '提交授权';
+  }
+}
+</script>
 
 {% endblock %}

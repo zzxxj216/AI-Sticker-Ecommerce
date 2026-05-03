@@ -86,7 +86,7 @@
         {% if blotato_error == 'not_configured' %}
         ⚠ Blotato 未配置 — 在 .env 加 BLOTATO_API_KEY 后重启服务。
         {% else %}
-        ⚠ 没拉到 Blotato 账号列表（Blotato API 临时不可达，可手填 ID 继续，或 <a href="" onclick="location.reload();return false;">刷新本页</a>）：<br>
+        ⚠ 没拉到 Blotato 账号列表（Blotato API 临时不可达，可手填 ID 继续；需要更新状态时请手动重新打开视频管理页）：<br>
         <code style="font-size:10px;">{{ blotato_error or '(unknown)' }}</code>
         {% endif %}
       </p>

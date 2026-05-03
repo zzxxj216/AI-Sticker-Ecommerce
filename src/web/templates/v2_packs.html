@@ -1,82 +1,412 @@
-{% extends 'v2_base.html' %}
+﻿{% extends 'v2_base.html' %}
 {% block content %}
 
-<section class="page-header">
-  <div>
-    <p class="eyebrow">A.4 · Packs</p>
-    <h1>卡包管理</h1>
-    <p class="page-subtitle">已 promote 的系列。下游 TK 视频 / TKShop 产品都按 pack 关联。</p>
-  </div>
-  <div>
-    <a href="/v2/gallery" class="button"
-       style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;text-decoration:none;font-weight:600;">
-      画廊视图 →
-    </a>
-  </div>
-</section>
+<style>
+  .pack-page { padding-top: 14px; }
+  .pack-panel { padding: 16px 20px; margin-bottom: 16px; }
+  .pack-panel .panel-header { margin-bottom: 14px; padding-bottom: 12px; }
+  .pack-filters { gap: 12px; align-items: end; }
+  .pack-table-wrap { max-height: calc(100vh - 310px); min-height: 430px; overflow: auto; }
+  .pack-table th { position: sticky; top: 0; z-index: 2; padding: 10px 12px; }
+  .pack-table td { padding: 12px; font-size: 13px; vertical-align: middle; }
+  .pack-layout { display: block; }
+  .pack-title-cell { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pack-toolbar-right { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+  .pack-dialog-grid { display: grid; grid-template-columns: minmax(280px, 1.2fr) minmax(220px, .8fr) minmax(150px, .5fr); gap: 12px; align-items: end; }
+  .pack-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  .pack-action-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .pack-action-form-grid .full { grid-column: 1 / -1; }
+  .pack-stage-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 6px;
+    padding: 3px 9px;
+    border-radius: var(--radius-pill);
+    border: 1px solid rgba(99,102,241,.18);
+    background: linear-gradient(135deg, rgba(99,102,241,.10), rgba(14,165,233,.08));
+    color: var(--accent-dark);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  @media (max-width: 1180px) {
+    .pack-table-wrap { max-height: none; min-height: 0; }
+  }
+  @media (max-width: 760px) {
+    .pack-dialog-grid,
+    .pack-action-form-grid { grid-template-columns: 1fr; }
+    .pack-action-form-grid .full { grid-column: auto; }
+  }
+</style>
 
-<section class="panel" style="margin-bottom:12px;">
-  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
-    <span style="font-size:13px;font-weight:600;">状态：</span>
-    {% for st, label in [('all','全部'),('active','活跃'),('archived','已归档')] %}
-    <a href="?status={{ st }}"
-       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}ok{% else %}pending{% endif %}"
-       style="text-decoration:none;cursor:pointer;">{{ label }}</a>
-    {% endfor %}
-  </div>
-</section>
+<div class="pack-page">
 
-<section class="panel">
-  <div class="panel-header" style="padding:16px 24px;">
-    <h3 style="margin:0;font-size:16px;">{{ total }} 个卡包</h3>
+<section class="panel pack-panel">
+  <div class="panel-header">
+    <div>
+      <h3 style="margin:0;font-size:16px;">筛选 / 搜索</h3>
+      <p class="muted" style="margin-top:4px;">搜索卡包名称、ID、系列或热点；点击名称、封面或“查看”进入卡包图片详情。</p>
+    </div>
   </div>
-  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
-    <table style="width:100%;font-size:13px;min-width:900px;">
-      <thead>
-        <tr style="text-align:left;color:var(--text-muted);">
-          <th style="padding:8px 0;width:80px;">封面</th>
-          <th>display_name / topic</th>
-          <th>pack_uid</th>
-          <th>archetype</th>
-          <th style="text-align:right;">stickers</th>
-          <th>状态</th>
-          <th>created</th>
-          <th style="text-align:right;">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in packs %}
-        <tr style="border-top:1px solid var(--line-soft);">
-          <td style="padding:8px 0;">
-            {% if p.cover_url %}
-            <img src="{{ p.cover_url }}" alt="cover"
-                 style="width:48px;height:48px;border-radius:6px;object-fit:cover;background:#f5f5f5;display:block;">
-            {% else %}
-            <div style="width:48px;height:48px;border-radius:6px;background:var(--bg-subtle);"></div>
-            {% endif %}
-          </td>
-          <td>
-            <a href="/v2/packs/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ p.display_name }}</a>
-            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ p.topic_name or '—' }}</div>
-            {% if p.preview_only %}<span class="v2-status-pill pending" style="font-size:9px;margin-top:2px;">仅预览（{{ p.preview_ok_count }} 张）</span>{% endif %}
-          </td>
-          <td><code style="font-size:11px;color:var(--text-muted);">{{ p.pack_uid }}</code></td>
-          <td>{% if p.pack_archetype %}<span class="v2-status-pill pending">{{ p.pack_archetype }}</span>{% else %}—{% endif %}</td>
-          <td style="text-align:right;font-weight:600;">{{ p.total_stickers }}{% if p.preview_only %}<span style="color:var(--text-muted);font-weight:400;font-size:11px;"> 目标</span>{% endif %}</td>
-          <td><span class="v2-status-pill {% if p.status == 'active' %}ok{% else %}error{% endif %}">{{ p.status }}</span></td>
-          <td style="color:var(--text-muted);font-size:12px;">{{ p.created_human }}</td>
-          <td style="text-align:right;">
-            <a href="/v2/packs/{{ p.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">
-          暂无卡包 — 先去某个系列详情页点 “保存为卡包”
-        </td></tr>
+  <form method="get" action="/v2/packs" class="v2-toolbar pack-filters">
+    <div class="v2-field" style="flex:1;min-width:240px;">
+      <label for="pack-q">关键词</label>
+      <input id="pack-q" class="v2-input" type="search" name="q" value="{{ q or '' }}" autocomplete="off" placeholder="输入卡包名、ID、热点…">
+    </div>
+    <div class="v2-field" style="min-width:150px;">
+      <label for="pack-status">状态</label>
+      <select id="pack-status" name="status" class="v2-select" autocomplete="off">
+        {% for st, label in [('all','全部'),('active','活跃'),('archived','已归档')] %}
+        <option value="{{ st }}" {% if status_filter == st %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
-      </tbody>
-    </table>
-  </div>
+      </select>
+    </div>
+    <div class="v2-field" style="min-width:105px;">
+      <label for="pack-limit">每页</label>
+      <select id="pack-limit" name="limit" class="v2-select" autocomplete="off">
+        {% for n in [10,25,50,100] %}
+        <option value="{{ n }}" {% if limit == n %}selected{% endif %}>{{ n }} 条</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="page" value="1">
+    <div class="v2-action-row">
+      <button type="submit" class="button">搜索</button>
+      <a href="/v2/packs" class="button ghost">重置</a>
+    </div>
+  </form>
 </section>
+
+<dialog class="v2-dialog" id="manual-pack-dialog" aria-labelledby="manual-pack-dialog-title">
+  <form method="post" action="/v2/packs/manual">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="manual-pack-dialog-title" style="margin:0;font-size:18px;">手动添加卡包</h3>
+        <p class="muted" style="margin-top:4px;">从已生成或已排队的系列创建卡包聚合行，原始系列 / 全图 / 单张图会保留。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭手动添加卡包弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="pack-dialog-grid">
+        <div class="v2-field">
+          <label for="manual-series-id">选择系列</label>
+          <select id="manual-series-id" name="series_id" class="v2-select" required autocomplete="off">
+            <option value="">选择一个系列…</option>
+            {% for c in manual_candidates %}
+            <option value="{{ c.id }}" {% if not c.pack_uid and c.preview_ok_count == 0 %}disabled{% endif %}>
+              #{{ c.id }} · 系列 {{ c.series_idx }} · {{ c.series_name }} · 预览 {{ c.preview_ok_count }}{% if c.preview_generating_count %} / 生成中 {{ c.preview_generating_count }}{% endif %} · 单张 {{ c.sticker_ok_count }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="v2-field">
+          <label for="manual-display-name">显示名称</label>
+          <input id="manual-display-name" class="v2-input" type="text" name="display_name" maxlength="200" autocomplete="off" placeholder="留空则使用系列名…">
+        </div>
+        <div class="v2-field">
+          <label for="manual-cover-sticker-id">封面 sticker ID</label>
+          <input id="manual-cover-sticker-id" class="v2-input" type="number" inputmode="numeric" min="1" name="cover_sticker_id" autocomplete="off" placeholder="可选…">
+        </div>
+      </div>
+      <p class="muted" style="margin:12px 0 0;">如果从题材规划点击“生成预览图并进入卡包”，系统会自动创建卡包并跳转到这里。</p>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">保存为卡包</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="pack-layout">
+  <section class="panel pack-panel">
+    <div class="panel-header">
+      <div>
+        <h3 style="margin:0;font-size:15px;">卡包列表</h3>
+        <p class="muted" style="margin-top:2px;">共 {{ total }} 个 · 第 {{ pagination.page }} / {{ pagination.pages }} 页</p>
+      </div>
+      <div class="pack-toolbar-right">
+        <a class="button ghost" href="/v2/feedback">反馈收集</a>
+        <button type="button" class="button" data-open-dialog="manual-pack-dialog">＋ 手动添加卡包</button>
+      </div>
+    </div>
+
+    <div class="table-wrap pack-table-wrap">
+      <table class="pack-table" style="min-width:1120px;">
+        <thead>
+          <tr>
+            <th style="width:72px;">ID</th>
+            <th style="width:82px;">封面</th>
+            <th style="min-width:260px;">名称 / Topic</th>
+            <th style="min-width:120px;">时间</th>
+            <th style="width:110px;text-align:right;">全图</th>
+            <th style="width:110px;text-align:right;">单张图</th>
+            <th style="width:90px;text-align:right;">下游</th>
+            <th style="width:100px;">状态</th>
+            <th style="width:250px;text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in packs %}
+          <tr class="v2-pack-row">
+            <td class="mono-cell">#{{ p.id }}</td>
+            <td>
+              <a href="{{ p.detail_url }}" aria-label="查看卡包 {{ p.display_name }}">
+                {% if p.cover_url %}
+                <img class="v2-pack-cover" src="{{ p.cover_url }}" alt="{{ p.display_name }} 封面" width="64" height="64" loading="lazy">
+                {% else %}
+                <div class="v2-pack-cover v2-empty-cover" aria-label="无封面">无</div>
+                {% endif %}
+              </a>
+            </td>
+            <td>
+              <div class="pack-title-cell"><a class="v2-pack-title" href="{{ p.detail_url }}">{{ p.display_name }}</a></div>
+              <div class="row-subtitle">{{ p.topic_name or '—' }} · 系列 #{{ p.series_id }}</div>
+              {% if p.preview_only %}<span class="pack-stage-pill">预览阶段</span>{% endif %}
+            </td>
+            <td class="muted">{{ p.created_human or '—' }}</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums;">
+              <strong>{{ p.preview_ok_count }}</strong>/<span class="muted">{{ p.preview_total_count or '—' }}</span>
+              {% if p.preview_generating_count %}<div><span class="v2-status-pill running">{{ p.preview_generating_count }} 生成中</span></div>{% endif %}
+              {% if p.preview_error_count %}<div><span class="v2-status-pill error">{{ p.preview_error_count }} 失败</span></div>{% endif %}
+            </td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums;">
+              <strong>{{ p.sticker_ok_count }}</strong>/<span class="muted">{{ p.sticker_total_count or p.total_stickers or '—' }}</span>
+              {% if p.sticker_generating_count %}<div><span class="v2-status-pill running">{{ p.sticker_generating_count }} 生成中</span></div>{% endif %}
+              {% if p.sticker_error_count %}<div><span class="v2-status-pill error">{{ p.sticker_error_count }} 失败</span></div>{% endif %}
+            </td>
+            <td style="text-align:right;">{{ (p.video_count or 0) + (p.product_count or 0) }}</td>
+            <td><span class="v2-status-pill {% if p.status == 'active' %}ok{% else %}error{% endif %}">{{ p.status }}</span></td>
+            <td style="text-align:right;">
+              <div class="pack-row-actions">
+                <a class="btn-sm" href="/v2/packs/{{ p.id }}">查看</a>
+                <button type="button" class="btn-sm" data-open-dialog="video-dialog-{{ p.id }}">发布 TK 视频</button>
+                <button type="button" class="btn-sm" data-open-dialog="product-dialog-{{ p.id }}">生成 TK 商品</button>
+                <button type="button" class="btn-sm" data-open-dialog="feedback-pack-dialog-{{ p.id }}">反馈</button>
+                <a class="btn-sm" href="/v2/packs/{{ p.id }}/stickers.zip">下载 ZIP</a>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" style="padding:34px 0;text-align:center;color:var(--text-muted);">暂无卡包。可以从题材规划直接生成预览图并进入卡包管理。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if pagination.pages > 1 %}
+    <div class="v2-toolbar" style="margin-top:14px;">
+      <div class="muted">显示 {{ offset + 1 if total else 0 }}–{{ [offset + limit, total]|min }} / {{ total }} 个</div>
+      <div class="v2-action-row">
+        {% if pagination.page > 1 %}
+        <a class="button ghost" href="{{ pagination.first_url }}">首页</a>
+        <a class="button ghost" href="{{ pagination.prev_url }}">上一页</a>
+        {% endif %}
+        {% if pagination.page < pagination.pages %}
+        <a class="button ghost" href="{{ pagination.next_url }}">下一页</a>
+        <a class="button ghost" href="{{ pagination.last_url }}">末页</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  {% for p in packs %}
+  <dialog class="v2-dialog" id="video-dialog-{{ p.id }}" aria-labelledby="video-dialog-title-{{ p.id }}">
+    <form method="post" action="/v2/videos" enctype="multipart/form-data">
+      <input type="hidden" name="return_to" value="{{ close_url }}">
+      <input type="hidden" name="pack_id" value="{{ p.id }}">
+      <input type="hidden" name="caption_mode" value="async">
+      <div class="v2-dialog-header">
+        <div>
+          <h3 id="video-dialog-title-{{ p.id }}" style="margin:0;font-size:18px;">发布 TK 视频</h3>
+          <p class="muted" style="margin-top:4px;">#{{ p.id }} · {{ p.display_name }} · 创建后会同步到「视频管理」</p>
+        </div>
+        <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭发布 TK 视频弹窗">×</button>
+      </div>
+      <div class="v2-dialog-body">
+        <div class="pack-action-form-grid">
+          <div class="v2-field full">
+            <label for="video-one-liner-{{ p.id }}">视频一句话描述</label>
+            <textarea id="video-one-liner-{{ p.id }}" name="video_one_liner" rows="3" placeholder="例如：展示这套贴纸的使用场景、开箱、节日氛围等…"></textarea>
+          </div>
+          <div class="v2-field">
+            <label for="video-file-{{ p.id }}">视频文件</label>
+            <input id="video-file-{{ p.id }}" class="v2-input" type="file" name="video_file" accept="video/mp4,video/quicktime,video/webm">
+          </div>
+          <div class="v2-field">
+            <label for="blotato-account-{{ p.id }}">Blotato 账号</label>
+            {% if blotato_accounts %}
+            <select id="blotato-account-{{ p.id }}" name="blotato_account_id" class="v2-select">
+              <option value="">自动选择 / 稍后设置</option>
+              {% for a in blotato_accounts %}
+              <option value="{{ a.id }}">[{{ a.id }}] {{ a.displayName or a.username or a.name or '(unnamed)' }}{% if a.username %} (@{{ a.username }}){% endif %}</option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <input id="blotato-account-{{ p.id }}" class="v2-input" type="text" name="blotato_account_id" placeholder="可选，稍后也可填写">
+            {% endif %}
+          </div>
+          <div class="v2-field">
+            <label for="video-scheduled-{{ p.id }}">排期时间（可选）</label>
+            <input id="video-scheduled-{{ p.id }}" class="v2-input" type="datetime-local" name="scheduled_at">
+          </div>
+          <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" name="generate_caption" value="1" checked>
+            <span>创建后由 AI 自动生成英文文案 + Hashtag（后台任务）</span>
+          </label>
+          <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" name="dispatch_now" value="1">
+            <span>立即发布到 Blotato（需已上传视频文件 + 选定账号；勾选后忽略排期时间）</span>
+          </label>
+        </div>
+        <p class="muted" style="margin:12px 0 0;">如未勾选「立即发布」且填写了排期时间，调度任务会按时自动派发；二者都未填则只创建草稿，可在「视频管理」中继续编辑。</p>
+      </div>
+      <div class="v2-dialog-footer">
+        <button type="button" class="button ghost" data-close-dialog>取消</button>
+        <button type="submit" class="button">发布</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="v2-dialog" id="product-dialog-{{ p.id }}" aria-labelledby="product-dialog-title-{{ p.id }}">
+    <form method="post" action="/v2/products/from-pack/{{ p.id }}">
+      <input type="hidden" name="return_to" value="{{ close_url }}">
+      <div class="v2-dialog-header">
+        <div>
+          <h3 id="product-dialog-title-{{ p.id }}" style="margin:0;font-size:18px;">生成 TK 商品</h3>
+          <p class="muted" style="margin-top:4px;">#{{ p.id }} · {{ p.display_name }}</p>
+        </div>
+        <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭生成 TK 商品弹窗">×</button>
+      </div>
+      <div class="v2-dialog-body">
+        <div class="pack-action-form-grid">
+          <div class="v2-field">
+            <label for="product-title-{{ p.id }}">商品标题（可选）</label>
+            <input id="product-title-{{ p.id }}" class="v2-input" type="text" name="title" maxlength="200" placeholder="留空则后续用 AI 生成">
+          </div>
+          <div class="v2-field">
+            <label for="product-category-{{ p.id }}">类目 ID</label>
+            <input id="product-category-{{ p.id }}" class="v2-input" type="text" name="category_id" value="928016">
+          </div>
+          <div class="v2-field full">
+            <label for="product-desc-{{ p.id }}">商品描述 HTML（可选）</label>
+            <textarea id="product-desc-{{ p.id }}" name="description_html" rows="3" placeholder="可先留空，后续由 AI 生成或在商品详情中编辑。"></textarea>
+          </div>
+          <div class="v2-field">
+            <label for="product-selling-{{ p.id }}">卖点（每行一个）</label>
+            <textarea id="product-selling-{{ p.id }}" name="selling_points" rows="4" placeholder="Waterproof vinyl&#10;Gift-ready sticker pack"></textarea>
+          </div>
+          <div class="v2-field">
+            <label for="product-keywords-{{ p.id }}">关键词（每行一个）</label>
+            <textarea id="product-keywords-{{ p.id }}" name="keywords" rows="4" placeholder="stickers&#10;laptop decal"></textarea>
+          </div>
+          <label class="v2-field full" style="display:flex;grid-template-columns:auto 1fr;align-items:center;gap:8px;">
+            <input type="checkbox" name="generate_detail" value="1" checked>
+            <span>创建后自动生成 AI 商品详情（后台任务）</span>
+          </label>
+        </div>
+      </div>
+      <div class="v2-dialog-footer">
+        <button type="button" class="button ghost" data-close-dialog>取消</button>
+        <button type="submit" class="button">生成商品</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="v2-dialog" id="feedback-pack-dialog-{{ p.id }}" aria-labelledby="feedback-pack-title-{{ p.id }}">
+    <form method="post" action="/v2/feedback">
+      <input type="hidden" name="return_to" value="{{ close_url }}">
+      <input type="hidden" name="target_type" value="pack">
+      <input type="hidden" name="target_id" value="{{ p.id }}">
+      <input type="hidden" name="pack_id" value="{{ p.id }}">
+      <div class="v2-dialog-header">
+        <div>
+          <h3 id="feedback-pack-title-{{ p.id }}" style="margin:0;font-size:18px;">记录整包反馈</h3>
+          <p class="muted" style="margin-top:4px;">#{{ p.id }} · {{ p.display_name }}</p>
+        </div>
+        <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭反馈弹窗">×</button>
+      </div>
+      <div class="v2-dialog-body">
+        <div class="v2-field">
+          <label for="feedback-pack-rating-{{ p.id }}">反馈类型</label>
+          <select id="feedback-pack-rating-{{ p.id }}" name="rating" class="v2-select">
+            <option value="bad_pack">整包不满意</option>
+            <option value="style_issue">风格不对</option>
+            <option value="quality_issue">质量问题</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+        <div class="v2-field" style="margin-top:12px;">
+          <label for="feedback-pack-reason-{{ p.id }}">原因记录</label>
+          <textarea id="feedback-pack-reason-{{ p.id }}" name="reason" rows="5" required placeholder="记录为什么不好、希望下次如何调整；系统会按时间保存，方便后续统一收集。"></textarea>
+        </div>
+      </div>
+      <div class="v2-dialog-footer">
+        <button type="button" class="button ghost" data-close-dialog>取消</button>
+        <button type="submit" class="button">保存反馈</button>
+      </div>
+    </form>
+  </dialog>
+  {% endfor %}
+</div>
+
+<script>
+  (function () {
+    let lastOpener = null;
+    function openDialogById(id, opener) {
+      const dialog = document.getElementById(id);
+      if (!dialog) return;
+      lastOpener = opener || null;
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    }
+    function closeDialog(dialog) {
+      if (!dialog) return;
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+      if (lastOpener) lastOpener.focus();
+    }
+    document.querySelectorAll('[data-open-dialog]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        openDialogById(button.getAttribute('data-open-dialog'), button);
+      });
+    });
+    document.querySelectorAll('.v2-dialog').forEach(function (dialog) {
+      dialog.addEventListener('click', function (event) { if (event.target === dialog) closeDialog(dialog); });
+      dialog.querySelectorAll('[data-close-dialog]').forEach(function (button) {
+        button.addEventListener('click', function () { closeDialog(dialog); });
+      });
+    });
+
+    const live = document.getElementById('pack-async-status');
+    document.querySelectorAll('[data-async-form]').forEach(function (form) {
+      form.addEventListener('submit', function () {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+          button.disabled = true;
+          button.textContent = form.dataset.pendingText || '已派发到后台…';
+        }
+        if (live) {
+          live.style.display = 'block';
+          live.textContent = '任务已提交到后台，页面不会自动刷新；稍后点击“刷新状态”查看进度。你可以继续处理其他卡包。';
+        }
+      });
+    });
+  })();
+</script>
+
+</div>
 
 {% endblock %}
+
+

@@ -9,6 +9,7 @@ Jobs registered today:
   tk_metrics_refresh         every 2h    - refresh TK video metrics (W3 / B.2)
   tk_video_publish_dispatch  every 60s   - send scheduled videos       (W3 / B.1)
   tkshop_status_sync         every 30min - sync product statuses        (W4 / C.4)
+  asset_feedback_collect     every 6h    - collect new QA feedback
 
 The job bodies are stubs at this stage — they only log + record a row
 in ``scheduled_jobs``. Real implementations land in their respective
@@ -299,12 +300,21 @@ def tkshop_status_sync_job(ctx: JobContext) -> None:
                 result.get("updated", 0), len(result.get("errors", [])))
 
 
+def asset_feedback_collect_job(ctx: JobContext) -> None:
+    """QA — batch new pack/preview/sticker feedback for later review."""
+    from src.services.feedback import get_feedback_service
+    result = get_feedback_service().collect_pending()
+    ctx.affected_rows = result.get("collected", 0)
+    logger.info("[%s] collected=%d", ctx.job_name, ctx.affected_rows)
+
+
 def build_default_scheduler(db_path: Path = DEFAULT_DB_PATH) -> Scheduler:
     s = Scheduler(db_path=db_path)
     s.register("tk_metrics_refresh",         2 * 60 * 60, tk_metrics_refresh_job)
     s.register("tk_video_publish_dispatch",            60, tk_video_publish_dispatch_job)
     s.register("tk_dispatch_status_poll",    5 * 60,      tk_dispatch_status_poll_job)
     s.register("tkshop_status_sync",        30 * 60,      tkshop_status_sync_job)
+    s.register("asset_feedback_collect",     6 * 60 * 60, asset_feedback_collect_job)
     return s
 
 

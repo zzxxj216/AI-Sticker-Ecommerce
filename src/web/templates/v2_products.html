@@ -1,73 +1,215 @@
 {% extends 'v2_base.html' %}
 {% block content %}
 
-<section class="page-header">
-  <div>
-    <p class="eyebrow">C · TKShop Products</p>
-    <h1>TKShop 产品</h1>
-    <p class="page-subtitle">每个 pack 一个产品。详情页（标题/描述/卖点/关键词）走 AI 两步生成；主图人工上传；发布通过本机 192.168.121.1 转发。</p>
-  </div>
-</section>
+<style>
+  .product-page { padding-top:14px; }
+  .product-panel { padding:16px 20px; margin-bottom:16px; }
+  .product-panel .panel-header { margin-bottom:14px; padding-bottom:12px; }
+  .product-filter-row { gap:12px; align-items:end; }
+  .product-filter-row .v2-field { gap:6px; }
+  .product-filter-row .v2-input,
+  .product-filter-row .v2-select { min-height:38px; padding:8px 10px; font-size:13px; }
+  .product-tabs { display:flex; gap:6px; padding:0 0 12px; border-bottom:1px solid var(--line-soft); margin-bottom:14px; }
+  .product-tab { padding:8px 14px; border-radius:var(--radius-md) var(--radius-md) 0 0; font-size:13px; font-weight:700; color:var(--text-muted); text-decoration:none; border:1px solid transparent; border-bottom:none; }
+  .product-tab.active { background:var(--surface); color:var(--text); border-color:var(--line-soft); }
+  .product-table-wrap { max-height:calc(100vh - 320px); min-height:400px; overflow:auto; }
+  .product-table th { position:sticky; top:0; z-index:2; padding:10px 12px; background:var(--surface); }
+  .product-table td { padding:11px 12px; font-size:13px; vertical-align:middle; }
+  .product-cover { width:48px; height:48px; border-radius:var(--radius-md); border:1px solid var(--line-soft); object-fit:cover; background:var(--bg-subtle); }
+  .product-title-cell { max-width:300px; }
+  .product-title-cell a { color:var(--text); font-weight:700; text-decoration:none; }
+  .product-title-cell a:hover { color:var(--accent); }
+  .product-title-cell .pack { color:var(--text-muted); font-size:11px; margin-top:3px; }
+  .product-row-actions { display:flex; gap:6px; justify-content:flex-end; align-items:center; }
+  .product-row-actions a, .product-row-actions button { font-size:12px; }
+  .product-row-actions form { display:inline; margin:0; }
+</style>
 
-<section class="panel" style="margin-bottom:12px;">
-  <div style="padding:14px 24px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
-    <span style="font-size:13px;font-weight:600;">状态：</span>
-    {% for st, label in [('all','全部'),('draft','草稿'),('publishing','发布中'),('published','已发布'),('failed','失败')] %}
-    <a href="?status={{ st }}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}"
-       class="v2-status-pill {% if status_filter == st or (not status_filter and st == 'all') %}ok{% else %}pending{% endif %}"
-       style="text-decoration:none;cursor:pointer;">{{ label }}</a>
-    {% endfor %}
-    {% if pack_id_filter %}
-    <span style="font-size:12px;color:var(--text-muted);">pack #{{ pack_id_filter }}
-      <a href="?status={{ status_filter or 'all' }}" style="color:var(--accent);text-decoration:none;margin-left:6px;">清除</a>
-    </span>
-    {% endif %}
-  </div>
-</section>
+<div class="product-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">C · TKShop Products</p>
+      <h1>TKShop 产品</h1>
+      <p class="page-subtitle">每个 pack 一个产品。详情/描述/卖点/关键词由 AI 生成；图片支持批量+图生图；发布走 multi-channel-api。</p>
+    </div>
+  </section>
 
-<section class="panel">
-  <div class="panel-header" style="padding:16px 24px;">
-    <h3 style="margin:0;font-size:16px;">{{ total }} 个产品</h3>
+  <div class="product-tabs">
+    <a href="/v2/products" class="product-tab {% if not is_platform_view %}active{% endif %}">本地产品（{{ total }}）</a>
+    <a href="/v2/products/platform" class="product-tab {% if is_platform_view %}active{% endif %}">平台产品（TikTok Shop）</a>
   </div>
-  <div class="table-wrap" style="padding:0 24px 16px;overflow-x:auto;">
-    <table style="width:100%;font-size:13px;min-width:900px;">
-      <thead>
-        <tr style="text-align:left;color:var(--text-muted);">
-          <th style="padding:8px 0;width:60px;">封面</th>
-          <th>title (en) / pack</th>
-          <th>tiktok_product_id</th>
-          <th>状态</th>
-          <th>created</th>
-          <th>published</th>
-          <th style="text-align:right;">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in products %}
-        <tr style="border-top:1px solid var(--line-soft);">
-          <td style="padding:8px 0;">
-            {% if p.pack_cover_url %}
-            <img src="{{ p.pack_cover_url }}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;background:#f5f5f5;">
+
+  <section class="panel product-panel">
+    <div class="panel-header">
+      <div>
+        <h3 style="margin:0;font-size:16px;">筛选 / 搜索</h3>
+        <p class="muted" style="margin-top:4px;">按发布状态、卡包、关键词筛选本地产品库。</p>
+      </div>
+    </div>
+    <form method="get" action="/v2/products" class="v2-toolbar product-filter-row">
+      <div class="v2-field" style="flex:1;min-width:240px;">
+        <label for="prod-q">关键词</label>
+        <input id="prod-q" class="v2-input" type="search" name="q" value="{{ q or '' }}" autocomplete="off"
+               placeholder="标题、卡包名、seller_sku、tiktok_product_id…">
+      </div>
+      <div class="v2-field" style="min-width:170px;">
+        <label for="prod-status">状态</label>
+        <select id="prod-status" name="status" class="v2-select" autocomplete="off">
+          {% for st, label in [('all','全部'),('draft','本地草稿'),('draft_on_platform','平台草稿'),('publishing','发布中'),('published','已上架'),('suspended','已下架'),('failed','失败')] %}
+          <option value="{{ st }}" {% if status_filter == st or (not status_filter and st == 'all') %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="v2-field" style="min-width:140px;">
+        <label for="prod-pack-id">卡包 ID</label>
+        <input id="prod-pack-id" class="v2-input" type="number" name="pack_id" value="{{ pack_id_filter or '' }}" min="1" inputmode="numeric" autocomplete="off" placeholder="可选…">
+      </div>
+      <div class="v2-field" style="min-width:105px;">
+        <label for="prod-limit">每页</label>
+        <select id="prod-limit" name="limit" class="v2-select" autocomplete="off">
+          {% for n in [25,50,100,200] %}
+          <option value="{{ n }}" {% if (limit or 50) == n %}selected{% endif %}>{{ n }} 条</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="v2-action-row">
+        <button type="submit" class="button">搜索</button>
+        <a href="/v2/products" class="button ghost">重置</a>
+      </div>
+    </form>
+  </section>
+
+  <!-- Export form is OUTSIDE the table. Checkboxes use form="export-form"
+       attribute to associate without nesting (HTML doesn't allow nested forms). -->
+  <form id="export-form" method="post" action="/v2/products/export" target="_blank" style="display:none;"></form>
+
+  <section class="panel product-panel" style="padding:0;">
+    <div class="panel-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div>
+        <h3 style="margin:0;font-size:16px;">产品列表</h3>
+        <p class="muted" style="margin-top:4px;">共 {{ total }} 个 · <span id="picked-count">0</span> 已选</p>
+      </div>
+      <div class="v2-action-row" style="gap:8px;">
+        <button type="button" id="pick-all"
+                style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">全选当前页</button>
+        <button type="button" id="pick-none"
+                style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">清空</button>
+        <button type="submit" form="export-form" name="fmt" value="xlsx" id="btn-export-xlsx" disabled
+                title="导出含主图嵌入的 Excel 表（含标题/SKU/状态/卖点/关键词等全部字段）"
+                style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5;">📊 导出 XLSX (含图)</button>
+        <button type="submit" form="export-form" name="fmt" value="zip" id="btn-export-zip" disabled
+                title="导出 ZIP：products.csv + images/ 全部产品图"
+                style="padding:6px 14px;background:#10b981;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5;">📦 导出 ZIP (CSV+图)</button>
+      </div>
+    </div>
+    <div class="table-wrap product-table-wrap">
+      <table class="product-table" style="width:100%;font-size:13px;min-width:1020px;">
+        <thead>
+          <tr style="text-align:left;color:var(--text-muted);">
+            <th style="width:36px;text-align:center;"><input type="checkbox" id="pick-header" title="切换本页"></th>
+            <th style="width:60px;">封面</th>
+            <th>title (en) / pack</th>
+            <th style="width:170px;">seller_sku / sku_id</th>
+            <th style="width:170px;">tiktok_product_id</th>
+            <th style="width:110px;">状态</th>
+            <th style="width:120px;">created</th>
+            <th style="width:120px;">published</th>
+            <th style="width:200px;text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr style="border-top:1px solid var(--line-soft);">
+            <td style="text-align:center;"><input type="checkbox" form="export-form" name="product_ids" value="{{ p.id }}" class="row-pick"></td>
+            <td>
+              {% if p.pack_cover_url %}
+              <img src="{{ p.pack_cover_url }}" class="product-cover">
+              {% endif %}
+            </td>
+            <td class="product-title-cell">
+              <a href="/v2/products/{{ p.id }}">{{ (p.title or '（未生成）')[:80] }}</a>
+              <div class="pack">#{{ p.id }} · {{ p.pack_name or '—' }}</div>
+            </td>
+            <td>
+              <code style="font-size:11px;color:var(--text-muted);" title="{{ p.seller_sku or '' }}">{{ (p.seller_sku or '—')[:18] }}{% if p.seller_sku and p.seller_sku|length > 18 %}…{% endif %}</code>
+              {% if p.tiktok_sku_id %}<div style="color:var(--text-muted);font-size:10px;margin-top:2px;">sku: <code>{{ p.tiktok_sku_id[:14] }}</code></div>{% endif %}
+            </td>
+            <td><code style="font-size:11px;color:var(--text-muted);">{{ p.tiktok_product_id or '—' }}</code></td>
+            <td><span class="v2-status-pill {% if p.publish_status == 'published' %}ok{% elif p.publish_status == 'failed' %}error{% elif p.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ p.publish_status }}</span></td>
+            <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
+            <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human or '—' }}</td>
+            <td>
+              <div class="product-row-actions">
+                <a href="/v2/products/{{ p.id }}" class="button ghost" style="padding:4px 10px;" title="编辑标题/描述/卖点/关键词/SKU">✏️ 编辑</a>
+                {% if p.tiktok_product_id %}
+                <form method="post" action="/v2/products/{{ p.id }}/update_on_platform"
+                      onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（覆盖平台数据）。继续?');">
+                  <button type="submit" class="button ghost" style="padding:4px 10px;color:var(--accent);">📤 推送</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/v2/products/{{ p.id }}/delete"
+                      onsubmit="return confirm('删除产品 #{{ p.id }}（{{ (p.title or p.pack_name or '')[:40] }}）及其所有图片、发布日志、磁盘文件。{% if p.tiktok_product_id %}⚠ 已上架 TikTok（{{ p.tiktok_product_id }}），不会自动下架。{% endif %}\n\n确认删除?');">
+                  <input type="hidden" name="back" value="/v2/products?status={{ status_filter or 'all' }}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}{% if q %}&q={{ q }}{% endif %}">
+                  <button type="submit" class="button ghost" style="padding:4px 10px;color:var(--danger);">删除</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+            {% if q or status_filter not in ('','all') or pack_id_filter %}
+              没有命中筛选条件的产品 — <a href="/v2/products" style="color:var(--accent);">清空筛选</a>
+            {% else %}
+              暂无产品 — 去某个卡包详情页点 “→ TKShop 产品”
             {% endif %}
-          </td>
-          <td>
-            <a href="/v2/products/{{ p.id }}" style="color:var(--text);font-weight:600;text-decoration:none;">{{ (p.title or '（未生成）')[:80] }}</a>
-            <div style="color:var(--text-muted);font-size:11px;margin-top:2px;">{{ p.pack_name or '—' }}</div>
-          </td>
-          <td><code style="font-size:11px;color:var(--text-muted);">{{ p.tiktok_product_id or '—' }}</code></td>
-          <td><span class="v2-status-pill {% if p.publish_status == 'published' %}ok{% elif p.publish_status == 'failed' %}error{% elif p.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ p.publish_status }}</span></td>
-          <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
-          <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human or '—' }}</td>
-          <td style="text-align:right;"><a href="/v2/products/{{ p.id }}" style="color:var(--accent);text-decoration:none;font-size:12px;">详情 →</a></td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7" style="padding:30px 0;text-align:center;color:var(--text-muted);">
-          暂无产品 — 去某个卡包详情页点 “→ TKShop 产品”
-        </td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+  const form  = document.getElementById('export-form');
+  if (!form) return;
+  // checkboxes are associated via form="export-form" attribute (not children)
+  const rowPicks = () => Array.from(document.querySelectorAll('.row-pick'));
+  const headerPick = document.getElementById('pick-header');
+  const pickAll  = document.getElementById('pick-all');
+  const pickNone = document.getElementById('pick-none');
+  const countEl  = document.getElementById('picked-count');
+  const btnX = document.getElementById('btn-export-xlsx');
+  const btnZ = document.getElementById('btn-export-zip');
+
+  function refresh() {
+    const total   = rowPicks().length;
+    const checked = rowPicks().filter(c => c.checked).length;
+    countEl.textContent = checked;
+    headerPick.indeterminate = checked > 0 && checked < total;
+    headerPick.checked = checked > 0 && checked === total;
+    [btnX, btnZ].forEach(b => {
+      b.disabled = checked === 0;
+      b.style.opacity = checked === 0 ? '.5' : '1';
+    });
+  }
+  rowPicks().forEach(c => c.addEventListener('change', refresh));
+  headerPick.addEventListener('change', () => {
+    const v = headerPick.checked;
+    rowPicks().forEach(c => { c.checked = v; });
+    refresh();
+  });
+  pickAll.addEventListener('click', () => {
+    rowPicks().forEach(c => { c.checked = true; });
+    refresh();
+  });
+  pickNone.addEventListener('click', () => {
+    rowPicks().forEach(c => { c.checked = false; });
+    refresh();
+  });
+  refresh();
+})();
+</script>
 
 {% endblock %}

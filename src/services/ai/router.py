@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -689,6 +690,12 @@ class AIRouter:
             "output_format": os.getenv("V2_IMAGE_OUTPUT_FORMAT", "png"),
         }
 
+        # Retry transient transport failures (SSL EOF, RemoteProtocolError,
+        # ReadTimeout) — JieKou /v3/gpt-image-2-edit is flaky under
+        # concurrency. Don't retry on real upstream errors (4xx/5xx).
+        max_attempts = int(os.getenv("V2_IMAGE_EDIT_RETRIES", "3"))
+        backoff = 2.0  # seconds; doubled each attempt
+
         with AICallLog(
             service="jiekou",
             model=model,
@@ -697,33 +704,82 @@ class AIRouter:
             related_id=related_id,
             prompt_summary=prompt[:500],
         ) as log:
-            try:
-                resp = httpx.post(
-                    i2i_url,
-                    headers={"Authorization": f"Bearer {api_key}",
-                             "Content-Type": "application/json"},
-                    json=body,
-                    timeout=300,
-                )
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                hint = ""
-                if e.response.status_code == 403 and "invalid character" in e.response.text:
-                    hint = " — JieKou upstream returned HTML reject; likely account perm."
-                raise APIError(
-                    f"image_edit HTTP {e.response.status_code}: "
-                    f"{e.response.text[:300]}{hint}",
-                    service=model,
-                )
-            data = resp.json()
-            log.set_usage(cost=estimate_image_cost(model, 1))
-            results = self._decode_image_response(data)
-            if not results:
-                raise APIError(
-                    f"image_edit: response had no decodable images. body={str(data)[:300]}",
-                    service=model,
-                )
-            return results[0]
+            last_transport_err: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    resp = httpx.post(
+                        i2i_url,
+                        headers={"Authorization": f"Bearer {api_key}",
+                                 "Content-Type": "application/json"},
+                        json=body,
+                        timeout=300,
+                    )
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    hint = ""
+                    if e.response.status_code == 403 and "invalid character" in e.response.text:
+                        hint = " — JieKou upstream returned HTML reject; likely account perm."
+                    raise APIError(
+                        f"image_edit HTTP {e.response.status_code}: "
+                        f"{e.response.text[:300]}{hint}",
+                        service=model,
+                    )
+                except (
+                    httpx.RemoteProtocolError,
+                    httpx.ReadTimeout,
+                    httpx.ConnectError,
+                    httpx.ReadError,
+                    httpx.WriteError,
+                ) as e:
+                    last_transport_err = e
+                    if attempt < max_attempts:
+                        wait = backoff * (2 ** (attempt - 1))
+                        # noqa: G004 — context already in log
+                        import logging as _lg
+                        _lg.getLogger("ai.router").warning(
+                            "image_edit transient failure (attempt %d/%d): %s — retry in %.1fs",
+                            attempt, max_attempts, type(e).__name__, wait,
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise APIError(
+                        f"image_edit transport failure after {max_attempts} attempts: "
+                        f"{type(e).__name__}: {e}",
+                        service=model,
+                    )
+                except Exception as e:
+                    # SSL EOFError / generic ssl.SSLError fall here on some
+                    # Windows installs (httpx wraps but not always).
+                    msg = str(e).lower()
+                    if (
+                        "ssl" in msg or "eof" in msg or "unexpected" in msg
+                        or "violation of protocol" in msg
+                    ) and attempt < max_attempts:
+                        last_transport_err = e
+                        wait = backoff * (2 ** (attempt - 1))
+                        import logging as _lg
+                        _lg.getLogger("ai.router").warning(
+                            "image_edit ssl-like failure (attempt %d/%d): %s — retry in %.1fs",
+                            attempt, max_attempts, type(e).__name__, wait,
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise
+                # Success path
+                data = resp.json()
+                log.set_usage(cost=estimate_image_cost(model, 1))
+                results = self._decode_image_response(data)
+                if not results:
+                    raise APIError(
+                        f"image_edit: response had no decodable images. body={str(data)[:300]}",
+                        service=model,
+                    )
+                return results[0]
+            # Loop exited without return — should not happen, but guard.
+            raise APIError(
+                f"image_edit failed after {max_attempts} attempts; last error: {last_transport_err!r}",
+                service=model,
+            )
 
 
 # ----------------------------------------------------------------------

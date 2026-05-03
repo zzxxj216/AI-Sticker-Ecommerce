@@ -162,9 +162,11 @@ class HotTopicService:
             clauses.append("status = ?")
             params.append(status)
         if query_substring:
-            clauses.append("(topic_name LIKE ? OR query LIKE ?)")
+            clauses.append(
+                "(topic_name LIKE ? OR query LIKE ? OR theme_summary LIKE ? OR raw_payload LIKE ?)"
+            )
             like = f"%{query_substring}%"
-            params.extend([like, like])
+            params.extend([like, like, like, like])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
         with _open_db(self.db_path) as conn:
@@ -174,7 +176,8 @@ class HotTopicService:
             rows = conn.execute(
                 f"""
                 SELECT id, source, query, topic_name, raw_payload,
-                       evidence_urls, hot_score, region, fetched_at, status
+                       evidence_urls, hot_score, region, fetched_at, status,
+                       theme_summary, parent_topic_ids
                   FROM hot_topics
                   {where}
                  ORDER BY id DESC
@@ -183,6 +186,133 @@ class HotTopicService:
                 tuple(params) + (limit, offset),
             ).fetchall()
         return [self._row_to_dict(r) for r in rows], total
+
+    # ------------------------------------------------------------------
+    # Manual CRUD — management UI
+    # ------------------------------------------------------------------
+
+    def create_topic(
+        self,
+        *,
+        topic_name: str,
+        theme_summary: str = "",
+        source: str = "manual",
+        query: str = "",
+        region: str = "",
+        evidence_urls: Optional[list[str]] = None,
+        hot_score: float = 0.0,
+        status: str = "pending",
+    ) -> int:
+        topic_name = topic_name.strip()[:200]
+        if not topic_name:
+            raise ValueError("topic_name cannot be empty")
+        if status not in VALID_STATUSES:
+            raise ValueError(f"invalid status: {status!r} (allowed: {VALID_STATUSES})")
+        source = (source or "manual").strip()[:80]
+        evidence_urls = [u.strip() for u in (evidence_urls or []) if u.strip()]
+        raw_payload = {
+            "title": topic_name,
+            "snippet": theme_summary.strip(),
+            "raw": {"manual": True},
+        }
+        now = int(time.time())
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO hot_topics
+                    (source, query, topic_name, raw_payload, evidence_urls,
+                     hot_score, region, fetched_at, status,
+                     theme_summary, parent_topic_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')
+                """,
+                (
+                    source,
+                    query.strip()[:200],
+                    topic_name,
+                    json.dumps(raw_payload, ensure_ascii=False),
+                    json.dumps(evidence_urls, ensure_ascii=False),
+                    float(hot_score or 0.0),
+                    region.strip()[:50],
+                    now,
+                    status,
+                    theme_summary.strip(),
+                ),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+
+    def update_topic(
+        self,
+        topic_id: int,
+        *,
+        topic_name: str,
+        theme_summary: str = "",
+        source: str = "manual",
+        query: str = "",
+        region: str = "",
+        evidence_urls: Optional[list[str]] = None,
+        hot_score: float = 0.0,
+        status: str = "pending",
+    ) -> bool:
+        topic_name = topic_name.strip()[:200]
+        if not topic_name:
+            raise ValueError("topic_name cannot be empty")
+        if status not in VALID_STATUSES:
+            raise ValueError(f"invalid status: {status!r} (allowed: {VALID_STATUSES})")
+        source = (source or "manual").strip()[:80]
+        evidence_urls = [u.strip() for u in (evidence_urls or []) if u.strip()]
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT raw_payload FROM hot_topics WHERE id = ?", (topic_id,),
+            ).fetchone()
+            if not row:
+                return False
+            try:
+                raw_payload = json.loads(row["raw_payload"] or "{}")
+            except Exception:
+                raw_payload = {}
+            if not isinstance(raw_payload, dict):
+                raw_payload = {}
+            raw_payload["title"] = topic_name
+            raw_payload["snippet"] = theme_summary.strip()
+            cur = conn.execute(
+                """
+                UPDATE hot_topics
+                   SET source = ?, query = ?, topic_name = ?,
+                       raw_payload = ?, evidence_urls = ?,
+                       hot_score = ?, region = ?, status = ?,
+                       theme_summary = ?
+                 WHERE id = ?
+                """,
+                (
+                    source,
+                    query.strip()[:200],
+                    topic_name,
+                    json.dumps(raw_payload, ensure_ascii=False),
+                    json.dumps(evidence_urls, ensure_ascii=False),
+                    float(hot_score or 0.0),
+                    region.strip()[:50],
+                    status,
+                    theme_summary.strip(),
+                    topic_id,
+                ),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_topic(self, topic_id: int) -> bool:
+        """Delete a hot topic if no topic_plan depends on it."""
+        with _open_db(self.db_path) as conn:
+            downstream = conn.execute(
+                "SELECT COUNT(*) FROM topic_plans WHERE topic_id = ?", (topic_id,),
+            ).fetchone()[0]
+            if downstream:
+                raise ValueError(
+                    f"hot topic #{topic_id} has {downstream} topic_plan(s); archive instead"
+                )
+            cur = conn.execute("DELETE FROM hot_topics WHERE id = ?", (topic_id,))
+            conn.commit()
+            return cur.rowcount > 0
 
     def get_topic(self, topic_id: int) -> Optional[dict]:
         with _open_db(self.db_path) as conn:
@@ -230,6 +360,22 @@ class HotTopicService:
             )
             conn.commit()
             return cur.rowcount > 0
+
+    def update_status_batch(self, topic_ids: list[int], new_status: str) -> int:
+        """Update status for multiple hot topics."""
+        if new_status not in VALID_STATUSES:
+            raise ValueError(f"invalid status: {new_status!r} (allowed: {VALID_STATUSES})")
+        ids = sorted({int(x) for x in topic_ids if int(x) > 0})
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                f"UPDATE hot_topics SET status = ? WHERE id IN ({placeholders})",
+                tuple([new_status] + ids),
+            )
+            conn.commit()
+            return cur.rowcount
 
     def source_stats(self) -> dict[str, dict[str, int]]:
         """Return {source: {pending, selected, archived, total}} for the filter UI."""

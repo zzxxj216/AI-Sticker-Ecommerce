@@ -1,0 +1,24 @@
+{% macro delta_pill(n) %}
+{% if n > 0 %}<span class="ana-delta up">+{{ '{:,}'.format(n) }}</span>
+{% elif n < 0 %}<span class="ana-delta down">{{ '{:,}'.format(n) }}</span>
+{% else %}<span class="ana-delta zero">0</span>{% endif %}
+{% endmacro %}
+
+{% for v in videos %}
+<tr>
+  <td>{% if v.cover_image_url %}<img class="ana-cover" src="{{ v.cover_image_url }}" alt="">{% else %}<div class="ana-cover"></div>{% endif %}</td>
+  <td>
+    <a class="ana-title" href="/v2/analytics/video/{{ v.tiktok_video_id }}">{{ v.title or v.video_description or '(无标题)' }}</a>
+    {% if v.video_description %}<div class="ana-desc">{{ v.video_description }}</div>{% endif %}
+  </td>
+  <td class="num">{{ '{:,}'.format(v.view_count or 0) }}{% if v.has_prev %} {{ delta_pill(v.delta_view) }}{% endif %}</td>
+  <td class="num">{{ '{:,}'.format(v.like_count or 0) }}{% if v.has_prev %} {{ delta_pill(v.delta_like) }}{% endif %}</td>
+  <td class="num">{{ '{:,}'.format(v.comment_count or 0) }}{% if v.has_prev %} {{ delta_pill(v.delta_comment) }}{% endif %}</td>
+  <td class="num">{{ '{:,}'.format(v.share_count or 0) }}{% if v.has_prev %} {{ delta_pill(v.delta_share) }}{% endif %}</td>
+  <td class="num">{{ '%.2f'|format((v.interaction_rate or 0) * 100) }}%</td>
+  <td style="color:var(--text-muted);font-size:11px;">{{ v.create_human or '—' }}</td>
+  <td class="num"><a class="text-link" href="/v2/analytics/video/{{ v.tiktok_video_id }}">详情 →</a></td>
+</tr>
+{% else %}
+<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px;">该账号暂无快照，请点「立即刷新」抓取一次。</td></tr>
+{% endfor %}

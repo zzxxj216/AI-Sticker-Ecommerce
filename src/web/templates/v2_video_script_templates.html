@@ -1,0 +1,149 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .vt-page { padding-top:14px; }
+  .vt-card { border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:16px; background:var(--surface); }
+  .vt-card.archived { opacity:.6; }
+  .vt-card-h { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+  .vt-card-h h3 { margin:0; font-size:15px; }
+  .vt-card-h .meta { font-size:11px; color:var(--text-muted); }
+  .vt-pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; margin-left:6px; }
+  .vt-pill.default { background:#fef3c7; color:#92400e; }
+  .vt-pill.archived { background:#e5e7eb; color:#374151; }
+  .vt-bp-table { width:100%; font-size:12px; border-collapse:collapse; margin-top:8px; }
+  .vt-bp-table th { background:var(--bg-subtle); padding:6px 8px; text-align:left; color:var(--text-secondary); }
+  .vt-bp-table td { padding:6px 8px; border-top:1px solid var(--line-soft); vertical-align:top; }
+  .vt-bp-table .kind { font-family:monospace; color:var(--accent-dark); font-weight:700; }
+  .vt-form { padding:14px; background:var(--bg-subtle); border:1px solid var(--line-soft); border-radius:8px; margin-top:12px; }
+  .vt-form label { display:block; font-size:11px; color:var(--text-muted); margin-bottom:3px; margin-top:8px; }
+  .vt-form input, .vt-form textarea, .vt-form select { width:100%; padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; box-sizing:border-box; font-family:inherit; }
+  .vt-form textarea { font-family:monospace; font-size:12px; resize:vertical; }
+  .vt-help { font-size:11px; color:var(--text-muted); margin-top:4px; line-height:1.6; }
+  details summary { cursor:pointer; padding:6px 10px; background:var(--bg-subtle); border-radius:6px; font-size:12px; font-weight:600; }
+</style>
+
+<div class="vt-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">B.1 · Video Script Templates</p>
+      <h1>视频脚本模板</h1>
+      <p class="page-subtitle">每个模板定义一套固定场景流水线（hook / 卡包 / 生成 / 使用 / CTA 等），AI 只填字幕和拍摄建议。可创建多个模板做 A/B 对比。</p>
+    </div>
+  </section>
+
+  <!-- 新建模板表单 -->
+  <section class="panel" style="padding:18px;margin-bottom:18px;">
+    <h3 style="margin:0 0 10px;font-size:15px;">＋ 新建模板</h3>
+    <details>
+      <summary>展开新建表单（粘贴 scene_blueprint JSON 创建）</summary>
+      <form method="post" action="/v2/video-script-templates/save" class="vt-form">
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">
+          <div>
+            <label>模板名称</label>
+            <input type="text" name="name" required placeholder="例如：贴纸 5 段式标准模板（30-35s）">
+          </div>
+          <div>
+            <label>音乐风格</label>
+            <input type="text" name="music_style" placeholder="例如：soft uplifting vlog 95-110 bpm">
+          </div>
+        </div>
+        <label>描述</label>
+        <textarea name="description" rows="2" placeholder="一句话说明这套模板的适用场景"></textarea>
+        <label>场景蓝图 JSON（必填，每场含 kind / label / duration_s / intent / visual_brief）</label>
+        <textarea name="scene_blueprint" rows="14" required>[
+  {"kind":"hook","label":"Hook 开场","duration_s":3,
+   "intent":"1 秒钩住注意力","visual_brief":"单张梗贴大字幕 POV..."},
+  {"kind":"pack_showcase","label":"完整卡包展示","duration_s":7,
+   "intent":"展示数量与款式","visual_brief":"桌面平铺整包从上扫过 + 字幕标数量"},
+  {"kind":"production","label":"生成环节","duration_s":10,
+   "intent":"建立信任 + 工艺感","visual_brief":"AI 设计稿屏录 → 打印切割 → 包装"},
+  {"kind":"use_demo","label":"成品使用","duration_s":10,
+   "intent":"场景代入激发购买","visual_brief":"贴 laptop / 水杯 / 手账 / 手机壳"},
+  {"kind":"cta","label":"CTA 收尾","duration_s":5,
+   "intent":"明确转化指令","visual_brief":"包装定格 + Tap to shop ↑"}
+]</textarea>
+        <p class="vt-help">
+          <b>kind 推荐值</b>：<code>hook</code> / <code>pack_showcase</code> / <code>production</code> / <code>use_demo</code> / <code>cta</code> / <code>testimonial</code> / <code>comparison</code>。任何字符串都可以，仅做语义标记。<br>
+          <b>duration_s</b>：每场建议 3-15 秒，全片建议 ≤60 秒。
+        </p>
+        <label style="margin-top:12px;">
+          <input type="checkbox" name="is_default" value="1" style="width:auto;margin-right:6px;">
+          设为默认模板（视频详情页会预选这个）
+        </label>
+        <button type="submit" style="margin-top:12px;padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">＋ 保存模板</button>
+      </form>
+    </details>
+  </section>
+
+  {% for t in tpl_list %}
+  <div class="vt-card {% if t.is_archived %}archived{% endif %}" id="tpl-{{ t.id }}">
+    <div class="vt-card-h">
+      <div>
+        <h3>{{ t.name }}
+          {% if t.is_default %}<span class="vt-pill default">★ 默认</span>{% endif %}
+          {% if t.is_archived %}<span class="vt-pill archived">已归档</span>{% endif %}
+        </h3>
+        <div class="meta" style="margin-top:4px;">
+          {{ t.scene_count }} 场 · 总时长 {{ t.total_duration_s }}s · 音乐风格：{{ t.music_style or '—' }}
+        </div>
+        {% if t.description %}<div class="meta" style="margin-top:3px;">{{ t.description }}</div>{% endif %}
+      </div>
+      <div style="display:flex;gap:6px;">
+        <form method="post" action="/v2/video-script-templates/{{ t.id }}/delete" style="display:inline;"
+              onsubmit="return confirm('删除模板「{{ t.name }}」？{% if t.is_default %}默认模板会被归档而非删除。{% endif %}');">
+          <button type="submit" style="padding:6px 14px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">{% if t.is_default %}归档{% else %}删除{% endif %}</button>
+        </form>
+      </div>
+    </div>
+
+    <table class="vt-bp-table">
+      <thead><tr><th style="width:40px;">#</th><th style="width:90px;">kind</th><th>label</th><th style="width:60px;">时长</th><th>意图 / 画面建议</th></tr></thead>
+      <tbody>
+        {% for sc in t.scene_blueprint %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><span class="kind">{{ sc.kind }}</span></td>
+          <td>{{ sc.label }}</td>
+          <td>{{ sc.duration_s }}s</td>
+          <td>
+            {% if sc.intent %}<div><b>意图：</b>{{ sc.intent }}</div>{% endif %}
+            {% if sc.visual_brief %}<div style="color:var(--text-muted);"><b>画面：</b>{{ sc.visual_brief }}</div>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <details style="margin-top:12px;">
+      <summary>编辑此模板</summary>
+      <form method="post" action="/v2/video-script-templates/save" class="vt-form">
+        <input type="hidden" name="template_id" value="{{ t.id }}">
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">
+          <div>
+            <label>模板名称</label>
+            <input type="text" name="name" value="{{ t.name }}" required>
+          </div>
+          <div>
+            <label>音乐风格</label>
+            <input type="text" name="music_style" value="{{ t.music_style }}">
+          </div>
+        </div>
+        <label>描述</label>
+        <textarea name="description" rows="2">{{ t.description }}</textarea>
+        <label>场景蓝图 JSON</label>
+        <textarea name="scene_blueprint" rows="12" required>{{ t.scene_blueprint | tojson(indent=2) }}</textarea>
+        <label style="margin-top:12px;">
+          <input type="checkbox" name="is_default" value="1" {% if t.is_default %}checked{% endif %} style="width:auto;margin-right:6px;">
+          设为默认模板
+        </label>
+        <button type="submit" style="margin-top:10px;padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">💾 保存修改</button>
+      </form>
+    </details>
+  </div>
+  {% else %}
+  <p class="muted" style="text-align:center;padding:40px 0;">暂无模板（不应出现 — 默认模板会自动创建）</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

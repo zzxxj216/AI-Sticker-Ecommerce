@@ -181,7 +181,14 @@ class PreviewGenService:
             pending = conn.execute(
                 """
                 SELECT id FROM pack_previews
-                 WHERE series_id = ? AND generation_status IN ('pending', 'error')
+                 WHERE series_id = ?
+                   AND (
+                        generation_status IN ('pending', 'error')
+                        OR (
+                            generation_status = 'generating'
+                            AND COALESCE(image_path, '') = ''
+                        )
+                   )
                  ORDER BY preview_idx
                 """,
                 (series_id,),
@@ -218,6 +225,77 @@ class PreviewGenService:
             conn.execute(
                 "UPDATE pack_previews SET generation_status = 'pending' WHERE id = ?",
                 (preview_id,),
+            )
+            conn.commit()
+        return self._generate_one_with_retry(preview_id, size)
+
+    def regenerate_preview_with_prompt(
+        self,
+        preview_id: int,
+        *,
+        prompt_text: str = "",
+        feedback_text: str = "",
+        use_ai: bool = False,
+        size: str = DEFAULT_IMAGE_SIZE,
+    ) -> dict[str, Any]:
+        """Update a preview prompt, optionally AI-refine it from feedback, then
+        regenerate the preview image in-place.
+
+        ``write_preview`` uses the same preview filename, so a successful run
+        overwrites the old image on disk while preserving the DB row.
+        """
+        prompt_text = (prompt_text or "").strip()
+        feedback_text = (feedback_text or "").strip()
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT pp.id, pp.prompt_text, pp.series_id, pp.preview_idx,
+                       s.style_anchor, s.palette, s.series_name
+                  FROM pack_previews pp
+                  JOIN pack_series   s ON s.id = pp.series_id
+                 WHERE pp.id = ?
+                """,
+                (preview_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"preview #{preview_id} not found")
+
+        base_prompt = prompt_text or row["prompt_text"] or ""
+        if use_ai and feedback_text:
+            ai_prompt = (
+                "You are improving an image-generation prompt for a sticker-pack "
+                "preview image. Keep the same overall sticker-pack production format, "
+                "but incorporate the user's feedback. Return ONLY the final prompt, "
+                "no markdown, no commentary.\n\n"
+                f"Series name: {row['series_name'] or ''}\n"
+                f"Style anchor:\n{row['style_anchor'] or ''}\n\n"
+                f"Palette:\n{row['palette'] or ''}\n\n"
+                f"Current prompt:\n{base_prompt}\n\n"
+                f"User feedback / desired change:\n{feedback_text}\n"
+            )
+            improved = self.router.text_complete(
+                ai_prompt,
+                system="Rewrite image prompts precisely and concisely.",
+                temperature=0.45,
+                max_tokens=6000,
+                task="preview_prompt:revise",
+                related_table="pack_previews",
+                related_id=preview_id,
+            ).strip()
+            if improved:
+                base_prompt = improved.strip().strip("`")
+
+        if not base_prompt:
+            raise ValueError("prompt_text cannot be empty")
+
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE pack_previews
+                   SET prompt_text = ?, generation_status = 'pending'
+                 WHERE id = ?
+                """,
+                (base_prompt, preview_id),
             )
             conn.commit()
         return self._generate_one_with_retry(preview_id, size)
@@ -572,7 +650,8 @@ class PreviewGenService:
             stickers = conn.execute(
                 """
                 SELECT id, sticker_idx, name, description, image_path,
-                       prompt_text, model_used, generation_status, generated_at
+                       prompt_text, model_used, generation_status, generated_at,
+                       is_selected
                   FROM pack_stickers
                  WHERE preview_id = ?
                  ORDER BY sticker_idx

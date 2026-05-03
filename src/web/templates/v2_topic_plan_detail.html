@@ -146,10 +146,9 @@ palette: {{ s.palette }}</pre>
 {% endif %}
 
 {% if plan.status == 'generating' %}
-<script>
-  // Plan AI gen runs ~30-90s in background; refresh until status flips.
-  setTimeout(function() { location.reload(); }, 8000);
-</script>
+<div class="v2-async-note" style="margin-bottom:16px;">
+  题材方案仍在后台生成中，页面不会自动刷新；稍后手动刷新查看结果。
+</div>
 {% endif %}
 
 <!-- raw markdown -->

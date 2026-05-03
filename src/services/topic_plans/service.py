@@ -27,6 +27,7 @@ from src.services.topic_plans.prompts import (
     build_extract_schema,
     build_main_prompt,
 )
+from src.services.preview_gen.prompts import build_preview_prompt
 
 logger = get_logger("service.topic_plans")
 
@@ -296,6 +297,7 @@ class TopicPlanService:
         *,
         topic_id: Optional[int] = None,
         status: Optional[str] = None,
+        query_substring: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
@@ -306,11 +308,21 @@ class TopicPlanService:
         if status and status != "all":
             clauses.append("p.status = ?")
             params.append(status)
+        if query_substring:
+            clauses.append("(t.topic_name LIKE ? OR t.source LIKE ? OR p.status LIKE ?)")
+            like = f"%{query_substring}%"
+            params.extend([like, like, like])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
         with _open_db(self.db_path) as conn:
             total = conn.execute(
-                f"SELECT COUNT(*) FROM topic_plans p {where}", tuple(params),
+                f"""
+                SELECT COUNT(*)
+                  FROM topic_plans p
+                  LEFT JOIN hot_topics t ON t.id = p.topic_id
+                  {where}
+                """,
+                tuple(params),
             ).fetchone()[0]
             rows = conn.execute(
                 f"""
@@ -368,11 +380,35 @@ class TopicPlanService:
 
             series_rows = conn.execute(
                 """
-                SELECT id, series_idx, series_name, style_anchor, palette,
-                       pack_archetype, priority, metadata_json, is_selected
-                  FROM pack_series
-                 WHERE plan_id = ?
-                 ORDER BY series_idx
+                SELECT s.id, s.series_idx, s.series_name, s.style_anchor, s.palette,
+                       s.pack_archetype, s.priority, s.metadata_json, s.is_selected,
+                       s.pack_uid,
+                       (SELECT p.id FROM packs p WHERE p.series_id = s.id LIMIT 1) AS pack_id,
+                       (SELECT COUNT(*) FROM pack_previews pp
+                         WHERE pp.series_id = s.id) AS preview_total_count,
+                       (SELECT COUNT(*) FROM pack_previews pp
+                         WHERE pp.series_id = s.id
+                           AND pp.generation_status = 'ok') AS preview_ok_count,
+                       (SELECT COUNT(*) FROM pack_previews pp
+                         WHERE pp.series_id = s.id
+                           AND pp.generation_status = 'pending') AS preview_pending_count,
+                       (SELECT COUNT(*) FROM pack_previews pp
+                         WHERE pp.series_id = s.id
+                           AND pp.generation_status = 'generating') AS preview_generating_count,
+                       (SELECT COUNT(*) FROM pack_previews pp
+                         WHERE pp.series_id = s.id
+                           AND pp.generation_status = 'error') AS preview_error_count,
+                       (SELECT COUNT(*) FROM pack_stickers ps
+                         JOIN pack_previews pp ON pp.id = ps.preview_id
+                        WHERE pp.series_id = s.id
+                          AND ps.generation_status = 'ok') AS sticker_ok_count,
+                       (SELECT COUNT(*) FROM pack_stickers ps
+                         JOIN pack_previews pp ON pp.id = ps.preview_id
+                        WHERE pp.series_id = s.id
+                          AND ps.generation_status = 'generating') AS sticker_generating_count
+                  FROM pack_series s
+                 WHERE s.plan_id = ?
+                 ORDER BY s.series_idx
                 """,
                 (plan_id,),
             ).fetchall()
@@ -383,6 +419,7 @@ class TopicPlanService:
                 sd["metadata"] = json.loads(sd.get("metadata_json") or "{}")
             except Exception:
                 sd["metadata"] = {}
+            sd["preview_expected_count"] = len(sd["metadata"].get("preview_briefs") or [])
             series.append(sd)
         plan["series"] = series
         return plan
@@ -466,6 +503,271 @@ class TopicPlanService:
                 "UPDATE pack_series SET is_selected = ? WHERE id = ?",
                 (1 if is_selected else 0, series_id),
             )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def add_manual_series(
+        self,
+        plan_id: int,
+        *,
+        series_name: str,
+        style_anchor: str = "",
+        palette: str = "",
+        pack_archetype: str = "",
+        priority: str = "medium",
+        positioning_cn: str = "",
+        title_en: str = "",
+        target_users_cn: list[str] | None = None,
+        target_audience_en: str = "",
+        preview_briefs: list[dict[str, Any]] | None = None,
+        is_selected: bool = True,
+    ) -> dict[str, Any]:
+        """Append one operator-authored series to an existing topic plan.
+
+        This is intentionally lightweight: it creates the pack_series row
+        directly, without calling AI. The preview_briefs structure is the same
+        one consumed by PreviewGenService.prepare_previews().
+        """
+        series_name = (series_name or "").strip()[:200]
+        if not series_name:
+            raise ValueError("series_name required")
+        if priority not in {"high", "medium", "low"}:
+            priority = "medium"
+        preview_briefs = preview_briefs or []
+        metadata = {
+            "positioning_cn":      positioning_cn or "",
+            "target_users_cn":     target_users_cn or [],
+            "title_en":            title_en or "",
+            "target_audience_en":  target_audience_en or "",
+            "preview_briefs":      preview_briefs,
+            "manual":              True,
+        }
+        with _open_db(self.db_path) as conn:
+            plan = conn.execute(
+                "SELECT id, series_payload FROM topic_plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+            if not plan:
+                raise ValueError(f"plan #{plan_id} not found")
+            next_idx = (
+                conn.execute(
+                    "SELECT COALESCE(MAX(series_idx), 0) + 1 FROM pack_series WHERE plan_id = ?",
+                    (plan_id,),
+                ).fetchone()[0]
+                or 1
+            )
+            cur = conn.execute(
+                """
+                INSERT INTO pack_series
+                    (plan_id, series_idx, series_name, style_anchor, palette,
+                     pack_archetype, priority, metadata_json, is_selected)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan_id,
+                    int(next_idx),
+                    series_name,
+                    style_anchor or "",
+                    palette or "",
+                    pack_archetype or "",
+                    priority,
+                    json.dumps(metadata, ensure_ascii=False),
+                    1 if is_selected else 0,
+                ),
+            )
+
+            # Keep series_payload roughly in sync for raw/detail inspection.
+            try:
+                payload = json.loads(plan["series_payload"] or "{}")
+            except Exception:
+                payload = {}
+            series_list = list(payload.get("series") or [])
+            series_list.append(
+                {
+                    "series_name": series_name,
+                    "style_anchor": style_anchor or "",
+                    "palette": palette or "",
+                    "pack_archetype": pack_archetype or "",
+                    "priority": priority,
+                    "positioning_cn": positioning_cn or "",
+                    "target_users_cn": target_users_cn or [],
+                    "title_en": title_en or "",
+                    "target_audience_en": target_audience_en or "",
+                    "preview_briefs": preview_briefs,
+                    "manual": True,
+                }
+            )
+            payload["series"] = series_list
+            conn.execute(
+                """
+                UPDATE topic_plans
+                   SET series_payload = ?,
+                       status = CASE WHEN status = 'generating' THEN 'ready' ELSE status END,
+                       updated_at = ?
+                 WHERE id = ?
+                """,
+                (json.dumps(payload, ensure_ascii=False), int(time.time()), plan_id),
+            )
+            conn.commit()
+            return {"series_id": int(cur.lastrowid), "series_idx": int(next_idx)}
+
+    def update_series(
+        self,
+        series_id: int,
+        *,
+        series_name: str,
+        style_anchor: str = "",
+        palette: str = "",
+        pack_archetype: str = "",
+        priority: str = "medium",
+        preview_briefs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Edit one existing series without re-running topic-plan AI."""
+        series_name = (series_name or "").strip()[:200]
+        if not series_name:
+            raise ValueError("series_name required")
+        if priority not in {"high", "medium", "low"}:
+            priority = "medium"
+        preview_briefs = preview_briefs or []
+
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, plan_id, series_idx, metadata_json
+                  FROM pack_series
+                 WHERE id = ?
+                """,
+                (series_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"series #{series_id} not found")
+            plan_id = int(row["plan_id"])
+            series_idx = int(row["series_idx"] or 0)
+
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                metadata = {}
+            metadata["preview_briefs"] = preview_briefs
+            metadata["edited"] = True
+            metadata["edited_at"] = int(time.time())
+
+            conn.execute(
+                """
+                UPDATE pack_series
+                   SET series_name = ?,
+                       style_anchor = ?,
+                       palette = ?,
+                       pack_archetype = ?,
+                       priority = ?,
+                       metadata_json = ?
+                 WHERE id = ?
+                """,
+                (
+                    series_name,
+                    style_anchor or "",
+                    palette or "",
+                    pack_archetype or "",
+                    priority,
+                    json.dumps(metadata, ensure_ascii=False),
+                    series_id,
+                ),
+            )
+
+            # If preview rows were already prepared but not successfully
+            # generated yet, refresh their prompt text so edits take effect.
+            for brief in preview_briefs:
+                try:
+                    preview_idx = int(brief.get("preview_idx") or 0)
+                except Exception:
+                    preview_idx = 0
+                if preview_idx <= 0:
+                    continue
+                prompt_text = build_preview_prompt(
+                    style_anchor=style_anchor or "",
+                    palette=palette or "",
+                    preview_theme=str(brief.get("theme") or ""),
+                    stickers=list(brief.get("stickers") or []),
+                )
+                conn.execute(
+                    """
+                    UPDATE pack_previews
+                       SET prompt_text = ?
+                     WHERE series_id = ?
+                       AND preview_idx = ?
+                       AND generation_status IN ('pending', 'error')
+                    """,
+                    (prompt_text, series_id, preview_idx),
+                )
+
+            plan_row = conn.execute(
+                "SELECT series_payload FROM topic_plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+            try:
+                payload = json.loads(plan_row["series_payload"] or "{}") if plan_row else {}
+            except Exception:
+                payload = {}
+            series_list = list(payload.get("series") or [])
+            if 1 <= series_idx <= len(series_list):
+                item = dict(series_list[series_idx - 1] or {})
+                item.update(
+                    {
+                        "series_name": series_name,
+                        "style_anchor": style_anchor or "",
+                        "palette": palette or "",
+                        "pack_archetype": pack_archetype or "",
+                        "priority": priority,
+                        "preview_briefs": preview_briefs,
+                        "edited": True,
+                    }
+                )
+                series_list[series_idx - 1] = item
+                payload["series"] = series_list
+
+            conn.execute(
+                """
+                UPDATE topic_plans
+                   SET series_payload = ?,
+                       updated_at = ?
+                 WHERE id = ?
+                """,
+                (json.dumps(payload, ensure_ascii=False), int(time.time()), plan_id),
+            )
+            conn.commit()
+            return {"plan_id": plan_id, "series_id": series_id, "series_idx": series_idx}
+
+    def delete_plan(self, plan_id: int) -> bool:
+        """Delete a plan only when no downstream preview/pack rows depend on it."""
+        with _open_db(self.db_path) as conn:
+            exists = conn.execute(
+                "SELECT id FROM topic_plans WHERE id = ?", (plan_id,),
+            ).fetchone()
+            if not exists:
+                return False
+
+            previews = conn.execute(
+                """
+                SELECT COUNT(*) FROM pack_previews
+                 WHERE series_id IN (SELECT id FROM pack_series WHERE plan_id = ?)
+                """,
+                (plan_id,),
+            ).fetchone()[0]
+            packs = conn.execute(
+                """
+                SELECT COUNT(*) FROM packs
+                 WHERE series_id IN (SELECT id FROM pack_series WHERE plan_id = ?)
+                """,
+                (plan_id,),
+            ).fetchone()[0]
+            if previews or packs:
+                raise ValueError(
+                    f"plan #{plan_id} has downstream work "
+                    f"({previews} previews, {packs} packs); cannot delete"
+                )
+
+            conn.execute("DELETE FROM pack_series WHERE plan_id = ?", (plan_id,))
+            cur = conn.execute("DELETE FROM topic_plans WHERE id = ?", (plan_id,))
             conn.commit()
             return cur.rowcount > 0
 

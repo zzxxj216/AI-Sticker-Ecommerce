@@ -1,0 +1,146 @@
+﻿{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .feedback-page { padding-top: 14px; }
+  .feedback-grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px; margin-bottom:16px; }
+  .feedback-card { padding:14px 16px; }
+  .feedback-card span { display:block; color:var(--text-muted); font-size:12px; font-weight:700; }
+  .feedback-card strong { display:block; margin-top:6px; font-size:24px; font-variant-numeric:tabular-nums; }
+  .feedback-table-wrap { overflow:auto; max-height:calc(100vh - 330px); min-height:420px; }
+  .feedback-reason { max-width:460px; white-space:normal; line-height:1.55; }
+  .feedback-thumb { width:48px; height:48px; border-radius:var(--radius-sm); border:1px solid var(--line-soft); object-fit:contain; background:var(--bg-subtle); }
+  .feedback-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  @media (max-width: 900px) { .feedback-grid { grid-template-columns:1fr 1fr; } }
+  @media (max-width: 640px) { .feedback-grid { grid-template-columns:1fr; } }
+</style>
+
+<div class="feedback-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">QA · Feedback Collection</p>
+      <h1>反馈收集</h1>
+      <p class="page-subtitle">记录“不好的图 / 不好的整包”的原因；调度任务每 6 小时把新反馈标记为已收集，便于集中复盘。</p>
+    </div>
+    <form method="post" action="/v2/feedback/collect-now">
+      <input type="hidden" name="return_to" value="/v2/feedback?status={{ status_filter }}&target_type={{ target_type_filter }}&page={{ page }}&limit={{ limit }}">
+      <button type="submit" class="button">立即收集新反馈</button>
+    </form>
+  </section>
+
+  <div class="feedback-grid">
+    <div class="panel feedback-card"><span>待收集</span><strong>{{ stats.new }}</strong></div>
+    <div class="panel feedback-card"><span>已收集待处理</span><strong>{{ stats.collected }}</strong></div>
+    <div class="panel feedback-card"><span>已复盘</span><strong>{{ stats.reviewed }}</strong></div>
+    <div class="panel feedback-card"><span>总反馈</span><strong>{{ stats.total }}</strong></div>
+  </div>
+
+  <section class="panel" style="padding:16px 20px;margin-bottom:16px;">
+    <form method="get" action="/v2/feedback" class="v2-toolbar">
+      <div class="v2-field" style="min-width:180px;">
+        <label for="feedback-status">状态</label>
+        <select id="feedback-status" name="status" class="v2-select">
+          {% for st, label in [('open','待处理'),('new','待收集'),('collected','已收集'),('reviewed','已复盘'),('closed','已关闭'),('all','全部')] %}
+          <option value="{{ st }}" {% if status_filter == st %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="v2-field" style="min-width:180px;">
+        <label for="feedback-type">对象</label>
+        <select id="feedback-type" name="target_type" class="v2-select">
+          {% for tp, label in [('all','全部'),('pack','整包'),('preview','全图/预览'),('sticker','单张贴纸')] %}
+          <option value="{{ tp }}" {% if target_type_filter == tp %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="v2-field" style="min-width:120px;">
+        <label for="feedback-limit">每页</label>
+        <select id="feedback-limit" name="limit" class="v2-select">
+          {% for n in [25,50,100] %}<option value="{{ n }}" {% if limit == n %}selected{% endif %}>{{ n }} 条</option>{% endfor %}
+        </select>
+      </div>
+      <input type="hidden" name="page" value="1">
+      <div class="v2-action-row">
+        <button type="submit" class="button">筛选</button>
+        <a href="/v2/feedback" class="button ghost">重置</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" style="padding:0;">
+    <div class="feedback-table-wrap">
+      <table style="min-width:980px;">
+        <thead>
+          <tr>
+            <th style="width:80px;">ID</th>
+            <th style="width:92px;">对象</th>
+            <th style="width:76px;">缩略图</th>
+            <th style="min-width:180px;">卡包</th>
+            <th style="width:140px;">类型</th>
+            <th style="min-width:360px;">原因</th>
+            <th style="width:130px;">时间</th>
+            <th style="width:110px;">状态</th>
+            <th style="width:220px;text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in feedbacks %}
+          <tr>
+            <td class="mono-cell">#{{ f.id }}</td>
+            <td>{{ {'pack':'整包','preview':'全图','sticker':'单张'}[f.target_type] if f.target_type in ['pack','preview','sticker'] else f.target_type }} #{{ f.target_id }}</td>
+            <td>
+              {% if f.asset_url %}<img class="feedback-thumb" src="{{ f.asset_url }}" alt="feedback asset {{ f.id }}" loading="lazy">{% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td>
+              {% if f.pack_id %}<a class="text-link" href="/v2/packs/{{ f.pack_id }}">#{{ f.pack_id }} {{ f.pack_name or '' }}</a>{% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td><span class="v2-status-pill pending">{{ f.rating or '反馈' }}</span></td>
+            <td class="feedback-reason">{{ f.reason }}</td>
+            <td class="muted">{{ f.created_human or '—' }}</td>
+            <td><span class="v2-status-pill {% if f.status == 'new' %}running{% elif f.status == 'reviewed' %}ok{% elif f.status == 'closed' %}error{% else %}pending{% endif %}">{{ {'new':'待收集','collected':'已收集','reviewed':'已复盘','closed':'已关闭'}[f.status] if f.status in ['new','collected','reviewed','closed'] else f.status }}</span></td>
+            <td>
+              <div class="feedback-actions">
+                {% if f.status != 'collected' %}
+                <form method="post" action="/v2/feedback/{{ f.id }}/status">
+                  <input type="hidden" name="return_to" value="/v2/feedback?status={{ status_filter }}&target_type={{ target_type_filter }}&page={{ page }}&limit={{ limit }}">
+                  <input type="hidden" name="status" value="collected">
+                  <button type="submit" class="btn-sm">标为已收集</button>
+                </form>
+                {% endif %}
+                {% if f.status != 'reviewed' %}
+                <form method="post" action="/v2/feedback/{{ f.id }}/status">
+                  <input type="hidden" name="return_to" value="/v2/feedback?status={{ status_filter }}&target_type={{ target_type_filter }}&page={{ page }}&limit={{ limit }}">
+                  <input type="hidden" name="status" value="reviewed">
+                  <button type="submit" class="btn-sm">已复盘</button>
+                </form>
+                {% endif %}
+                {% if f.status != 'closed' %}
+                <form method="post" action="/v2/feedback/{{ f.id }}/status">
+                  <input type="hidden" name="return_to" value="/v2/feedback?status={{ status_filter }}&target_type={{ target_type_filter }}&page={{ page }}&limit={{ limit }}">
+                  <input type="hidden" name="status" value="closed">
+                  <button type="submit" class="btn-sm">关闭</button>
+                </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" style="padding:34px;text-align:center;color:var(--text-muted);">暂无反馈。可以在卡包管理中对整包、全图或单张贴纸记录原因。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if pagination.pages > 1 %}
+    <div class="v2-toolbar" style="padding:14px 20px;border-top:1px solid var(--line-soft);">
+      <div class="muted">显示 {{ offset + 1 if total else 0 }}–{{ [offset + limit, total]|min }} / {{ total }} 条</div>
+      <div class="v2-action-row">
+        {% if pagination.page > 1 %}<a class="button ghost" href="{{ pagination.prev_url }}">上一页</a>{% endif %}
+        {% if pagination.page < pagination.pages %}<a class="button ghost" href="{{ pagination.next_url }}">下一页</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+{% endblock %}
