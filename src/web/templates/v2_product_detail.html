@@ -8,7 +8,7 @@
     <p class="page-subtitle">
       pack <a href="/v2/packs/{{ product.pack_id }}" style="color:var(--accent);">#{{ product.pack_id }}</a>
       · pack_uid <code>{{ product.pack_uid }}</code>
-      · <span class="v2-status-pill {% if product.publish_status == 'published' %}ok{% elif product.publish_status == 'failed' %}error{% elif product.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ product.publish_status }}</span>
+      · <span class="v2-status-pill {{ status_pill_cls(product.publish_status) }}">{{ status_label_zh(product.publish_status) }}</span>
       {% if product.tiktok_product_id %}· tiktok_id: <code>{{ product.tiktok_product_id }}</code>{% endif %}
     </p>
   </div>
@@ -477,7 +477,7 @@
     <div>
       <h3 style="margin:0;font-size:16px;">TKShop 平台控制</h3>
       <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">当前状态：
-        <span id="publish-status-pill" class="v2-status-pill {% if product.publish_status == 'published' %}ok{% elif product.publish_status == 'failed' %}error{% elif product.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ product.publish_status }}</span>
+        <span id="publish-status-pill" class="v2-status-pill {{ status_pill_cls(product.publish_status) }}">{{ status_label_zh(product.publish_status) }}</span>
         {% if product.tiktok_product_id %}
         · <code style="font-size:11px;color:var(--text-muted);">{{ product.tiktok_product_id }}</code>
         {% endif %}
@@ -485,7 +485,7 @@
     </div>
     {% if product.tiktok_product_id %}
     <button type="button" id="btn-sync-status"
-            style="padding:6px 12px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-size:12px;cursor:pointer;">🔄 同步平台状态</button>
+            style="padding:6px 12px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;font-size:12px;cursor:pointer;">🔄 同步平台状态</button>
     {% endif %}
   </div>
 
@@ -505,13 +505,45 @@
               style="padding:10px 22px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:14px;">🚀 发布并上架</button>
     </form>
     <span style="color:var(--text-muted);font-size:12px;">尚未在 TikTok 创建。<br>「📝 草稿」= 仅创建不可见；「🚀 发布」= 创建并立即上架。</span>
-    {% else %}
-    <!-- 已发布：上架/下架 + 推送更新 -->
+    {% elif product.publish_status == 'draft_on_platform' %}
+    <!-- 平台草稿。TikTok 不允许 DRAFT → activate；要上架必须重建为 LISTING。 -->
+    <span style="padding:6px 10px;background:var(--accent-bg);border:1px solid var(--accent-glow);border-radius:6px;font-size:12px;color:var(--accent-dark);font-weight:600;">📝 平台草稿（id={{ product.tiktok_product_id }}）</span>
+    <span style="color:var(--text);font-size:12px;">商品已在 TikTok 创建为草稿，买家不可见。TikTok 不允许把草稿直接上架。</span>
+    <form method="post" action="/v2/products/{{ product.id }}/republish" style="display:inline-flex;gap:8px;margin:0;">
+      <button type="submit" name="auto_activate" value="1"
+              onclick="return confirm('删除当前平台草稿并重新创建为 LIVE（直接上架，买家可见）。继续?');"
+              style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 重建并上架</button>
+    </form>
+    {% elif product.publish_status == 'pending' %}
+    <span style="padding:6px 10px;background:var(--warning-bg);border:1px solid var(--warning-border);border-radius:6px;font-size:12px;color:var(--warning);font-weight:600;">⏳ 平台审核中（id={{ product.tiktok_product_id }}）</span>
+    <span style="color:var(--text);font-size:12px;">TikTok 正在审核，通过后会变成「已上架销售中」。无法在审核期间手动操作。</span>
+    {% elif product.publish_status == 'seller_deactivated' or product.publish_status == 'suspended' %}
+    <!-- SUSPENDED — TikTok activate API 可以把它恢复成 LIVE。 -->
+    <span style="padding:6px 10px;background:var(--warning-bg);border:1px solid var(--warning-border);border-radius:6px;font-size:12px;color:var(--warning);font-weight:600;">⏸ {{ status_label_zh(product.publish_status) }}（id={{ product.tiktok_product_id }}）</span>
     <button type="button" id="btn-activate"
-            style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">▶ 上架（activate）</button>
+            style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">▶ 上架</button>
+    {% elif product.publish_status == 'deleted' %}
+    <!-- 平台已删除：旧 tt_id 失效，republish 会清掉再重建。 -->
+    <span style="padding:6px 10px;background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:6px;font-size:12px;color:var(--danger);font-weight:600;">🗑 平台已删除（旧 id={{ product.tiktok_product_id }}）</span>
+    <form method="post" action="/v2/products/{{ product.id }}/republish" style="display:inline-flex;gap:8px;margin:0;flex-wrap:wrap;">
+      <button type="submit" name="auto_activate" value="0"
+              onclick="return confirm('在 TikTok 重新创建为草稿（buyer 不可见）。继续?');"
+              style="padding:8px 16px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">📝 重新保存到平台草稿</button>
+      <button type="submit" name="auto_activate" value="1"
+              onclick="return confirm('在 TikTok 重新创建并直接上架（buyer 可见）。继续?');"
+              style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 重新发布并上架</button>
+    </form>
+    {% elif product.publish_status in ['published', 'activate', 'active', 'live'] %}
+    <!-- 真正在售：activate/deactivate 都有效。 -->
+    <button type="button" id="btn-activate"
+            style="padding:8px 16px;background:var(--success);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">▶ 上架</button>
     <button type="button" id="btn-deactivate"
-            style="padding:8px 16px;background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">⏸ 下架（deactivate）</button>
-    <span style="color:var(--text-muted);font-size:12px;">已发布。「上架」让商品对买家可见；「下架」临时隐藏（可再次上架）。修改了字段后用上方「📤 推送更新到 TikTok」同步。</span>
+            style="padding:8px 16px;background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">⏸ 下架</button>
+    <span style="color:var(--text);font-size:12px;">「上架」让商品对买家可见；「下架」临时隐藏（可再次上架）。修改字段后用上方「📤 推送更新到 TikTok」同步。</span>
+    {% else %}
+    <!-- 兜底：失败 / 上传中 / 未知 — 显示状态，不提供平台操作按钮。 -->
+    <span style="padding:6px 10px;background:var(--bg-subtle);border:1px solid var(--line);border-radius:6px;font-size:12px;color:var(--text);font-weight:600;">{{ status_label_zh(product.publish_status) }}（id={{ product.tiktok_product_id }}）</span>
+    <span style="color:var(--text);font-size:12px;">该状态下不提供平台操作。检查上方「最近一次发布失败」详情或先「🔄 同步平台状态」。</span>
     {% endif %}
   </div>
 
@@ -574,6 +606,21 @@
   const PID = {{ product.id }};
   const result = document.getElementById('publish-action-result');
   const pill = document.getElementById('publish-status-pill');
+  // Mirror of STATUS_LABELS_ZH in src/services/tkshop/service.py — keep in sync.
+  const STATUS_ZH = {
+    'draft':              ['本地草稿（未上传）',     'pending'],
+    'publishing':         ['上传中…',                'running'],
+    'failed':             ['上传失败',               'error'],
+    'draft_on_platform':  ['平台草稿（买家不可见）', 'pending'],
+    'pending':            ['平台审核中',             'running'],
+    'published':          ['已上架销售中',           'ok'],
+    'activate':           ['已上架销售中',           'ok'],
+    'active':             ['已上架销售中',           'ok'],
+    'live':               ['已上架销售中',           'ok'],
+    'seller_deactivated': ['已下架（可恢复）',       'pending'],
+    'suspended':          ['已下架（可恢复）',       'pending'],
+    'deleted':            ['平台已删除',             'error'],
+  };
 
   function setMsg(html, ok) {
     if (!result) return;
@@ -593,13 +640,17 @@
       const data = await r.json();
       if (data.ok) {
         setMsg(`✓ ${label} 成功`, true);
-        if (path === 'activate')   setPill('published', 'ok');
-        if (path === 'deactivate') setPill('suspended', 'pending');
+        if (path === 'activate')   { const [l, c] = STATUS_ZH['published']; setPill(l, c); }
+        if (path === 'deactivate') { const [l, c] = STATUS_ZH['seller_deactivated']; setPill(l, c); }
         if (path === 'sync_status' && data.remote_status) {
-          const cls = data.remote_status === 'live' ? 'ok' :
-                      (data.remote_status === 'deleted' || data.remote_status === 'failed') ? 'error' : 'pending';
-          setPill(data.remote_status, cls);
-          setMsg(`✓ 平台真实状态：<strong>${data.remote_status}</strong>`, true);
+          const local = (data.local_status || '').toLowerCase();
+          const [label, cls] = STATUS_ZH[local] || [local || data.remote_status, 'pending'];
+          setPill(label, cls);
+          setMsg(`✓ 已同步：<strong>${label}</strong>（TikTok=${data.remote_status}）`, true);
+          if (data.previous && data.previous !== local) {
+            // Local DB changed → reload so the buttons/branches re-render.
+            setTimeout(() => location.reload(), 800);
+          }
         }
       } else {
         const errMsg = data.error_message || data.error || '未知';

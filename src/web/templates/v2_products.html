@@ -135,7 +135,7 @@
               {% if p.tiktok_sku_id %}<div style="color:var(--text-muted);font-size:10px;margin-top:2px;">sku: <code>{{ p.tiktok_sku_id[:14] }}</code></div>{% endif %}
             </td>
             <td><code style="font-size:11px;color:var(--text-muted);">{{ p.tiktok_product_id or '—' }}</code></td>
-            <td><span class="v2-status-pill {% if p.publish_status == 'published' %}ok{% elif p.publish_status == 'failed' %}error{% elif p.publish_status == 'publishing' %}running{% else %}pending{% endif %}">{{ p.publish_status }}</span></td>
+            <td><span class="v2-status-pill {{ status_pill_cls(p.publish_status) }}">{{ status_label_zh(p.publish_status) }}</span></td>
             <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
             <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human or '—' }}</td>
             <td>

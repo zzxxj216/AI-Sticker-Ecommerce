@@ -47,6 +47,38 @@ logger = get_logger("service.tkshop")
 
 DEFAULT_DB_PATH = Path("data/ops_workbench.db")
 
+# Local publish_status vocabulary → Chinese label + pill class.
+# Single source of truth for both UI and API responses.
+# pill class refers to .v2-status-pill modifier in v2_base.html (ok/error/pending/running).
+STATUS_LABELS_ZH: dict[str, tuple[str, str]] = {
+    "draft":              ("本地草稿（未上传）",     "pending"),
+    "publishing":         ("上传中…",                "running"),
+    "failed":             ("上传失败",               "error"),
+    "draft_on_platform":  ("平台草稿（买家不可见）", "pending"),
+    "pending":            ("平台审核中",             "running"),
+    "published":          ("已上架销售中",           "ok"),
+    # Aliases for raw TikTok status passthroughs that older rows may still
+    # carry. New writes go through _local_status_from_tiktok() which folds
+    # them into 'published'.
+    "activate":           ("已上架销售中",           "ok"),
+    "active":             ("已上架销售中",           "ok"),
+    "live":               ("已上架销售中",           "ok"),
+    "seller_deactivated": ("已下架（可恢复）",       "pending"),
+    # Legacy rows that came from before sync-status normalization. New code
+    # writes 'seller_deactivated' instead — relabel for consistency.
+    "suspended":          ("已下架（可恢复）",       "pending"),
+    "deleted":            ("平台已删除",             "error"),
+    "unknown":            ("未知状态",               "error"),
+}
+
+
+def status_label_zh(status: str) -> str:
+    return STATUS_LABELS_ZH.get(status or "", (status or "—", "pending"))[0]
+
+
+def status_pill_cls(status: str) -> str:
+    return STATUS_LABELS_ZH.get(status or "", ("", "pending"))[1]
+
 # multi-channel-api FastAPI service. Defaults to localhost:8000 because
 # both processes run on the same box during development.
 TKSHOP_SERVER_URL = os.getenv("TKSHOP_SERVER_URL", "http://localhost:8000")
@@ -1342,8 +1374,11 @@ class TKShopService:
             if url:
                 image_urls.append(url)
             # Absolute path so mca can resolve regardless of its own cwd.
+            # Skip non-ASCII paths: mca's open() chokes on them ("ReadError"),
+            # and it does not fall back to image_urls. Letting the wrapper
+            # download via URL works for Unicode paths.
             abs_path = local if os.path.isabs(local) else os.path.abspath(local)
-            if os.path.isfile(abs_path):
+            if os.path.isfile(abs_path) and abs_path.isascii():
                 image_paths.append(abs_path)
 
         # Quantity: ship 100 per SKU by default. Operator can tune via
@@ -1480,20 +1515,32 @@ class TKShopService:
     def update_on_platform(self, product_id: int) -> dict[str, Any]:
         """Push local edits to TikTok for an already-published product.
         Reuses the same payload builder as ``publish``.
+
+        Preserves the current platform status:
+          * 'published' / activate aliases → save_mode=LISTING (stay live)
+          * 'draft_on_platform'            → save_mode=AS_DRAFT (stay draft)
+          * 'seller_deactivated'           → save_mode=LISTING then re-deactivate
+            (TikTok's PUT cannot keep a product suspended; we PUT live then
+            immediately call deactivate to restore the suspended state.)
         """
         with _open_db(self.db_path) as conn:
             row = conn.execute(
-                "SELECT tiktok_product_id FROM tkshop_products WHERE id = ?",
+                "SELECT tiktok_product_id, publish_status FROM tkshop_products WHERE id = ?",
                 (product_id,),
             ).fetchone()
             if not row:
                 raise ValueError(f"product #{product_id} not found")
             tt_id = (row["tiktok_product_id"] or "").strip()
+            prev_status = (row["publish_status"] or "").lower()
         if not tt_id:
             return {"ok": False, "error_code": "NOT_PUBLISHED",
                     "error_message": "product has no tiktok_product_id; publish first"}
 
         payload = self._build_publish_payload(product_id)
+        # Map current local status → desired auto_activate (= save_mode).
+        # Default LISTING for live products and the post-PUT-then-deactivate
+        # flow; AS_DRAFT only for products that were already draft on platform.
+        payload["auto_activate"] = (prev_status != "draft_on_platform")
         endpoint = (
             f"{TKSHOP_SERVER_URL.rstrip('/')}"
             f"/api/v1/tiktok/products/{tt_id}/sticker_update"
@@ -1533,6 +1580,24 @@ class TKShopService:
             response=resp_json, success=success,
             error_code=error_code, error_message=error_message,
         )
+        # Re-deactivate after a successful update if the product was
+        # 'seller_deactivated' before — TikTok's PUT bumps it back to LIVE.
+        if success and prev_status == "seller_deactivated":
+            try:
+                self._post_platform_action(product_id, "deactivate")
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE tkshop_products SET publish_status = 'seller_deactivated' WHERE id = ?",
+                        (product_id,),
+                    )
+                    conn.commit()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "post-update re-deactivate failed for product #%d: %s — "
+                    "product is LIVE on TikTok now; operator can manually deactivate.",
+                    product_id, e,
+                )
+
         return {
             "ok": success,
             "tiktok_product_id": tt_id,
@@ -1594,11 +1659,60 @@ class TKShopService:
         if result.get("ok"):
             with _open_db(self.db_path) as conn:
                 conn.execute(
-                    "UPDATE tkshop_products SET publish_status = 'suspended' WHERE id = ?",
+                    "UPDATE tkshop_products SET publish_status = 'seller_deactivated' WHERE id = ?",
                     (product_id,),
                 )
                 conn.commit()
         return result
+
+    def reset_for_republish(self, product_id: int) -> None:
+        """Clear platform-side IDs so the next publish() creates a fresh
+        listing instead of being short-circuited by the
+        publish_with_self_heal duplicate-guard. Used when the operator wants
+        to re-publish a product whose platform listing was deleted (or for
+        any reason should be re-created).
+        """
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE tkshop_products
+                   SET tiktok_product_id = '',
+                       tiktok_sku_id     = '',
+                       publish_status    = 'draft',
+                       published_at      = NULL
+                 WHERE id = ?
+                """,
+                (product_id,),
+            )
+            conn.commit()
+
+    @staticmethod
+    def _local_status_from_tiktok(remote: str) -> str:
+        """Map TikTok-side status to our local vocab.
+
+        Critically: TikTok 'DRAFT' must NOT map to local 'draft' — local 'draft'
+        means "never sent to platform" (UI shows the create-product buttons).
+        A product that exists on TikTok as a draft is 'draft_on_platform'.
+        Mirrors the mapping in publish() so sync_one_status and the publish
+        path agree.
+        """
+        ts = (remote or "").upper()
+        if ts == "DRAFT":
+            return "draft_on_platform"
+        if ts == "PENDING":
+            return "pending"
+        # LIVE is the documented "on sale" value; ACTIVATE / ACTIVE show up
+        # in real responses too — fold them all into 'published'.
+        if ts in ("LIVE", "ACTIVATE", "ACTIVE"):
+            return "published"
+        # TikTok lumps seller-initiated deactivation and platform violation
+        # suspension into the same SUSPENDED bucket — pick the friendlier
+        # interpretation since both are recoverable via the activate API.
+        if ts == "SUSPENDED":
+            return "seller_deactivated"
+        if ts == "DELETED":
+            return "deleted"
+        return remote.lower() or "unknown"
 
     def sync_one_status(self, product_id: int) -> dict[str, Any]:
         """Refresh the publish_status for a single product from TikTok."""
@@ -1616,15 +1730,17 @@ class TKShopService:
         if not result.get("ok"):
             return {"ok": False, "error_message": result.get("error", "fetch failed")}
         data = result.get("data") or {}
-        remote = (data.get("status") or "").strip().lower()
-        if remote and remote != (row["publish_status"] or "").lower():
+        remote = (data.get("status") or "").strip()
+        local = self._local_status_from_tiktok(remote)
+        if local and local != (row["publish_status"] or ""):
             with _open_db(self.db_path) as conn:
                 conn.execute(
                     "UPDATE tkshop_products SET publish_status = ? WHERE id = ?",
-                    (remote, product_id),
+                    (local, product_id),
                 )
                 conn.commit()
-        return {"ok": True, "remote_status": remote, "previous": row["publish_status"]}
+        return {"ok": True, "remote_status": remote, "local_status": local,
+                "previous": row["publish_status"]}
 
     def sync_statuses(self) -> dict[str, Any]:
         """C.4 — query multi-channel-api for status of every published product.
@@ -1665,12 +1781,13 @@ class TKShopService:
                 data = body.get("data") if isinstance(body, dict) else None
                 if not isinstance(data, dict):
                     data = body if isinstance(body, dict) else {}
-                remote = (data.get("status") or "").strip().lower()
-                if remote and remote != (r["publish_status"] or "").lower():
+                remote = (data.get("status") or "").strip()
+                local = self._local_status_from_tiktok(remote)
+                if local and local != (r["publish_status"] or ""):
                     with _open_db(self.db_path) as conn:
                         conn.execute(
                             "UPDATE tkshop_products SET publish_status = ? WHERE id = ?",
-                            (remote, r["id"]),
+                            (local, r["id"]),
                         )
                         conn.commit()
                     updated += 1

@@ -42,6 +42,7 @@ from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
 from src.services.tk_videos import get_tk_video_service
 from src.services.tkshop import get_tkshop_service
+from src.services.tkshop.service import status_label_zh, status_pill_cls
 from src.services.topic_plans import get_topic_plan_service
 from src.services.topic_synthesis import get_synthesis_service
 from src.services.topic_plans.service import (
@@ -57,6 +58,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 # Module-level templates instance (FastAPI app shares the same dir).
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.globals["status_label_zh"] = status_label_zh
+templates.env.globals["status_pill_cls"] = status_pill_cls
 
 router = APIRouter(prefix="/v2", tags=["v2"])
 
@@ -3654,6 +3657,59 @@ async def v2_product_publish(request: Request, product_id: int):
     )
     logger.info(
         "product #%d publish dispatched (auto_fix=%s, auto_activate=%s)",
+        product_id, auto_fix, auto_activate,
+    )
+    return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
+
+
+@router.post("/products/{product_id:int}/republish")
+async def v2_product_republish(request: Request, product_id: int):
+    """Re-create the product on TikTok from scratch.
+
+    Used when the platform listing is gone (status='deleted') or the
+    operator wants to start over. Clears the local tiktok_product_id /
+    tiktok_sku_id so publish_with_self_heal's duplicate-guard does not
+    short-circuit, then dispatches the same async publish flow as
+    /publish.
+
+    Form: auto_activate=0|1 (default 1), auto_fix=on|<absent>.
+    """
+    form = await request.form()
+    auto_activate_raw = (form.get("auto_activate") or "1").strip().lower()
+    auto_activate = auto_activate_raw not in ("0", "off", "false", "no")
+    auto_fix_raw = (form.get("auto_fix") or "").strip().lower()
+    auto_fix = auto_fix_raw in ("1", "on", "true", "yes")
+
+    svc = get_tkshop_service()
+    try:
+        svc.reset_for_republish(product_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"reset failed: {e}")
+
+    import sqlite3 as _sql
+    try:
+        conn = _sql.connect("data/ops_workbench.db")
+        conn.execute(
+            "UPDATE tkshop_products SET publish_status = 'publishing' WHERE id = ?",
+            (product_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("could not pre-mark publishing for product #%d: %s", product_id, e)
+
+    fn = svc.publish_with_self_heal if auto_fix else svc.publish
+    kwargs = {"auto_activate": auto_activate}
+    if not auto_fix:
+        kwargs["dry_run"] = False
+    run_async(
+        f"tkshop_publish:{product_id}",
+        fn, product_id,
+        label=f"重新发布到 TKShop (product #{product_id}, auto_activate={auto_activate})",
+        **kwargs,
+    )
+    logger.info(
+        "product #%d republish dispatched (auto_fix=%s, auto_activate=%s)",
         product_id, auto_fix, auto_activate,
     )
     return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
