@@ -205,6 +205,10 @@ class DailyStickerTopicService:
                   ON scheduled_jobs(job_name, started_at);
                 """
             )
+            # Idempotent ALTER for dismissed_at — older DBs may not have it.
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_sticker_topics)").fetchall()}
+            if "dismissed_at" not in cols:
+                conn.execute("ALTER TABLE daily_sticker_topics ADD COLUMN dismissed_at INTEGER")
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -368,6 +372,33 @@ class DailyStickerTopicService:
             run = self._run_row_to_dict(row)
             run["topics"] = self._list_topics_for_run(conn, run["id"])
             return run
+
+    def dismiss_topic(self, topic_id: int) -> bool:
+        """Mark a single daily-collect card as hidden. Does NOT touch the
+        underlying hot_topics row — operator may still want to act on it via
+        /v2/hot-topics/{id}.
+        """
+        self.ensure_schema()
+        with closing(self._open_db()) as conn:
+            cur = conn.execute(
+                "UPDATE daily_sticker_topics SET dismissed_at = ? "
+                "WHERE id = ? AND dismissed_at IS NULL",
+                (_now_ts(), int(topic_id)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def dismiss_run(self, run_id: str) -> int:
+        """Hide every still-visible card for this run. Returns rows hidden."""
+        self.ensure_schema()
+        with closing(self._open_db()) as conn:
+            cur = conn.execute(
+                "UPDATE daily_sticker_topics SET dismissed_at = ? "
+                "WHERE run_id = ? AND dismissed_at IS NULL",
+                (_now_ts(), str(run_id)),
+            )
+            conn.commit()
+            return cur.rowcount
 
     def list_runs(self, limit: int = 10) -> list[dict[str, Any]]:
         self.ensure_schema()
@@ -1214,6 +1245,7 @@ class DailyStickerTopicService:
             """
             SELECT * FROM daily_sticker_topics
              WHERE run_id = ?
+               AND dismissed_at IS NULL
              ORDER BY rank
             """,
             (run_id,),

@@ -135,18 +135,59 @@
   </div>
 
   {% if request.query_params.get('daily_started') %}
-  <div class="daily-run-note">已开始后台采集。页面会在 10 秒后自动刷新，你也可以稍后回到这里查看结果。</div>
-  <script>window.setTimeout(function(){ window.location.href = '/v2/hot-topics'; }, 10000);</script>
+  <div class="daily-run-note" id="daily-run-banner">已开始后台采集，等待 60–120 秒。任务结束会自动刷新本页。</div>
   {% elif request.query_params.get('daily_running') %}
-  <div class="daily-run-note">已有一个每日采集任务正在运行，请稍后刷新查看。</div>
+  <div class="daily-run-note" id="daily-run-banner">已有一个每日采集任务正在运行，结束后会自动刷新。</div>
+  {% elif daily_collect_running %}
+  <div class="daily-run-note" id="daily-run-banner">采集任务进行中，结束后会自动刷新。</div>
+  {% endif %}
+
+  {% if daily_collect_running or request.query_params.get('daily_started') or request.query_params.get('daily_running') %}
+  <script>
+  (function(){
+    // Poll daily-status until the background task ends, then reload so the
+    // freshly-completed run replaces whatever stale topics are on screen.
+    let consecutiveDone = 0;
+    const banner = document.getElementById('daily-run-banner');
+    const tick = setInterval(async () => {
+      try {
+        const r = await fetch('/v2/hot-topics/daily-status', {cache:'no-store'});
+        const data = await r.json();
+        if (!data || data.running) {
+          consecutiveDone = 0;
+          if (banner && data && data.latest_run) {
+            const lr = data.latest_run;
+            const sel = (lr.selected_count != null ? lr.selected_count : '?');
+            banner.textContent = `采集进行中…当前已抓取 ${lr.total_results || 0} 条候选 / 选中 ${sel} 个话题（status=${lr.status || 'running'}）`;
+          }
+          return;
+        }
+        // Confirm twice (avoid race between INSERT/UPDATE) before reload.
+        consecutiveDone += 1;
+        if (consecutiveDone >= 2) {
+          clearInterval(tick);
+          window.location.href = '/v2/hot-topics';
+        }
+      } catch (e) { /* keep polling */ }
+    }, 5000);
+  })();
+  </script>
   {% endif %}
 
   {% if daily_latest_run %}
-  <div class="v2-stat-strip" style="margin-top:14px;">
+  <div class="v2-stat-strip" style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
     <div class="v2-mini-stat"><span>最近日期</span><strong>{{ daily_latest_run.run_date }}</strong></div>
     <div class="v2-mini-stat"><span>状态</span><strong>{{ daily_latest_run.status }}</strong></div>
     <div class="v2-mini-stat"><span>搜索结果</span><strong>{{ daily_latest_run.total_results }}</strong></div>
     <div class="v2-mini-stat"><span>入库话题</span><strong>{{ daily_latest_run.selected_count }}</strong></div>
+    {% if daily_latest_run.topics %}
+    <button type="button" class="btn-sm" id="daily-dismiss-all"
+            data-run-id="{{ daily_latest_run.id }}"
+            style="margin-left:auto;color:var(--text-secondary);"
+            title="把这次采集的全部话题隐藏（hot_topics 数据保留，可在「热点池」继续操作）">
+      隐藏全部
+    </button>
+    {% endif %}
   </div>
 
   {% if daily_latest_run.error %}
@@ -157,7 +198,15 @@
 
   <div class="daily-topic-grid">
     {% for topic in daily_latest_run.topics %}
-    <article class="daily-topic-card">
+    <article class="daily-topic-card" data-topic-id="{{ topic.id }}" style="position:relative;">
+      <button type="button" class="daily-topic-dismiss"
+              data-topic-id="{{ topic.id }}"
+              title="隐藏这个话题（hot_topics 数据保留）"
+              style="position:absolute;top:8px;right:8px;width:24px;height:24px;
+                     display:inline-flex;align-items:center;justify-content:center;
+                     background:transparent;border:1px solid var(--line);border-radius:50%;
+                     color:var(--text-muted);font-size:14px;line-height:1;cursor:pointer;
+                     transition:background .12s,color .12s;">×</button>
       <div class="row-subtitle">#{{ topic.rank }} · {{ topic.created_human or daily_latest_run.finished_human }}</div>
       <h4>{{ topic.title }}</h4>
       <p>{{ topic.summary or '暂无摘要' }}</p>
@@ -195,6 +244,49 @@
     <div class="daily-run-note" style="grid-column:1 / -1;">最近一次运行还没有选出话题。</div>
     {% endfor %}
   </div>
+
+  <script>
+  (function(){
+    async function dismiss(url, card) {
+      try {
+        const r = await fetch(url, {method:'POST'});
+        const data = await r.json();
+        if (data && data.ok !== false) {
+          if (card) {
+            card.style.transition = 'opacity .25s, transform .25s';
+            card.style.opacity = '0';
+            card.style.transform = 'translateY(-4px)';
+            setTimeout(() => card.remove(), 260);
+          }
+          // If nothing left in the grid, reload so the empty-state note shows.
+          setTimeout(() => {
+            const grid = document.querySelector('.daily-topic-grid');
+            if (grid && !grid.querySelector('.daily-topic-card')) location.reload();
+          }, 300);
+        }
+      } catch (e) { alert('隐藏失败：' + e.message); }
+    }
+    document.querySelectorAll('.daily-topic-dismiss').forEach(btn => {
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--danger-bg)'; btn.style.color = 'var(--danger)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; btn.style.color = 'var(--text-muted)'; });
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.topicId;
+        const card = btn.closest('.daily-topic-card');
+        dismiss(`/v2/hot-topics/daily-topics/${id}/dismiss`, card);
+      });
+    });
+    const dismissAll = document.getElementById('daily-dismiss-all');
+    if (dismissAll) {
+      dismissAll.addEventListener('click', () => {
+        if (!confirm('隐藏本次采集的全部话题？hot_topics 数据保留，可在「热点池」继续操作。')) return;
+        const runId = dismissAll.dataset.runId;
+        fetch(`/v2/hot-topics/daily-runs/${encodeURIComponent(runId)}/dismiss-all`, {method:'POST'})
+          .then(r => r.json()).then(() => location.reload())
+          .catch(e => alert('隐藏失败：' + e.message));
+      });
+    }
+  })();
+  </script>
   {% else %}
   <div class="daily-run-note">
     还没有每日采集记录。点击“立即采集 Top 3”后，会生成当天 3 个贴纸包热点候选。

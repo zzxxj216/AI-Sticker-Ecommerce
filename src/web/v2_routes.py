@@ -935,6 +935,23 @@ def v2_hot_topics_daily_status():
     )
 
 
+@router.post("/hot-topics/daily-topics/{topic_id:int}/dismiss")
+async def v2_hot_topics_daily_topic_dismiss(topic_id: int):
+    """Hide a single daily-collect card. The linked hot_topics row stays
+    untouched so operator can still promote it from /v2/hot-topics/{id}.
+    """
+    svc = get_daily_sticker_topic_service()
+    ok = svc.dismiss_topic(topic_id)
+    return JSONResponse({"ok": ok, "topic_id": topic_id})
+
+
+@router.post("/hot-topics/daily-runs/{run_id}/dismiss-all")
+async def v2_hot_topics_daily_run_dismiss_all(run_id: str):
+    svc = get_daily_sticker_topic_service()
+    n = svc.dismiss_run(run_id)
+    return JSONResponse({"ok": True, "dismissed": n, "run_id": run_id})
+
+
 @router.get("/hot-topics/{topic_id:int}", response_class=HTMLResponse)
 def v2_hot_topic_detail(request: Request, topic_id: int):
     svc = get_hot_topic_service()
