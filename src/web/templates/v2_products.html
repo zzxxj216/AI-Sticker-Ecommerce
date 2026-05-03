@@ -20,9 +20,27 @@
   .product-title-cell a { color:var(--text); font-weight:700; text-decoration:none; }
   .product-title-cell a:hover { color:var(--accent); }
   .product-title-cell .pack { color:var(--text-muted); font-size:11px; margin-top:3px; }
-  .product-row-actions { display:flex; gap:6px; justify-content:flex-end; align-items:center; }
-  .product-row-actions a, .product-row-actions button { font-size:12px; }
+  /* Inline action buttons — uniform size, no wrap, sit on one tidy row. */
+  .product-row-actions {
+    display:inline-flex; gap:6px;
+    justify-content:flex-end; align-items:center;
+    flex-wrap:nowrap; white-space:nowrap;
+  }
   .product-row-actions form { display:inline; margin:0; }
+  .product-row-actions .row-btn {
+    display:inline-flex; align-items:center; justify-content:center;
+    height:26px; padding:0 10px;
+    background:var(--surface); color:var(--text);
+    border:1px solid var(--line); border-radius:6px;
+    font-size:12px; line-height:1; cursor:pointer;
+    text-decoration:none; white-space:nowrap;
+    transition:background .12s, border-color .12s, color .12s;
+  }
+  .product-row-actions .row-btn:hover { background:var(--bg-subtle); border-color:var(--accent-glow); }
+  .product-row-actions .row-btn.primary  { color:var(--accent-dark); border-color:var(--accent-glow); }
+  .product-row-actions .row-btn.primary:hover { background:var(--accent-bg); }
+  .product-row-actions .row-btn.danger   { color:var(--danger); border-color:var(--danger-border); }
+  .product-row-actions .row-btn.danger:hover  { background:var(--danger-bg); }
 </style>
 
 <div class="product-page">
@@ -140,17 +158,17 @@
             <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human or '—' }}</td>
             <td>
               <div class="product-row-actions">
-                <a href="/v2/products/{{ p.id }}" class="button ghost" style="padding:4px 10px;" title="编辑标题/描述/卖点/关键词/SKU">✏️ 编辑</a>
+                <a href="/v2/products/{{ p.id }}" class="row-btn" title="编辑标题/描述/卖点/关键词/SKU">✏️ 编辑</a>
                 {% if p.tiktok_product_id %}
                 <form method="post" action="/v2/products/{{ p.id }}/update_on_platform"
-                      onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（覆盖平台数据）。继续?');">
-                  <button type="submit" class="button ghost" style="padding:4px 10px;color:var(--accent);">📤 推送</button>
+                      onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（保留当前上架/草稿/下架状态）。继续?');">
+                  <button type="submit" class="row-btn primary" title="推送本地修改到 TikTok">📤 推送</button>
                 </form>
                 {% endif %}
                 <form method="post" action="/v2/products/{{ p.id }}/delete"
                       onsubmit="return confirm('删除产品 #{{ p.id }}（{{ (p.title or p.pack_name or '')[:40] }}）及其所有图片、发布日志、磁盘文件。{% if p.tiktok_product_id %}⚠ 已上架 TikTok（{{ p.tiktok_product_id }}），不会自动下架。{% endif %}\n\n确认删除?');">
                   <input type="hidden" name="back" value="/v2/products?status={{ status_filter or 'all' }}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}{% if q %}&q={{ q }}{% endif %}">
-                  <button type="submit" class="button ghost" style="padding:4px 10px;color:var(--danger);">删除</button>
+                  <button type="submit" class="row-btn danger" title="删除本地产品">🗑 删除</button>
                 </form>
               </div>
             </td>

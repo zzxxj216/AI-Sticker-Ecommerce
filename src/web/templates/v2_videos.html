@@ -18,7 +18,31 @@
   .video-cover { width:56px; height:56px; border-radius:var(--radius-md); border:1px solid var(--line-soft); object-fit:cover; background:var(--bg-subtle); }
   .video-empty-cover { display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:11px; }
   .video-title-cell { max-width:270px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .video-row-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; align-items:center; }
+  /* Inline action buttons — same pattern as v2_products.html .row-btn. */
+  .video-row-actions {
+    display:inline-flex; gap:6px;
+    justify-content:flex-end; align-items:center;
+    flex-wrap:nowrap; white-space:nowrap;
+  }
+  .video-row-actions form { display:inline; margin:0; }
+  .video-row-actions .row-btn {
+    display:inline-flex; align-items:center; justify-content:center;
+    height:26px; padding:0 10px;
+    background:var(--surface); color:var(--text);
+    border:1px solid var(--line); border-radius:6px;
+    font-size:12px; line-height:1; cursor:pointer;
+    text-decoration:none; white-space:nowrap;
+    transition:background .12s, border-color .12s, color .12s;
+  }
+  .video-row-actions .row-btn:hover { background:var(--bg-subtle); border-color:var(--accent-glow); }
+  .video-row-actions .row-btn.primary {
+    color:#fff;
+    background:linear-gradient(90deg,#8b5cf6,#ec4899);
+    border-color:transparent; font-weight:700;
+  }
+  .video-row-actions .row-btn.primary:hover { filter:brightness(1.05); }
+  .video-row-actions .row-btn.accent  { color:var(--accent-dark); border-color:var(--accent-glow); }
+  .video-row-actions .row-btn.accent:hover  { background:var(--accent-bg); }
   .video-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .video-form-grid .full { grid-column:1 / -1; }
   .video-form-stack { display:grid; grid-template-columns:1fr; gap:12px; }
@@ -129,7 +153,7 @@
             <th style="width:125px;">排期时间</th>
             <th style="width:125px;">发布时间</th>
             <th style="width:110px;">状态</th>
-            <th style="width:230px;text-align:right;">操作</th>
+            <th style="width:320px;text-align:right;">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -166,15 +190,14 @@
             <td><span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% elif v.publish_status == 'dispatching' %}running{% else %}pending{% endif %}">{{ v.publish_status }}</span></td>
             <td style="text-align:right;">
               <div class="video-row-actions">
-                <button type="button" class="btn-sm" data-open-dialog="video-detail-dialog-{{ v.id }}">详情</button>
-                <button type="button" class="btn-sm" data-open-dialog="video-detail-dialog-{{ v.id }}" data-scroll-to="vs-section-{{ v.id }}"
-                        style="background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;font-weight:700;">🎬 脚本{% if v.scripts %}({{ v.scripts|length }}){% endif %}</button>
+                <button type="button" class="row-btn" data-open-dialog="video-detail-dialog-{{ v.id }}">详情</button>
+                <button type="button" class="row-btn primary" data-open-dialog="video-detail-dialog-{{ v.id }}" data-scroll-to="vs-section-{{ v.id }}">🎬 脚本{% if v.scripts %}({{ v.scripts|length }}){% endif %}</button>
                 <form method="post" action="/v2/videos/{{ v.id }}/generate-caption" data-async-form data-pending-text="AI 分析中…">
                   <input type="hidden" name="return_to" value="{{ list_return_url }}">
                   <input type="hidden" name="sync" value="1">
-                  <button type="submit" class="btn-sm">AI 文案</button>
+                  <button type="submit" class="row-btn accent">AI 文案</button>
                 </form>
-                {% if v.video_url %}<button type="button" class="btn-sm" data-vp-url="{{ v.video_url }}" data-vp-title="#{{ v.id }} 视频文件">▶ 查看视频</button>{% endif %}
+                {% if v.video_url %}<button type="button" class="row-btn" data-vp-url="{{ v.video_url }}" data-vp-title="#{{ v.id }} 视频文件">▶ 查看视频</button>{% endif %}
               </div>
             </td>
           </tr>

@@ -1106,13 +1106,8 @@ class TKShopService:
 
         with _open_db(self.db_path) as conn:
             if success:
-                # Honor TikTok-side status: LIVE → 'published', DRAFT → 'draft_on_platform'.
-                ts = (tiktok_status or "").upper()
-                local_status = (
-                    "draft_on_platform" if ts == "DRAFT"
-                    else "pending"      if ts == "PENDING"
-                    else "published"
-                )
+                # Honor TikTok-side status. Single mapping shared with sync.
+                local_status = self._local_status_from_tiktok(tiktok_status or "")
                 conn.execute(
                     """
                     UPDATE tkshop_products
@@ -1699,7 +1694,9 @@ class TKShopService:
         ts = (remote or "").upper()
         if ts == "DRAFT":
             return "draft_on_platform"
-        if ts == "PENDING":
+        # TikTok uses several names for "under audit": INITIAL (just-created,
+        # pre-review), PENDING / PENDING_REVIEW / REVIEWING (active review).
+        if ts in ("INITIAL", "PENDING", "PENDING_REVIEW", "REVIEWING"):
             return "pending"
         # LIVE is the documented "on sale" value; ACTIVATE / ACTIVE show up
         # in real responses too — fold them all into 'published'.
