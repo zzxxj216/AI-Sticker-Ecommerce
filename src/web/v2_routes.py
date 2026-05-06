@@ -41,6 +41,10 @@ from src.web.background import is_running, list_running, run_async
 from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
 from src.services.tk_videos import get_tk_video_service
+from src.services.tk_videos.service import (
+    video_status_label_zh,
+    video_status_pill_cls,
+)
 from src.services.tkshop import get_tkshop_service
 from src.services.tkshop.service import (
     TKSHOP_DEFAULT_SHOP,
@@ -65,6 +69,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["status_label_zh"] = status_label_zh
 templates.env.globals["status_pill_cls"] = status_pill_cls
+templates.env.globals["video_status_label_zh"] = video_status_label_zh
+templates.env.globals["video_status_pill_cls"] = video_status_pill_cls
 templates.env.globals["tkshop_shops"] = TKSHOP_SHOPS
 templates.env.globals["tkshop_default_shop"] = TKSHOP_DEFAULT_SHOP
 
@@ -2734,6 +2740,37 @@ async def v2_video_generate_caption(request: Request, video_id: int):
     )
 
 
+@router.post("/videos/{video_id:int}/upload-video")
+async def v2_video_upload_video(request: Request, video_id: int):
+    """Replace (or initially upload) the local video file for a video row.
+    Multipart form with field ``video_file``.
+    """
+    form = await request.form()
+    upload = form.get("video_file")
+    if upload is None or not getattr(upload, "filename", ""):
+        raise HTTPException(status_code=400, detail="video_file is required")
+    svc = get_tk_video_service()
+    if not svc.get_video(video_id):
+        raise HTTPException(status_code=404, detail="video not found")
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / upload.filename
+    with open(tmp, "wb") as fh:
+        shutil.copyfileobj(upload.file, fh)
+    try:
+        svc.save_video_file(video_id, tmp, original_filename=upload.filename)
+    finally:
+        try:
+            tmp.unlink()
+            tmp.parent.rmdir()
+        except Exception:
+            pass
+    back = (form.get("return_to") or "").strip()
+    return RedirectResponse(
+        url=_safe_v2_redirect(back, f"/v2/videos/{video_id}"),
+        status_code=303,
+    )
+
+
 @router.post("/videos/{video_id:int}/select-caption-variant")
 async def v2_video_select_caption_variant(request: Request, video_id: int):
     """Pick one of the 4 AI-generated caption variants. Body field
@@ -2843,11 +2880,61 @@ async def v2_video_poll_status(request: Request, video_id: int):
 
 @router.post("/videos/{video_id:int}/schedule")
 async def v2_video_schedule(request: Request, video_id: int):
+    """Set scheduled_at on the row AND immediately push it to Blotato so
+    Blotato holds the post until that time. No local cron needed — Blotato
+    fires the post on schedule; ``GET /poll-status`` later picks up the
+    actual TikTok video id.
+
+    Pass ``scheduled_at=0`` (or empty + ``cancel=1``) to clear the schedule.
+    Cancellation only resets the local row — already-submitted Blotato
+    posts must be canceled in the Blotato dashboard.
+    """
     form = await request.form()
     ts = _parse_local_datetime(form.get("scheduled_at"))
+    cancel = ts <= 0 or (form.get("cancel") or "").strip() == "1"
+
     svc = get_tk_video_service()
+    if cancel:
+        if not svc.schedule_video(video_id, 0):
+            raise HTTPException(status_code=404, detail="video not found")
+        return RedirectResponse(
+            url=_safe_v2_redirect(form.get("return_to"), f"/v2/videos/{video_id}"),
+            status_code=303,
+        )
+
+    # Persist the schedule, then dispatch to Blotato in background — image
+    # upload + create_post can take 10-30s, no point blocking the redirect.
     if not svc.schedule_video(video_id, ts):
         raise HTTPException(status_code=404, detail="video not found")
+    run_async(
+        f"dispatch_now:{video_id}",
+        svc.dispatch_video,
+        video_id,
+        label=f"派发到 Blotato (排期, video #{video_id})",
+    )
+    return RedirectResponse(
+        url=_safe_v2_redirect(form.get("return_to"), f"/v2/videos/{video_id}"),
+        status_code=303,
+    )
+
+
+@router.post("/videos/{video_id:int}/publish-to-draft")
+async def v2_video_publish_to_draft(request: Request, video_id: int):
+    """Send the video to TikTok inbox/drafts via Blotato (target.isDraft=true).
+    Operator finalizes the post inside the TikTok app — no schedule, no
+    cron, no auto-publish.
+    """
+    form = await request.form()
+    svc = get_tk_video_service()
+    if not svc.get_video(video_id):
+        raise HTTPException(status_code=404, detail="video not found")
+    run_async(
+        f"dispatch_now:{video_id}",
+        svc.dispatch_video,
+        video_id,
+        is_draft=True,
+        label=f"上传到 TK 草稿 (video #{video_id})",
+    )
     return RedirectResponse(
         url=_safe_v2_redirect(form.get("return_to"), f"/v2/videos/{video_id}"),
         status_code=303,

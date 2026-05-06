@@ -39,6 +39,27 @@ PUBLISH_STATUSES = (
 )
 
 
+# Chinese labels + pill class for tk_videos.publish_status. Single source
+# of truth — UI templates and dropdowns both read from this map so the
+# operator sees consistent text everywhere.
+VIDEO_STATUS_LABELS_ZH: dict[str, tuple[str, str]] = {
+    "pending":           ("待办",            "pending"),
+    "scheduled":         ("已排期 (Blotato)", "pending"),
+    "dispatching":       ("派发中",          "running"),
+    "published":         ("已发布",          "ok"),
+    "draft_on_tiktok":   ("TK 草稿",         "pending"),
+    "failed":            ("失败",            "error"),
+}
+
+
+def video_status_label_zh(status: str) -> str:
+    return VIDEO_STATUS_LABELS_ZH.get(status or "", (status or "—", "pending"))[0]
+
+
+def video_status_pill_cls(status: str) -> str:
+    return VIDEO_STATUS_LABELS_ZH.get(status or "", ("", "pending"))[1]
+
+
 def _open_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -238,7 +259,7 @@ class TKVideoService:
                 prompt,
                 model=main_model,
                 system=CAPTION_MAIN_SYSTEM_PROMPT,
-                temperature=0.85,
+                temperature=0.75,
                 task="tk_caption:main",
                 related_table="tk_videos",
                 related_id=video_id,
@@ -514,8 +535,20 @@ class TKVideoService:
         return {"due": len(due), "ok": ok_n, "error": err_n,
                 "skipped": skipped, "errors": errors}
 
-    def dispatch_video(self, video_id: int) -> dict[str, Any]:
-        """Upload local file to Blotato + publish. Idempotent (no-op if already published)."""
+    def dispatch_video(self, video_id: int,
+                       is_draft: bool = False) -> dict[str, Any]:
+        """Upload local file to Blotato + publish. Idempotent (no-op if
+        already published).
+
+        When the row's ``scheduled_at`` is in the future, that timestamp is
+        forwarded to Blotato as ``scheduledTime`` and Blotato holds the post
+        until then — we do NOT need a local cron to wait. The local status
+        becomes 'scheduled' (with a real ``blotato_post_id``) and flips to
+        'published' once Blotato fires it.
+
+        ``is_draft=True`` sends the post to the operator's TikTok inbox /
+        drafts instead of publishing — they finalize from the TikTok app.
+        """
         from datetime import datetime, timezone
 
         # Local imports so the scheduler / web don't pull blotato unless needed
@@ -604,21 +637,39 @@ class TKVideoService:
                 media_urls=[public_url],
                 target_options=target_options,
                 scheduled_time=scheduled_iso,
+                is_draft=is_draft,
             )
             post_id = str(resp.get("postSubmissionId") or "")
+            # Pick the local status that matches what Blotato will do:
+            #  - is_draft=True       → 平台草稿（在 TikTok app 里手动发) → 'draft_on_tiktok'
+            #  - scheduled_iso set   → Blotato 等到那个时间再发 → 'scheduled'
+            #  - otherwise           → 立即发布 → 'published'
+            if is_draft:
+                local_status = "draft_on_tiktok"
+            elif scheduled_iso:
+                local_status = "scheduled"
+            else:
+                local_status = "published"
+            # published_at only for actually-published rows; scheduled/draft
+            # leave it NULL so the UI can show "未发布" until Blotato fires.
+            published_at = int(time.time()) if local_status == "published" else None
             with _open_db(self.db_path) as conn:
                 conn.execute(
                     """
                     UPDATE tk_videos
-                       SET blotato_post_id = ?, publish_status = 'published',
+                       SET blotato_post_id = ?, publish_status = ?,
                            published_at = ?, publish_error = ''
                      WHERE id = ?
                     """,
-                    (post_id, int(time.time()), video_id),
+                    (post_id, local_status, published_at, video_id),
                 )
                 conn.commit()
-            logger.info("video #%d dispatched → blotato post %s", video_id, post_id)
-            return {"ok": True, "blotato_post_id": post_id}
+            logger.info(
+                "video #%d dispatched → blotato post %s, local_status=%s",
+                video_id, post_id, local_status,
+            )
+            return {"ok": True, "blotato_post_id": post_id,
+                    "local_status": local_status}
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             logger.exception("video #%d dispatch failed", video_id)
@@ -783,6 +834,7 @@ class TKVideoService:
                 SELECT v.id, v.pack_id, v.account_open_id,
                        v.blotato_account_id, v.local_video_path,
                        v.video_one_liner, v.caption, v.hashtags,
+                       v.caption_variants, v.caption_variant_idx,
                        v.scheduled_at, v.blotato_post_id, v.tiktok_video_id,
                        v.publish_status, v.published_at, v.publish_error,
                        p.display_name AS pack_name, p.cover_image_path AS pack_cover
@@ -801,6 +853,10 @@ class TKVideoService:
                     d["hashtags"] = json.loads(d.get("hashtags") or "[]")
                 except Exception:
                     d["hashtags"] = []
+                try:
+                    d["caption_variants"] = json.loads(d.get("caption_variants") or "[]")
+                except Exception:
+                    d["caption_variants"] = []
                 if with_latest_metrics:
                     m = conn.execute(
                         """

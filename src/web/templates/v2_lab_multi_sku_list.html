@@ -86,7 +86,7 @@
       <div class="lab-card-meta">
         <h4>#{{ p.id }} {{ p.title or '(未命名)' }}</h4>
         <div class="muted-line">
-          <span class="lab-status-pill {{ p.publish_status }}">{{ p.publish_status }}</span>
+          <span class="lab-status-pill {{ p.publish_status }}">{{ status_label_zh(p.publish_status) }}</span>
           {{ p.sku_count }} 个 SKU · 维度 <code>{{ p.sales_attribute_name }}</code>
           {% if p.topic_name %} · 来自热点 {{ p.topic_name }}{% endif %}
         </div>

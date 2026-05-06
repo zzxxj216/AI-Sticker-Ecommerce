@@ -235,11 +235,11 @@
             <td>{{ v.blotato_account_label }}</td>
             <td class="muted">{{ v.scheduled_human or '—' }}</td>
             <td class="muted">{{ v.published_human or '—' }}</td>
-            <td><span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% elif v.publish_status == 'dispatching' %}running{% else %}pending{% endif %}">{{ v.publish_status }}</span></td>
+            <td><span class="v2-status-pill {{ video_status_pill_cls(v.publish_status) }}">{{ video_status_label_zh(v.publish_status) }}</span></td>
             <td style="text-align:right;">
               <div class="video-row-actions">
                 <button type="button" class="row-btn" data-open-dialog="video-detail-dialog-{{ v.id }}">详情</button>
-                <button type="button" class="row-btn primary" data-open-dialog="video-detail-dialog-{{ v.id }}" data-scroll-to="vs-section-{{ v.id }}">🎬 脚本{% if v.scripts %}({{ v.scripts|length }}){% endif %}</button>
+                <button type="button" class="row-btn primary" data-open-dialog="video-script-dialog-{{ v.id }}">🎬 脚本{% if v.scripts %}({{ v.scripts|length }}){% endif %}</button>
                 <form method="post" action="/v2/videos/{{ v.id }}/generate-caption" data-async-form data-pending-text="AI 分析中…">
                   <input type="hidden" name="return_to" value="{{ list_return_url }}">
                   <input type="hidden" name="sync" value="1">
@@ -386,8 +386,18 @@
         <div class="video-info-card"><span>排期时间</span><strong>{{ v.scheduled_human or '未排期' }}</strong></div>
         <div class="video-info-card"><span>发布时间</span><strong>{{ v.published_human or '未发布' }}</strong></div>
         <div class="video-info-card"><span>视频文件</span>{% if v.video_url %}<strong><a class="text-link" href="#" data-vp-url="{{ v.video_url }}" data-vp-title="#{{ v.id }} 视频文件">▶ 弹窗播放</a></strong>{% else %}<strong>未上传</strong>{% endif %}</div>
-        <div class="video-info-card"><span>发布状态</span><strong><span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% elif v.publish_status == 'dispatching' %}running{% else %}pending{% endif %}">{{ v.publish_status }}</span></strong></div>
+        <div class="video-info-card"><span>发布状态</span><strong><span class="v2-status-pill {{ video_status_pill_cls(v.publish_status) }}">{{ video_status_label_zh(v.publish_status) }}</span></strong></div>
       </div>
+
+      <form method="post" action="/v2/videos/{{ v.id }}/upload-video" enctype="multipart/form-data"
+            class="v2-toolbar" style="margin-bottom:14px;padding:10px 12px;background:var(--bg-subtle);border:1px solid var(--line-soft);border-radius:8px;align-items:center;gap:8px;flex-wrap:wrap;"
+            onsubmit="return confirm('{% if v.local_video_path %}替换{% else %}上传{% endif %}该视频文件？');">
+        <input type="hidden" name="return_to" value="{{ list_return_url }}">
+        <span style="font-size:12px;font-weight:700;color:var(--text);white-space:nowrap;">📁 视频文件</span>
+        <input type="file" name="video_file" accept="video/mp4,video/quicktime,video/webm" required
+               class="v2-input" style="flex:1;min-width:200px;">
+        <button type="submit" class="button-secondary">{% if v.local_video_path %}替换文件{% else %}上传文件{% endif %}</button>
+      </form>
 
       <div class="video-callback-box" style="margin-bottom:14px;">
         <div class="v2-toolbar" style="align-items:flex-start;">
@@ -402,16 +412,22 @@
               {% if v.publish_error %}<div style="color:var(--danger);">error：{{ v.publish_error }}</div>{% endif %}
             </div>
           </div>
-          <div class="v2-action-row" style="justify-content:flex-end;">
+          <div class="v2-action-row" style="justify-content:flex-end;flex-wrap:wrap;gap:8px;">
             {% if v.local_video_path and v.publish_status not in ('published', 'dispatching') %}
-            <form method="post" action="/v2/videos/{{ v.id }}/dispatch-now">
+            <form method="post" action="/v2/videos/{{ v.id }}/dispatch-now"
+                  onsubmit="return confirm('立即发布到 TikTok（公开可见）？');">
               <input type="hidden" name="return_to" value="{{ list_return_url }}">
-              <button type="submit" class="button-secondary">立即派发</button>
+              <button type="submit" class="button" style="background:var(--success);color:#fff;border:none;font-weight:700;">🚀 立即发布</button>
+            </form>
+            <form method="post" action="/v2/videos/{{ v.id }}/publish-to-draft"
+                  onsubmit="return confirm('上传到 TikTok 草稿箱（不立即发布；在 TikTok 卖家中心 / 创作者中心可见，需手动确认发布）？');">
+              <input type="hidden" name="return_to" value="{{ list_return_url }}">
+              <button type="submit" class="button-secondary">📝 上传到 TK 草稿</button>
             </form>
             {% endif %}
             <form method="post" action="/v2/videos/{{ v.id }}/poll-status">
               <input type="hidden" name="return_to" value="{{ list_return_url }}">
-              <button type="submit" class="button-secondary">回查回调</button>
+              <button type="submit" class="button-secondary">🔄 回查回调</button>
             </form>
           </div>
         </div>
@@ -500,14 +516,15 @@
           </div>
           <div class="v2-action-row" style="justify-content:flex-end;margin-top:10px;"><button type="submit" class="button-secondary">保存信息</button></div>
         </form>
-        <form method="post" action="/v2/videos/{{ v.id }}/schedule" class="v2-toolbar" style="align-items:end;">
+        <form method="post" action="/v2/videos/{{ v.id }}/schedule" class="v2-toolbar" style="align-items:end;"
+              onsubmit="return confirm('设置排期 = 立刻提交给 Blotato 让平台等到那个时间再发，不需要本地定时器。继续?');">
           <input type="hidden" name="return_to" value="{{ list_return_url }}">
           <div class="v2-field" style="min-width:220px;">
-            <label for="schedule-{{ v.id }}">排期时间</label>
-            <input id="schedule-{{ v.id }}" class="v2-input" type="datetime-local" name="scheduled_at" value="{{ v.scheduled_value }}">
+            <label for="schedule-{{ v.id }}">⏰ 排期发布时间（Blotato 服务端排）</label>
+            <input id="schedule-{{ v.id }}" class="v2-input" type="datetime-local" name="scheduled_at" value="{{ v.scheduled_value }}" required>
           </div>
           <div class="v2-action-row">
-            <button type="submit" class="button">设置排期</button>
+            <button type="submit" class="button">⏰ 排期并提交</button>
           </div>
         </form>
         {% if v.scheduled_at %}
@@ -519,116 +536,130 @@
         {% endif %}
       </section>
 
-      <!-- 🎬 视频脚本面板（caption-only / 多变体 / docx 导出） -->
-      <section class="video-detail-section" id="vs-section-{{ v.id }}">
-        <div class="v2-toolbar" style="align-items:center;">
-          <h4>🎬 视频脚本（caption + b-roll，可导出 DOCX）{% if v.scripts %} · 已生成 {{ v.scripts|length }} 个变体{% endif %}</h4>
-          <a href="/v2/video-script-templates" class="button-secondary" style="font-size:11px;">⚙ 模板管理 ↗</a>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>关闭</button>
+    </div>
+  </dialog>
+
+  {# ───── 独立的 AI 视频脚本对话框 ─────
+     拆出来:脚本编辑/生成内容多、流程独立(模板→生成→分场调字幕→导出 docx),
+     塞在「详情」对话框里会让两个无关流程互相干扰。点列表上的「🎬 脚本」直接进这里。 #}
+  <dialog class="v2-dialog video-script-dialog" id="video-script-dialog-{{ v.id }}" aria-labelledby="video-script-title-{{ v.id }}">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="video-script-title-{{ v.id }}" style="margin:0;font-size:18px;">🎬 视频脚本 · #{{ v.id }} {{ v.pack_name or '—' }}</h3>
+        <p class="muted" style="margin-top:4px;">固定场景流水线 → AI 一次出 1-3 变体 → 每场可改字幕/画面建议/时长 → 导出 docx 给剪辑。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭脚本弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="v2-toolbar" style="align-items:center;margin-bottom:10px;">
+        <span class="muted" style="font-size:12px;">{% if v.scripts %}已生成 {{ v.scripts|length }} 个变体{% else %}尚未生成脚本{% endif %}</span>
+        <a href="/v2/video-script-templates" class="button-secondary" style="font-size:11px;margin-left:auto;">⚙ 模板管理 ↗</a>
+      </div>
+
+      <form method="post" action="/v2/videos/{{ v.id }}/scripts/generate"
+            style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;padding:12px 14px;background:var(--bg-subtle);border:1px solid var(--line-soft);border-radius:8px;margin-bottom:14px;">
+        <div class="v2-field" style="min-width:280px;flex:1;">
+          <label for="vs-tpl-{{ v.id }}">模板</label>
+          <select id="vs-tpl-{{ v.id }}" name="template_id" class="v2-select" required>
+            {% for t in script_templates %}
+            <option value="{{ t.id }}" {% if t.is_default %}selected{% endif %}>{{ t.name }}{% if t.is_default %} ★{% endif %} · {{ t.scene_count }} 场 / {{ t.total_duration_s }}s</option>
+            {% endfor %}
+          </select>
         </div>
-        <p class="muted" style="font-size:11px;margin:0 0 10px;">固定场景流水线 → AI 一次出 1-3 变体 → 每场可改字幕/画面建议/时长 → 导出 docx 给剪辑。</p>
+        <div class="v2-field" style="min-width:160px;">
+          <label for="vs-var-{{ v.id }}">变体数</label>
+          <select id="vs-var-{{ v.id }}" name="variants" class="v2-select">
+            <option value="A" selected>1 版（A）</option>
+            <option value="A,B">2 版（A,B）</option>
+            <option value="A,B,C">3 版（A,B,C）</option>
+          </select>
+        </div>
+        <button type="submit" class="button" style="background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;font-weight:700;">
+          🎬 AI 生成脚本{% if v.script_task_running %}（正在跑…）{% endif %}
+        </button>
+        {% if v.script_task_running %}
+        <span style="color:var(--accent);font-size:11px;">⏳ 后台运行中，回来刷新</span>
+        {% endif %}
+      </form>
 
-        <form method="post" action="/v2/videos/{{ v.id }}/scripts/generate"
-              style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;padding:12px 14px;background:var(--bg-subtle);border:1px solid var(--line-soft);border-radius:8px;margin-bottom:14px;">
-          <div class="v2-field" style="min-width:280px;flex:1;">
-            <label for="vs-tpl-{{ v.id }}">模板</label>
-            <select id="vs-tpl-{{ v.id }}" name="template_id" class="v2-select" required>
-              {% for t in script_templates %}
-              <option value="{{ t.id }}" {% if t.is_default %}selected{% endif %}>{{ t.name }}{% if t.is_default %} ★{% endif %} · {{ t.scene_count }} 场 / {{ t.total_duration_s }}s</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="v2-field" style="min-width:160px;">
-            <label for="vs-var-{{ v.id }}">变体数</label>
-            <select id="vs-var-{{ v.id }}" name="variants" class="v2-select">
-              <option value="A" selected>1 版（A）</option>
-              <option value="A,B">2 版（A,B）</option>
-              <option value="A,B,C">3 版（A,B,C）</option>
-            </select>
-          </div>
-          <button type="submit" class="button" style="background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;font-weight:700;">
-            🎬 AI 生成脚本{% if v.script_task_running %}（正在跑…）{% endif %}
-          </button>
-          {% if v.script_task_running %}
-          <span style="color:var(--accent);font-size:11px;">⏳ 后台运行中，回来刷新</span>
-          {% endif %}
-        </form>
+      {% if not v.scripts %}
+      <p class="muted" style="text-align:center;padding:30px 0;font-size:12px;">尚未生成脚本。选模板 + 变体数 → 点上方按钮（gpt-5.4，约 15-30 秒/变体）。</p>
+      {% endif %}
 
-        {% if not v.scripts %}
-        <p class="muted" style="text-align:center;padding:20px 0;font-size:12px;">尚未生成脚本。选模板 + 变体数 → 点上方按钮（gpt-5.4，约 15-30 秒/变体）。</p>
+      {% for s in v.scripts %}
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;background:var(--surface);" id="vs-script-{{ v.id }}-{{ s.id }}">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <div>
+            <strong>变体 <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(16,185,129,.12);color:#047857;font-size:11px;font-weight:700;">{{ s.variant_label }}</span> · {{ s.template_name }}</strong>
+            <div style="margin-top:5px;">
+              <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(99,102,241,.10);color:var(--accent-dark);font-size:11px;margin-right:6px;">⏱ {{ s.total_duration_s }}s</span>
+              <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:var(--bg-subtle);color:var(--text-secondary);font-size:11px;margin-right:6px;">{{ s.scenes|length }} 场</span>
+              <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:{% if s.status == 'approved' %}#d1fae5;color:#065f46{% elif s.status == 'archived' %}#e5e7eb;color:#374151{% else %}#fef3c7;color:#92400e{% endif %};">{{ {'draft':'草稿','approved':'已批准','archived':'已归档'}.get(s.status, s.status) }}</span>
+              <span style="color:var(--text-muted);font-size:11px;margin-left:8px;">{{ s.updated_human }}</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <a href="/v2/videos/scripts/{{ s.id }}/export.docx"
+               style="padding:6px 14px;background:#10b981;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;text-decoration:none;cursor:pointer;">📄 导出 DOCX</a>
+            <form method="post" action="/v2/videos/scripts/{{ s.id }}/status" style="display:inline;">
+              <input type="hidden" name="status" value="{% if s.status == 'approved' %}draft{% else %}approved{% endif %}">
+              <button type="submit" style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">{% if s.status == 'approved' %}↩ 撤回{% else %}✓ 批准{% endif %}</button>
+            </form>
+            <form method="post" action="/v2/videos/scripts/{{ s.id }}/delete" style="display:inline;"
+                  onsubmit="return confirm('删除此脚本变体？');">
+              <button type="submit" style="padding:6px 12px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🗑</button>
+            </form>
+          </div>
+        </div>
+
+        {% if s.music_suggestions %}
+        <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px;padding:8px 12px;background:rgba(99,102,241,.06);border-left:3px solid var(--accent);border-radius:4px;">
+          <b>🎵 背景音乐</b>（风格：{{ s.music_style or '—' }}）
+          <ul style="margin:4px 0 0 18px;padding:0;">
+            {% for m in s.music_suggestions %}
+            <li><b>{{ m.name }}</b>{% if m.mood %} — {{ m.mood }}{% endif %}{% if m.bpm %} · {{ m.bpm }}{% endif %}{% if m.note %} · {{ m.note }}{% endif %}</li>
+            {% endfor %}
+          </ul>
+        </div>
         {% endif %}
 
-        {% for s in v.scripts %}
-        <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;background:var(--surface);" id="vs-script-{{ v.id }}-{{ s.id }}">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-            <div>
-              <strong>变体 <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(16,185,129,.12);color:#047857;font-size:11px;font-weight:700;">{{ s.variant_label }}</span> · {{ s.template_name }}</strong>
-              <div style="margin-top:5px;">
-                <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(99,102,241,.10);color:var(--accent-dark);font-size:11px;margin-right:6px;">⏱ {{ s.total_duration_s }}s</span>
-                <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:var(--bg-subtle);color:var(--text-secondary);font-size:11px;margin-right:6px;">{{ s.scenes|length }} 场</span>
-                <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:{% if s.status == 'approved' %}#d1fae5;color:#065f46{% elif s.status == 'archived' %}#e5e7eb;color:#374151{% else %}#fef3c7;color:#92400e{% endif %};">{{ s.status }}</span>
-                <span style="color:var(--text-muted);font-size:11px;margin-left:8px;">{{ s.updated_human }}</span>
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;">
-              <a href="/v2/videos/scripts/{{ s.id }}/export.docx"
-                 style="padding:6px 14px;background:#10b981;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;text-decoration:none;cursor:pointer;">📄 导出 DOCX</a>
-              <form method="post" action="/v2/videos/scripts/{{ s.id }}/status" style="display:inline;">
-                <input type="hidden" name="status" value="{% if s.status == 'approved' %}draft{% else %}approved{% endif %}">
-                <button type="submit" style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">{% if s.status == 'approved' %}↩ 撤回{% else %}✓ 批准{% endif %}</button>
-              </form>
-              <form method="post" action="/v2/videos/scripts/{{ s.id }}/delete" style="display:inline;"
-                    onsubmit="return confirm('删除此脚本变体？');">
-                <button type="submit" style="padding:6px 12px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🗑</button>
-              </form>
-            </div>
+        {% for sc in s.scenes %}
+        <form method="post" action="/v2/videos/scripts/{{ s.id }}/edit-scene" style="border:1px solid var(--line-soft);border-radius:8px;padding:12px;margin-bottom:10px;">
+          <input type="hidden" name="scene_idx" value="{{ sc.idx }}">
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+            <span style="padding:2px 8px;border-radius:10px;background:var(--accent);color:#fff;font-size:11px;font-weight:700;">{{ sc.kind }}</span>
+            <span style="font-weight:700;font-size:13px;">场景 {{ sc.idx }} · {{ sc.label }}</span>
+            <label style="font-size:11px;color:var(--text-muted);margin-left:auto;">时长(秒):</label>
+            <input type="number" name="duration_s" value="{{ sc.duration_s }}" min="1" max="120"
+                   style="width:60px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;">
           </div>
-
-          {% if s.music_suggestions %}
-          <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px;padding:8px 12px;background:rgba(99,102,241,.06);border-left:3px solid var(--accent);border-radius:4px;">
-            <b>🎵 背景音乐</b>（风格：{{ s.music_style or '—' }}）
-            <ul style="margin:4px 0 0 18px;padding:0;">
-              {% for m in s.music_suggestions %}
-              <li><b>{{ m.name }}</b>{% if m.mood %} — {{ m.mood }}{% endif %}{% if m.bpm %} · {{ m.bpm }}{% endif %}{% if m.note %} · {{ m.note }}{% endif %}</li>
-              {% endfor %}
-            </ul>
+          {% if sc.intent %}<div style="font-size:11px;color:var(--text-muted);font-style:italic;margin-bottom:3px;">意图：{{ sc.intent }}</div>{% endif %}
+          {% if sc.visual_brief_template %}<div style="font-size:11px;color:var(--text-muted);font-style:italic;margin-bottom:6px;">📷 模板默认建议：{{ sc.visual_brief_template }}</div>{% endif %}
+          <div style="margin-top:8px;">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">屏幕字幕（caption，英文，≤200 字符）</label>
+            <input type="text" name="caption" value="{{ sc.caption }}" maxlength="200"
+                   style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;box-sizing:border-box;">
           </div>
-          {% endif %}
-
-          {% for sc in s.scenes %}
-          <form method="post" action="/v2/videos/scripts/{{ s.id }}/edit-scene" style="border:1px solid var(--line-soft);border-radius:8px;padding:12px;margin-bottom:10px;">
-            <input type="hidden" name="scene_idx" value="{{ sc.idx }}">
-            <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-              <span style="padding:2px 8px;border-radius:10px;background:var(--accent);color:#fff;font-size:11px;font-weight:700;">{{ sc.kind }}</span>
-              <span style="font-weight:700;font-size:13px;">场景 {{ sc.idx }} · {{ sc.label }}</span>
-              <label style="font-size:11px;color:var(--text-muted);margin-left:auto;">时长(秒):</label>
-              <input type="number" name="duration_s" value="{{ sc.duration_s }}" min="1" max="120"
-                     style="width:60px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;">
-            </div>
-            {% if sc.intent %}<div style="font-size:11px;color:var(--text-muted);font-style:italic;margin-bottom:3px;">意图：{{ sc.intent }}</div>{% endif %}
-            {% if sc.visual_brief_template %}<div style="font-size:11px;color:var(--text-muted);font-style:italic;margin-bottom:6px;">📷 模板默认建议：{{ sc.visual_brief_template }}</div>{% endif %}
-            <div style="margin-top:8px;">
-              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">屏幕字幕（caption，英文，≤200 字符）</label>
-              <input type="text" name="caption" value="{{ sc.caption }}" maxlength="200"
-                     style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;box-sizing:border-box;">
-            </div>
-            <div style="margin-top:8px;">
-              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">画面建议（b_roll_brief，操作员可读，中文）</label>
-              <textarea name="b_roll_brief" rows="2"
-                        style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;box-sizing:border-box;font-family:inherit;resize:vertical;">{{ sc.b_roll_brief }}</textarea>
-            </div>
-            <div style="margin-top:8px;">
-              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">Hashtags（逗号或换行分隔，无需 #）</label>
-              <input type="text" name="hashtags" value="{{ sc.hashtags|join(', ') }}"
-                     style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;box-sizing:border-box;">
-            </div>
-            <div style="margin-top:10px;display:flex;justify-content:flex-end;">
-              <button type="submit" style="padding:5px 14px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">💾 保存本场</button>
-            </div>
-          </form>
-          {% endfor %}
-        </div>
+          <div style="margin-top:8px;">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">画面建议（b_roll_brief，操作员可读，中文）</label>
+            <textarea name="b_roll_brief" rows="2"
+                      style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;box-sizing:border-box;font-family:inherit;resize:vertical;">{{ sc.b_roll_brief }}</textarea>
+          </div>
+          <div style="margin-top:8px;">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px;">Hashtags（逗号或换行分隔，无需 #）</label>
+            <input type="text" name="hashtags" value="{{ sc.hashtags|join(', ') }}"
+                   style="width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;box-sizing:border-box;">
+          </div>
+          <div style="margin-top:10px;display:flex;justify-content:flex-end;">
+            <button type="submit" style="padding:5px 14px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">💾 保存本场</button>
+          </div>
+        </form>
         {% endfor %}
-      </section>
+      </div>
+      {% endfor %}
     </div>
     <div class="v2-dialog-footer">
       <button type="button" class="button ghost" data-close-dialog>关闭</button>

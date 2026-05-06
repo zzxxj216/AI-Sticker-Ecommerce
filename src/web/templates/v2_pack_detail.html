@@ -186,7 +186,7 @@
         {% for v in pack.videos %}
         <li>
           <a class="text-link" href="/v2/videos/{{ v.id }}">#{{ v.id }} {{ (v.caption or '未填写 caption')[:50] }}</a>
-          <span class="v2-status-pill {% if v.publish_status == 'published' %}ok{% elif v.publish_status == 'failed' %}error{% else %}pending{% endif %}">{{ v.publish_status }}</span>
+          <span class="v2-status-pill {{ video_status_pill_cls(v.publish_status) }}">{{ video_status_label_zh(v.publish_status) }}</span>
         </li>
         {% endfor %}
       </ul>
@@ -197,7 +197,7 @@
         {% for pr in pack.products %}
         <li>
           <a class="text-link" href="/v2/products/{{ pr.id }}">#{{ pr.id }} {{ (pr.title or '未生成标题')[:50] }}</a>
-          <span class="v2-status-pill {% if pr.publish_status == 'published' %}ok{% elif pr.publish_status == 'failed' %}error{% else %}pending{% endif %}">{{ pr.publish_status }}</span>
+          <span class="v2-status-pill {{ status_pill_cls(pr.publish_status) }}">{{ status_label_zh(pr.publish_status) }}</span>
         </li>
         {% endfor %}
       </ul>

@@ -107,15 +107,23 @@ class BlotaToService:
         target_options: dict[str, Any],
         scheduled_time: str | None = None,
         use_next_free_slot: bool = False,
+        is_draft: bool = False,
     ) -> dict[str, Any]:
         """Publish a video post to TikTok via Blotato.
 
         ``target_options`` must include TikTok-required fields such as
         ``privacyLevel``, ``disabledComments``, etc.
 
+        Set ``is_draft=True`` to upload to TikTok inbox/drafts instead of
+        publishing — operator finalizes the post inside the TikTok app.
+        Set ``scheduled_time`` (ISO 8601) to let Blotato hold the post
+        until that moment; no local cron needed.
+
         Returns ``{"postSubmissionId": "..."}``.
         """
         target = {"targetType": "tiktok", **target_options}
+        if is_draft:
+            target["isDraft"] = True
 
         body: dict[str, Any] = {
             "post": {

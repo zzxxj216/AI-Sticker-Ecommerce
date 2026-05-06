@@ -32,7 +32,7 @@
       <p class="eyebrow">🧪 LAB · Multi-SKU Product</p>
       <h1>#{{ product.id }} {{ product.title or '(未命名)' }}</h1>
       <p class="page-subtitle">
-        <span class="lab-status-pill {{ product.publish_status }}">{{ product.publish_status }}</span>
+        <span class="lab-status-pill {{ product.publish_status }}">{{ status_label_zh(product.publish_status) }}</span>
         · 维度 <code>{{ product.sales_attribute_name }}</code>
         · {{ product.skus|length }} 个 SKU
         {% if product.tiktok_product_id %} · 平台 ID <code>{{ product.tiktok_product_id }}</code>{% endif %}
