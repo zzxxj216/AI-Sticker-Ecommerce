@@ -43,6 +43,54 @@
   .video-row-actions .row-btn.primary:hover { filter:brightness(1.05); }
   .video-row-actions .row-btn.accent  { color:var(--accent-dark); border-color:var(--accent-glow); }
   .video-row-actions .row-btn.accent:hover  { background:var(--accent-bg); }
+  /* AI 文案多风格变体网格 */
+  .caption-variant-grid {
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    gap:10px; margin:10px 0 4px;
+  }
+  .caption-variant-card {
+    border:1px solid var(--line); border-radius:var(--radius-md);
+    background:var(--surface); padding:12px;
+    display:flex; flex-direction:column; gap:8px;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .caption-variant-card.active {
+    border-color:var(--accent); background:var(--accent-bg);
+    box-shadow:0 0 0 2px var(--accent-glow);
+  }
+  .caption-variant-card .cv-head {
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .caption-variant-card .cv-style {
+    font-size:11px; font-weight:800; color:var(--accent-dark);
+    text-transform:uppercase; letter-spacing:.04em;
+  }
+  .caption-variant-card .cv-active-tag {
+    font-size:11px; font-weight:700; color:var(--accent);
+    background:var(--surface); padding:2px 8px; border-radius:var(--radius-pill);
+  }
+  .caption-variant-card .cv-caption {
+    margin:0; font-size:13px; line-height:1.5; color:var(--text);
+  }
+  .caption-variant-card .cv-tags {
+    display:flex; flex-wrap:wrap; gap:4px;
+  }
+  .caption-variant-card .cv-tags span {
+    font-size:10px; padding:2px 7px; border-radius:var(--radius-pill);
+    background:var(--bg-subtle); color:var(--text-secondary);
+    font-weight:600;
+  }
+  .caption-variant-card .cv-tip {
+    margin:0; font-size:11px; color:var(--text-muted); line-height:1.4;
+  }
+  .caption-variant-card .cv-pick-btn {
+    margin-top:auto; padding:6px 12px;
+    background:var(--surface); color:var(--accent-dark);
+    border:1px solid var(--accent-glow); border-radius:var(--radius-md);
+    font-size:12px; font-weight:700; cursor:pointer;
+    transition:background .12s;
+  }
+  .caption-variant-card .cv-pick-btn:hover { background:var(--accent-bg); }
   .video-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .video-form-grid .full { grid-column:1 / -1; }
   .video-form-stack { display:grid; grid-template-columns:1fr; gap:12px; }
@@ -375,9 +423,38 @@
           <form method="post" action="/v2/videos/{{ v.id }}/generate-caption" data-async-form data-pending-text="AI 分析中…">
             <input type="hidden" name="return_to" value="{{ list_return_url }}">
             <input type="hidden" name="sync" value="1">
-            <button type="submit" class="button-secondary">{% if v.caption %}重新 AI 分析{% else %}AI 分析生成{% endif %}</button>
+            <button type="submit" class="button-secondary">{% if v.caption_variants %}🎲 重新生成 4 种风格{% else %}🎲 AI 生成（4 种风格供选）{% endif %}</button>
           </form>
         </div>
+
+        {% if v.caption_variants %}
+        {# Variant picker grid — operator picks one and its caption +
+           hashtags become the publish-ready values. #}
+        {% set _style_labels = {'pov':'POV / 共情','showcase':'产品展示','trend':'趋势 / 梗','story':'小店 / 手作'} %}
+        <div class="caption-variant-grid">
+          {% for cv in v.caption_variants %}
+          {% set is_active = (v.caption_variant_idx == loop.index0) %}
+          <div class="caption-variant-card {% if is_active %}active{% endif %}">
+            <div class="cv-head">
+              <span class="cv-style">{{ _style_labels.get(cv.key) or cv.key }}</span>
+              {% if is_active %}<span class="cv-active-tag">✓ 已选</span>{% endif %}
+            </div>
+            <p class="cv-caption">{{ cv.caption }}</p>
+            {% if cv.hashtags %}
+            <div class="cv-tags">
+              {% for tag in cv.hashtags %}<span>{{ tag }}</span>{% endfor %}
+            </div>
+            {% endif %}
+            {% if cv.posting_tip %}<p class="cv-tip">💡 {{ cv.posting_tip }}</p>{% endif %}
+            {% if not is_active %}
+            <button type="button" class="cv-pick-btn" data-video-id="{{ v.id }}" data-variant-idx="{{ loop.index0 }}">选这个</button>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        <p class="muted" style="margin:10px 0 4px;font-size:11px;">下方 Caption / Hashtags 会跟随当前选中的风格；也可以手动微调后保存。</p>
+        {% endif %}
+
         <form method="post" action="/v2/videos/{{ v.id }}/edit-caption">
           <input type="hidden" name="return_to" value="{{ list_return_url }}">
           <div class="video-form-grid">
@@ -644,6 +721,31 @@
       }, 0);
     }
   })();
+
+  // Caption-variant pick: clicking "选这个" copies that variant's caption
+  // + hashtags into the publish-ready fields and reloads the dialog.
+  document.addEventListener('click', async function (e) {
+    const btn = e.target.closest('.cv-pick-btn');
+    if (!btn) return;
+    const vid = btn.dataset.videoId;
+    const idx = btn.dataset.variantIdx;
+    btn.disabled = true; btn.textContent = '...';
+    try {
+      const fd = new FormData();
+      fd.append('variant_idx', idx);
+      const r = await fetch(`/v2/videos/${vid}/select-caption-variant`, {method:'POST', body:fd});
+      const data = await r.json();
+      if (!r.ok || data.ok === false) {
+        alert('选择失败：' + (data.detail || data.error || '未知'));
+        btn.disabled = false; btn.textContent = '选这个';
+        return;
+      }
+      location.reload();
+    } catch (err) {
+      alert('请求失败：' + err.message);
+      btn.disabled = false; btn.textContent = '选这个';
+    }
+  });
 </script>
 
 {% include '_v2_video_player_modal.html' %}

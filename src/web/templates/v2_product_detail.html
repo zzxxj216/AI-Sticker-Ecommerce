@@ -8,6 +8,9 @@
     <p class="page-subtitle">
       pack <a href="/v2/packs/{{ product.pack_id }}" style="color:var(--accent);">#{{ product.pack_id }}</a>
       · pack_uid <code>{{ product.pack_uid }}</code>
+      {% if tkshop_shops|length > 1 %}
+      · 🏪 店铺 <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-weight:700;">{{ product.shop or 'main' }}</span>
+      {% endif %}
       · <span class="v2-status-pill {{ status_pill_cls(product.publish_status) }}">{{ status_label_zh(product.publish_status) }}</span>
       {% if product.tiktok_product_id %}· tiktok_id: <code>{{ product.tiktok_product_id }}</code>{% endif %}
     </p>
@@ -18,6 +21,20 @@
     <form method="post" action="/v2/products/{{ product.id }}/update_on_platform" style="margin:0;"
           onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（覆盖平台数据，product_id={{ product.tiktok_product_id }}）。继续?');">
       <button type="submit" style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">📤 推送更新到 TikTok</button>
+    </form>
+    {% endif %}
+    {% if tkshop_shops|length > 1 %}
+    <form method="post" action="/v2/products/{{ product.id }}/clone-to-shop" style="margin:0;display:inline-flex;gap:0;align-items:stretch;"
+          onsubmit="return confirm('把这个产品复制到所选店铺？\n\n会新建一行（publish_status=本地草稿、清空 tiktok_product_id），原产品不动。复制后到新行点「📝 添加到平台（草稿）」或「🚀 发布并上架」。');">
+      <select name="target_shop" required
+              style="padding:8px 10px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-right:none;border-radius:8px 0 0 8px;font-size:13px;">
+        {% for s in tkshop_shops %}
+          {% if s != (product.shop or 'main') %}
+          <option value="{{ s }}">→ {{ s }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <button type="submit" style="padding:8px 12px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:0 8px 8px 0;font-size:13px;font-weight:600;cursor:pointer;">📋 复制到店铺</button>
     </form>
     {% endif %}
     <form method="post" action="/v2/products/{{ product.id }}/delete" style="margin:0;"

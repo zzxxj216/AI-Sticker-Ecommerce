@@ -42,7 +42,12 @@ from src.services.packs import get_pack_service
 from src.services.preview_gen import get_preview_gen_service
 from src.services.tk_videos import get_tk_video_service
 from src.services.tkshop import get_tkshop_service
-from src.services.tkshop.service import status_label_zh, status_pill_cls
+from src.services.tkshop.service import (
+    TKSHOP_DEFAULT_SHOP,
+    TKSHOP_SHOPS,
+    status_label_zh,
+    status_pill_cls,
+)
 from src.services.topic_plans import get_topic_plan_service
 from src.services.topic_synthesis import get_synthesis_service
 from src.services.topic_plans.service import (
@@ -60,6 +65,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["status_label_zh"] = status_label_zh
 templates.env.globals["status_pill_cls"] = status_pill_cls
+templates.env.globals["tkshop_shops"] = TKSHOP_SHOPS
+templates.env.globals["tkshop_default_shop"] = TKSHOP_DEFAULT_SHOP
 
 router = APIRouter(prefix="/v2", tags=["v2"])
 
@@ -2727,6 +2734,24 @@ async def v2_video_generate_caption(request: Request, video_id: int):
     )
 
 
+@router.post("/videos/{video_id:int}/select-caption-variant")
+async def v2_video_select_caption_variant(request: Request, video_id: int):
+    """Pick one of the 4 AI-generated caption variants. Body field
+    ``variant_idx`` (0-based int).
+    """
+    form = await request.form()
+    try:
+        idx = int(form.get("variant_idx") or 0)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="variant_idx must be int")
+    svc = get_tk_video_service()
+    try:
+        result = svc.select_caption_variant(video_id, idx)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse({"ok": True, **result})
+
+
 @router.post("/videos/{video_id:int}/edit-caption")
 async def v2_video_edit_caption(request: Request, video_id: int):
     form = await request.form()
@@ -3046,15 +3071,42 @@ def v2_products_list(
     q: str = "",
     pack_id: int | None = None,
     status: str = "all",
+    shop: str = "",
     limit: int = 50,
 ):
+    # Multi-shop default: if the operator hasn't explicitly chosen a shop in
+    # the URL, land on the first configured shop instead of 'all' so each
+    # store's products show separately.
+    if not shop:
+        shop = TKSHOP_DEFAULT_SHOP if len(TKSHOP_SHOPS) > 1 else "all"
     svc = get_tkshop_service()
     products, total = svc.list_products(
         pack_id=pack_id,
         publish_status=status if status != "all" else None,
         q=q.strip() or None,
+        shop=shop if shop != "all" else None,
         limit=limit,
     )
+    # Per-shop counts for the sub-tabs (uses the same filters except shop).
+    shop_counts: dict[str, int] = {}
+    if len(TKSHOP_SHOPS) > 1:
+        all_total = svc.list_products(
+            pack_id=pack_id,
+            publish_status=status if status != "all" else None,
+            q=q.strip() or None,
+            shop=None,
+            limit=1,
+        )[1]
+        shop_counts["all"] = all_total
+        for s in TKSHOP_SHOPS:
+            _, c = svc.list_products(
+                pack_id=pack_id,
+                publish_status=status if status != "all" else None,
+                q=q.strip() or None,
+                shop=s,
+                limit=1,
+            )
+            shop_counts[s] = c
     # Enrichment: when pack_cover is missing, fall back to (a) product's
     # main product image, then (b) first ok preview from the series.
     import sqlite3 as _sql
@@ -3102,6 +3154,8 @@ def v2_products_list(
             "q": q,
             "pack_id_filter": pack_id,
             "status_filter": status,
+            "shop_filter": shop,
+            "shop_counts": shop_counts,
             "limit": limit,
             "is_platform_view": False,
         },
@@ -3315,8 +3369,9 @@ async def v2_product_edit_then_push(request: Request, product_id: int):
 async def v2_product_create(request: Request, pack_id: int):
     form = await request.form()
     svc = get_tkshop_service()
+    target_shop = (form.get("shop") or "").strip() or TKSHOP_DEFAULT_SHOP
     try:
-        pid = svc.create_product_from_pack(pack_id)
+        pid = svc.create_product_from_pack(pack_id, shop=target_shop)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     title = (form.get("title") or "").strip()
@@ -3730,6 +3785,25 @@ async def v2_product_republish(request: Request, product_id: int):
         product_id, auto_fix, auto_activate,
     )
     return RedirectResponse(url=f"/v2/products/{product_id}", status_code=303)
+
+
+@router.post("/products/{product_id:int}/clone-to-shop")
+async def v2_product_clone_to_shop(request: Request, product_id: int):
+    """Duplicate a product into another TikTok shop. The clone is a fresh
+    local row (publish_status='draft', no tiktok_product_id) so the operator
+    reviews then explicitly publishes — no automatic platform-side action.
+    """
+    form = await request.form()
+    target = (form.get("target_shop") or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="target_shop is required")
+    svc = get_tkshop_service()
+    try:
+        new_id = svc.clone_to_shop(product_id, target)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("product #%d cloned to shop %s as #%d", product_id, target, new_id)
+    return RedirectResponse(url=f"/v2/products/{new_id}", status_code=303)
 
 
 @router.get("/products/{product_id:int}/publish_status")

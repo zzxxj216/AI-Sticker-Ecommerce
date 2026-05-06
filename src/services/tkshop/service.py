@@ -93,6 +93,27 @@ TKSHOP_IMAGE_PUBLIC_BASE = os.getenv(
     "TKSHOP_IMAGE_PUBLIC_BASE", "http://localhost:5000"
 ).rstrip("/")
 
+# Multi-shop support (matches multi-channel-api's TIKTOK_SHOPS_JSON registry).
+# Comma-separated list of shop names; the first one is the default for new
+# rows and UI dropdown selection. The wrapper falls back to its single-shop
+# .env when shop="main" is not present in TIKTOK_SHOPS_JSON.
+TKSHOP_SHOPS = [s.strip() for s in (os.getenv("TKSHOP_SHOPS") or "main").split(",") if s.strip()]
+TKSHOP_DEFAULT_SHOP = TKSHOP_SHOPS[0] if TKSHOP_SHOPS else "main"
+
+
+def _get_product_shop(db_path: Path, product_id: int) -> str:
+    """Return the shop name a product is bound to. Falls back to the default
+    shop if the row has an empty shop value (legacy rows pre-migration get
+    'main' from the column DEFAULT)."""
+    with _open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT shop FROM tkshop_products WHERE id = ?",
+            (product_id,),
+        ).fetchone()
+    if not row:
+        return TKSHOP_DEFAULT_SHOP
+    return (row["shop"] or "").strip() or TKSHOP_DEFAULT_SHOP
+
 # Self-heal toggles
 TKSHOP_PUBLISH_AUTO_FIX_DEFAULT = (
     os.getenv("TKSHOP_PUBLISH_AUTO_FIX", "true").strip().lower()
@@ -212,14 +233,19 @@ class TKShopService:
     # C.1 create + AI generate
     # ------------------------------------------------------------------
 
-    def create_product_from_pack(self, pack_id: int) -> int:
-        """Mint a draft tkshop_products row for this pack. Idempotent —
-        if a product already exists for this pack_id, return its id.
+    def create_product_from_pack(self, pack_id: int,
+                                  shop: Optional[str] = None) -> int:
+        """Mint a draft tkshop_products row for this pack. Idempotent for
+        the (pack_id, shop) pair — if a product already exists for this pack
+        on the chosen shop, return its id (so re-clicking "create" doesn't
+        spawn duplicates). Different shops still get their own rows.
         """
+        target_shop = (shop or TKSHOP_DEFAULT_SHOP).strip() or TKSHOP_DEFAULT_SHOP
         with _open_db(self.db_path) as conn:
             existing = conn.execute(
-                "SELECT id FROM tkshop_products WHERE pack_id = ? ORDER BY id DESC LIMIT 1",
-                (pack_id,),
+                "SELECT id FROM tkshop_products WHERE pack_id = ? AND shop = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (pack_id, target_shop),
             ).fetchone()
             if existing:
                 return existing["id"]
@@ -232,13 +258,13 @@ class TKShopService:
             cur = conn.execute(
                 """
                 INSERT INTO tkshop_products
-                    (pack_id, tiktok_product_id, detail_main_raw_text,
+                    (pack_id, shop, tiktok_product_id, detail_main_raw_text,
                      title, description_html, selling_points, keywords,
                      category_id, default_template_json, publish_status,
                      created_at, published_at)
-                VALUES (?, '', '', '', '', '[]', '[]', '928016', '{}', 'draft', ?, NULL)
+                VALUES (?, ?, '', '', '', '', '[]', '[]', '928016', '{}', 'draft', ?, NULL)
                 """,
-                (pack_id, now),
+                (pack_id, target_shop, now),
             )
             conn.commit()
             return cur.lastrowid
@@ -1022,15 +1048,16 @@ class TKShopService:
                 (product_id,),
             ).fetchone()[0]) or 1
 
+        shop_name = _get_product_shop(self.db_path, product_id)
         endpoint = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/tiktok/products/sticker_publish"
         if dry_run:
             self._log_publish_attempt(
                 product_id, attempt_idx, endpoint, product,
-                response={"_dry_run": True},
+                response={"_dry_run": True, "_shop": shop_name},
                 success=True,
             )
             return {"ok": True, "dry_run": True, "endpoint": endpoint,
-                    "payload": product}
+                    "payload": product, "shop": shop_name}
 
         resp_json: dict[str, Any] = {}
         success = False
@@ -1048,6 +1075,7 @@ class TKShopService:
             conn.commit()
         try:
             resp = requests.post(endpoint, json=product,
+                                 params={"shop": shop_name},
                                  timeout=TKSHOP_SERVER_TIMEOUT)
             try:
                 resp_json = resp.json()
@@ -1492,13 +1520,18 @@ class TKShopService:
             "endpoint": endpoint,
         }
 
-    def get_platform_product(self, tiktok_product_id: str) -> dict[str, Any]:
+    def get_platform_product(self, tiktok_product_id: str,
+                              shop: str | None = None) -> dict[str, Any]:
+        """Fetch a product from TikTok via the wrapper. ``shop`` selects the
+        credential set when present; otherwise the wrapper's default shop is
+        used (single-shop deployments don't need to pass it)."""
         endpoint = (
             f"{TKSHOP_SERVER_URL.rstrip('/')}"
             f"/api/v1/tiktok/products/{tiktok_product_id}"
         )
+        params = {"shop": shop} if shop else None
         try:
-            resp = requests.get(endpoint, timeout=TKSHOP_SERVER_TIMEOUT)
+            resp = requests.get(endpoint, params=params, timeout=TKSHOP_SERVER_TIMEOUT)
             data = resp.json() if resp.text else {}
         except requests.RequestException as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -1533,9 +1566,8 @@ class TKShopService:
 
         payload = self._build_publish_payload(product_id)
         # Map current local status → desired auto_activate (= save_mode).
-        # Default LISTING for live products and the post-PUT-then-deactivate
-        # flow; AS_DRAFT only for products that were already draft on platform.
         payload["auto_activate"] = (prev_status != "draft_on_platform")
+        shop_name = _get_product_shop(self.db_path, product_id)
         endpoint = (
             f"{TKSHOP_SERVER_URL.rstrip('/')}"
             f"/api/v1/tiktok/products/{tt_id}/sticker_update"
@@ -1553,7 +1585,9 @@ class TKShopService:
         error_code = ""
         error_message = ""
         try:
-            resp = requests.post(endpoint, json=payload, timeout=TKSHOP_SERVER_TIMEOUT)
+            resp = requests.post(endpoint, json=payload,
+                                 params={"shop": shop_name},
+                                 timeout=TKSHOP_SERVER_TIMEOUT)
             try:
                 resp_json = resp.json()
             except Exception:
@@ -1616,12 +1650,14 @@ class TKShopService:
         if not tt_id:
             return {"ok": False, "error_code": "NOT_PUBLISHED",
                     "error_message": "product has no tiktok_product_id"}
+        shop_name = _get_product_shop(self.db_path, product_id)
         endpoint = (
             f"{TKSHOP_SERVER_URL.rstrip('/')}"
             f"/api/v1/tiktok/products/{tt_id}/{action}"
         )
         try:
-            resp = requests.post(endpoint, timeout=TKSHOP_SERVER_TIMEOUT)
+            resp = requests.post(endpoint, params={"shop": shop_name},
+                                 timeout=TKSHOP_SERVER_TIMEOUT)
             data = resp.json() if resp.text else {}
         except requests.RequestException as e:
             return {"ok": False, "error_code": "NETWORK",
@@ -1681,6 +1717,78 @@ class TKShopService:
             )
             conn.commit()
 
+    def clone_to_shop(self, product_id: int, target_shop: str) -> int:
+        """Duplicate a product row + image rows into a new tkshop_products
+        entry bound to ``target_shop``. Resets platform IDs and status so the
+        clone shows up as a fresh local draft ready to publish to the new
+        shop. Pack association and on-disk artifacts (images) are shared with
+        the source — duplicating those would balloon storage for marginal
+        benefit.
+
+        Returns the new product id.
+        """
+        if not target_shop:
+            raise ValueError("target_shop is required")
+        if target_shop not in TKSHOP_SHOPS:
+            raise ValueError(
+                f"unknown shop {target_shop!r}; configured shops: {TKSHOP_SHOPS}"
+            )
+        now = int(time.time())
+        with _open_db(self.db_path) as conn:
+            src = conn.execute(
+                "SELECT * FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+            if not src:
+                raise ValueError(f"product #{product_id} not found")
+            if (src["shop"] or TKSHOP_DEFAULT_SHOP) == target_shop:
+                raise ValueError(
+                    f"product #{product_id} is already on shop {target_shop!r}"
+                )
+            cur = conn.execute(
+                """
+                INSERT INTO tkshop_products
+                    (pack_id, shop, tiktok_product_id, tiktok_sku_id,
+                     detail_main_raw_text, title, description_html,
+                     selling_points, keywords, seller_sku, category_id,
+                     default_template_json, publish_status,
+                     created_at, published_at, auto_fix_attempts, last_fix_diff)
+                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, 0, '')
+                """,
+                (
+                    src["pack_id"], target_shop,
+                    src["detail_main_raw_text"] or "",
+                    src["title"] or "", src["description_html"] or "",
+                    src["selling_points"] or "[]", src["keywords"] or "[]",
+                    src["seller_sku"] or "", src["category_id"] or "928016",
+                    src["default_template_json"] or "{}", now,
+                ),
+            )
+            new_id = cur.lastrowid
+            # Replicate image rows so the new product has the same images.
+            # local_path stays the same — files are shared on disk.
+            # tiktok_image_uri is reset because the new product is a fresh
+            # listing on the target shop and will get its own URIs on publish.
+            conn.execute(
+                """
+                INSERT INTO tkshop_product_images
+                    (product_id, role, source, local_path,
+                     tiktok_image_uri, sort_order, ai_prompt, created_at)
+                SELECT ?, role, source, local_path,
+                       '', sort_order, ai_prompt, ?
+                  FROM tkshop_product_images
+                 WHERE product_id = ?
+                """,
+                (new_id, now, product_id),
+            )
+            conn.commit()
+        logger.info(
+            "cloned product #%d → #%d (shop=%s → %s)",
+            product_id, new_id,
+            (src["shop"] or TKSHOP_DEFAULT_SHOP), target_shop,
+        )
+        return int(new_id)
+
     @staticmethod
     def _local_status_from_tiktok(remote: str) -> str:
         """Map TikTok-side status to our local vocab.
@@ -1723,7 +1831,8 @@ class TKShopService:
             tt_id = (row["tiktok_product_id"] or "").strip()
         if not tt_id:
             return {"ok": False, "error_message": "no tiktok_product_id"}
-        result = self.get_platform_product(tt_id)
+        shop_name = _get_product_shop(self.db_path, product_id)
+        result = self.get_platform_product(tt_id, shop=shop_name)
         if not result.get("ok"):
             return {"ok": False, "error_message": result.get("error", "fetch failed")}
         data = result.get("data") or {}
@@ -1753,7 +1862,7 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             rows = conn.execute(
                 """
-                SELECT id, tiktok_product_id, publish_status
+                SELECT id, tiktok_product_id, publish_status, shop
                   FROM tkshop_products
                  WHERE publish_status NOT IN ('draft', 'failed')
                    AND tiktok_product_id != ''
@@ -1764,12 +1873,14 @@ class TKShopService:
 
         updated, errors = 0, []
         for r in rows:
+            shop_name = (r["shop"] or "").strip() or TKSHOP_DEFAULT_SHOP
             url = (
                 f"{TKSHOP_SERVER_URL.rstrip('/')}"
                 f"/api/v1/tiktok/products/{r['tiktok_product_id']}"
             )
             try:
-                resp = requests.get(url, timeout=TKSHOP_SERVER_TIMEOUT)
+                resp = requests.get(url, params={"shop": shop_name},
+                                    timeout=TKSHOP_SERVER_TIMEOUT)
                 if not resp.ok:
                     errors.append({"product_id": r["id"], "error": f"HTTP {resp.status_code}"})
                     continue
@@ -1824,6 +1935,7 @@ class TKShopService:
         pack_id: Optional[int] = None,
         publish_status: Optional[str] = None,
         q: Optional[str] = None,
+        shop: Optional[str] = None,
         limit: int = 100,
     ) -> tuple[list[dict], int]:
         clauses, params = [], []
@@ -1831,6 +1943,8 @@ class TKShopService:
             clauses.append("pr.pack_id = ?"); params.append(pack_id)
         if publish_status and publish_status != "all":
             clauses.append("pr.publish_status = ?"); params.append(publish_status)
+        if shop and shop != "all":
+            clauses.append("pr.shop = ?"); params.append(shop)
         if q:
             kw = f"%{q.strip()}%"
             clauses.append(
@@ -1840,7 +1954,6 @@ class TKShopService:
             params.extend([kw, kw, kw, kw])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with _open_db(self.db_path) as conn:
-            # COUNT must JOIN too because the keyword filter references p.display_name.
             total = conn.execute(
                 f"""SELECT COUNT(*) FROM tkshop_products pr
                     LEFT JOIN packs p ON p.id = pr.pack_id
@@ -1849,7 +1962,7 @@ class TKShopService:
             ).fetchone()[0]
             rows = conn.execute(
                 f"""
-                SELECT pr.id, pr.pack_id, pr.tiktok_product_id, pr.tiktok_sku_id,
+                SELECT pr.id, pr.pack_id, pr.shop, pr.tiktok_product_id, pr.tiktok_sku_id,
                        pr.seller_sku, pr.title,
                        pr.publish_status, pr.created_at, pr.published_at,
                        pr.category_id,
@@ -2065,7 +2178,7 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             r = conn.execute(
                 """
-                SELECT pr.id, pr.pack_id, pr.tiktok_product_id, pr.tiktok_sku_id,
+                SELECT pr.id, pr.pack_id, pr.shop, pr.tiktok_product_id, pr.tiktok_sku_id,
                        pr.seller_sku, pr.auto_fix_attempts, pr.last_fix_diff,
                        pr.detail_main_raw_text, pr.title,
                        pr.description_html, pr.selling_points,

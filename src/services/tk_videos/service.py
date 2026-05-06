@@ -266,20 +266,29 @@ class TKVideoService:
             extract_ok = False
             extract_error = str(e)[:500]
 
+        # The new prompt returns a {variants:[...]} payload. Persist the full
+        # array so the operator can re-pick later without re-generating;
+        # auto-select the first variant into the legacy caption/hashtags
+        # fields so the rest of the publish pipeline keeps working.
+        variants = list(payload.get("variants") or []) if extract_ok else []
         with _open_db(self.db_path) as conn:
-            if extract_ok:
+            if extract_ok and variants:
+                first = variants[0]
                 conn.execute(
                     """
                     UPDATE tk_videos
                        SET caption_main_raw_text = ?,
+                           caption_variants     = ?,
+                           caption_variant_idx  = 0,
                            caption  = ?,
                            hashtags = ?
                      WHERE id = ?
                     """,
                     (
                         main_text,
-                        (payload.get("caption") or "")[:500],
-                        json.dumps(payload.get("hashtags") or [], ensure_ascii=False),
+                        json.dumps(variants, ensure_ascii=False),
+                        (first.get("caption") or "")[:500],
+                        json.dumps(first.get("hashtags") or [], ensure_ascii=False),
                         video_id,
                     ),
                 )
@@ -304,13 +313,63 @@ class TKVideoService:
         except Exception as e:
             logger.warning("write_caption_main_raw failed: %s", e)
 
+        first_variant = variants[0] if variants else {}
         return {
             "video_id": video_id,
             "extract_ok": extract_ok,
             "extract_error": extract_error,
             "main_chars": len(main_text),
-            "caption": payload.get("caption", ""),
-            "hashtags": payload.get("hashtags", []),
+            "variants": variants,
+            "selected_idx": 0 if variants else None,
+            "caption":  first_variant.get("caption", ""),
+            "hashtags": first_variant.get("hashtags", []),
+        }
+
+    def select_caption_variant(self, video_id: int, variant_idx: int) -> dict[str, Any]:
+        """Pick one of the previously-generated variants and copy its caption
+        + hashtags into the publish-ready fields. ``variant_idx`` is 0-based
+        and must reference an entry in tk_videos.caption_variants.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT caption_variants FROM tk_videos WHERE id = ?",
+                (video_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"video #{video_id} not found")
+            try:
+                variants = json.loads(row["caption_variants"] or "[]")
+            except Exception:
+                variants = []
+            if not isinstance(variants, list) or not variants:
+                raise ValueError("no caption variants generated yet — run AI first")
+            if variant_idx < 0 or variant_idx >= len(variants):
+                raise ValueError(
+                    f"variant_idx {variant_idx} out of range (have {len(variants)})"
+                )
+            chosen = variants[variant_idx] or {}
+            conn.execute(
+                """
+                UPDATE tk_videos
+                   SET caption_variant_idx = ?,
+                       caption  = ?,
+                       hashtags = ?
+                 WHERE id = ?
+                """,
+                (
+                    int(variant_idx),
+                    (chosen.get("caption") or "")[:500],
+                    json.dumps(chosen.get("hashtags") or [], ensure_ascii=False),
+                    video_id,
+                ),
+            )
+            conn.commit()
+        return {
+            "video_id": video_id,
+            "variant_idx": variant_idx,
+            "caption":  chosen.get("caption", ""),
+            "hashtags": chosen.get("hashtags", []),
+            "key":      chosen.get("key", ""),
         }
 
     # ------------------------------------------------------------------
@@ -764,7 +823,9 @@ class TKVideoService:
                 SELECT v.id, v.pack_id, v.account_open_id,
                        v.blotato_account_id, v.local_video_path,
                        v.video_one_liner, v.caption_main_raw_text,
-                       v.caption, v.hashtags, v.scheduled_at,
+                       v.caption, v.hashtags,
+                       v.caption_variants, v.caption_variant_idx,
+                       v.scheduled_at,
                        v.blotato_post_id, v.tiktok_video_id,
                        v.publish_status, v.published_at, v.publish_error,
                        p.display_name AS pack_name, p.cover_image_path,
@@ -782,6 +843,10 @@ class TKVideoService:
                 d["hashtags"] = json.loads(d.get("hashtags") or "[]")
             except Exception:
                 d["hashtags"] = []
+            try:
+                d["caption_variants"] = json.loads(d.get("caption_variants") or "[]")
+            except Exception:
+                d["caption_variants"] = []
             metrics = conn.execute(
                 """
                 SELECT view_count, like_count, comment_count, share_count, fetched_at
