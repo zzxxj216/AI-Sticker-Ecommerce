@@ -202,6 +202,92 @@
   .vs-tip { font-size:11px; color:var(--text-muted); padding:8px 12px; background:var(--bg-subtle); border-radius:6px; margin-bottom:10px; }
 </style>
 
+<!-- 视频配音独白（分析无声视频 → 英文独白 + 同步字幕 + 配音） -->
+<section class="panel" style="margin-top:18px;" id="narration">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <h3 style="margin:0;font-size:16px;">🎙 视频配音独白（分析画面 → 英文独白 + 同步字幕 + 配音）</h3>
+    <form method="post" action="/v2/videos/{{ video.id }}/narration/generate" style="display:flex;gap:6px;align-items:center;">
+      <input type="text" name="voice_id" placeholder="voice_id（留空=默认 Jessica）"
+             style="padding:6px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;width:210px;">
+      <button type="submit"
+              style="padding:6px 16px;background:#0ea5e9;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:13px;cursor:pointer;"
+              {% if narration_task_running %}disabled{% endif %}>🎙 {% if narration %}重新生成{% else %}生成配音独白{% endif %}{% if narration_task_running %}（生成中…）{% endif %}</button>
+    </form>
+  </div>
+
+  {% if not narration and not narration_task_running %}
+  <p style="color:var(--text-muted);font-size:13px;margin-top:12px;">
+    针对已上传的无声成片：Gemini 分析画面 → 写英文口播独白 → ElevenLabs 配音 → 烧录字幕 → 生成带配音成片（约 1 分钟）。
+  </p>
+  {% endif %}
+
+  {% if narration %}
+  {% set st = narration.status %}
+  {% set badge = {'generating':('#f59e0b','生成中…'),'done':('#10b981','已完成'),'error':('#ef4444','失败')}.get(st, ('#9ca3af', st)) %}
+  <div style="margin-top:14px;">
+    <div style="margin-bottom:10px;">
+      <span style="display:inline-block;padding:2px 10px;border-radius:10px;background:{{ badge[0] }};color:#fff;font-size:11px;font-weight:700;">{{ badge[1] }}</span>
+      {% if narration.product_name %}<span class="vs-meta-pill">{{ narration.product_name }}</span>{% endif %}
+      {% if narration.voice_id %}<span class="vs-meta-pill">🎙 {{ narration.voice_id }}</span>{% endif %}
+      {% if narration.atempo and narration.atempo != 1.0 %}<span class="vs-meta-pill">语速 {{ '%.2f'|format(narration.atempo) }}x</span>{% endif %}
+      {% if narration.quality and narration.quality.max_drift_s is defined %}<span class="vs-meta-pill">漂移 {{ '%.1f'|format(narration.quality.max_drift_s) }}s</span>{% endif %}
+      {% if narration.needs_review %}<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:#f59e0b;color:#fff;font-size:11px;font-weight:700;">⚠ 待复审</span>{% endif %}
+      <span class="vs-meta-pill">{{ narration.created_human }}</span>
+    </div>
+
+    {% if narration.warnings %}
+      <div style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;font-size:12px;margin-bottom:10px;">⚠ {{ narration.warnings }}</div>
+    {% endif %}
+
+    {% if st == 'error' %}
+      <div style="color:var(--danger);font-size:13px;background:#fef2f2;padding:8px 12px;border-radius:6px;">{{ narration.error }}</div>
+    {% endif %}
+
+    {% if st == 'done' %}
+      {% if narration.narration_text %}
+      <div style="background:#f8fafc;border:1px solid var(--line-soft);border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">英文独白</div>
+        <div style="font-size:14px;line-height:1.5;">{{ narration.narration_text }}</div>
+      </div>
+      {% endif %}
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">配音成片（视频 + 配音 + 烧录字幕）</div>
+          <video controls preload="metadata" style="width:100%;max-width:300px;border-radius:8px;background:#000;"
+                 src="/v2/videos/narration/{{ narration.id }}/file/video"></video>
+        </div>
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">配音音频</div>
+          <audio controls preload="none" style="width:100%;" src="/v2/videos/narration/{{ narration.id }}/file/audio"></audio>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+            <a href="/v2/videos/narration/{{ narration.id }}/file/srt"
+               style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;">⬇ 字幕 SRT</a>
+            <form method="post" action="/v2/videos/narration/{{ narration.id }}/promote" style="display:inline;"
+                  onsubmit="return confirm('用这条配音成片替换待发布视频？');">
+              <button type="submit" style="padding:6px 12px;background:#10b981;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✓ 用作发布视频</button>
+            </form>
+            <form method="post" action="/v2/videos/narration/{{ narration.id }}/delete" style="display:inline;"
+                  onsubmit="return confirm('删除这条配音独白？');">
+              <button type="submit" style="padding:6px 12px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🗑 删除</button>
+            </form>
+          </div>
+        </div>
+      </div>
+      {% if narration.segments %}
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);">分段字幕时间轴（{{ narration.segments|length }} 段）</summary>
+        <ul style="margin:8px 0 0 16px;padding:0;font-size:12px;line-height:1.6;">
+          {% for sg in narration.segments %}
+          <li>[{{ '%.1f'|format(sg.start_s) }}–{{ '%.1f'|format(sg.end_s) }}s] {{ sg.text }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
 <section class="panel" style="margin-top:18px;" id="scripts">
   <div class="panel-header" style="padding:16px 22px;">
     <h3 style="margin:0;font-size:16px;">🎬 视频脚本（caption + b-roll，可导出 DOCX）</h3>

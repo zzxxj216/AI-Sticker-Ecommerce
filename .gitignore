@@ -46,6 +46,7 @@ logs/
 data/
 output/
 export/
+scratch/
 tests/data/output/
 tests/stickers_analyzer/data/output/
 trend_fetcher/output/

@@ -205,6 +205,13 @@ class PackStore:
         p.write_text(text, encoding="utf-8")
         return p
 
+    def narration_dir(self, pack_uid: str, video_id: int) -> Path:
+        """videos/{video_id}/narration/ — voiceover.mp3, subtitles.srt/.ass,
+        analysis.json, narrated.mp4 for the video-narration feature."""
+        d = self.video_dir(pack_uid, video_id) / "narration"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     # ------------------------------------------------------------------
     # C.1 / C.2 products
     # ------------------------------------------------------------------

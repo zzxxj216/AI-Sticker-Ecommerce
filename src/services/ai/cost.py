@@ -37,7 +37,30 @@ TEXT_COST_PER_1K: dict[str, tuple[float, float]] = {
     "gemini-2.0-flash":        (0.000075, 0.00030),
     "gemini-2.0-pro":          (0.00125, 0.00500),
     "gemini-2.5-pro":          (0.00125, 0.00500),
+    "gemini-3.1-pro":          (0.00125, 0.00500),
+    "gemini-3.1-flash":        (0.000075, 0.00030),
 }
+
+# Per-1k-character TTS cost (USD). ElevenLabs bills by characters, not tokens;
+# rough mid-tier estimates for observability, NOT billing.
+TTS_COST_PER_1K_CHARS: dict[str, float] = {
+    "eleven_multilingual_v2": 0.30,
+    "eleven_turbo_v2_5":      0.15,
+    "eleven_flash_v2_5":      0.15,
+}
+
+
+def estimate_tts_cost(model: str, chars: int) -> float:
+    """Return cost in USD for a text-to-speech call, by character count."""
+    rate = TTS_COST_PER_1K_CHARS.get(model)
+    if rate is None:
+        for known, r in TTS_COST_PER_1K_CHARS.items():
+            if model.startswith(known):
+                rate = r
+                break
+    if rate is None:
+        rate = 0.30
+    return round((chars / 1000.0) * rate, 6)
 
 # Per-image flat estimate (USD). gpt-image-2 cost varies by quality
 # (low/medium/high); these are mid-quality 1024x1024 estimates.

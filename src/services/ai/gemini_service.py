@@ -301,6 +301,75 @@ class GeminiService(BaseLLMService):
             raise APIError(f"Gemini service error: {e}", service="gemini")
 
     # ================================================================
+    # Video analysis (native video understanding)
+    # ================================================================
+
+    def analyze_video(
+        self,
+        video_path,
+        prompt: str,
+        *,
+        json_mode: bool = True,
+        max_mb_inline: float = 18.0,
+    ) -> Dict[str, Any]:
+        """Analyze a video file with Gemini's native video understanding.
+
+        Files < ``max_mb_inline`` MB are sent inline; larger ones go through
+        the Files API (upload -> poll until ACTIVE -> reference -> delete).
+        Instantiate this service with a video-capable model, e.g.
+        ``GeminiService(model=config.gemini_text_model)``.
+
+        Returns ``{"text": str, "usage": {...}, "model": str}``.
+        """
+        vp = Path(video_path)
+        size_mb = vp.stat().st_size / 1024 / 1024
+        cfg = GenerateContentConfig(response_modalities=[Modality.TEXT])
+        if json_mode:
+            cfg.response_mime_type = "application/json"
+
+        uploaded = None
+        try:
+            if size_mb < max_mb_inline:
+                part = Part.from_bytes(data=vp.read_bytes(), mime_type="video/mp4")
+                contents = [part, prompt]
+            else:
+                logger.info("Gemini video >%.0fMB -> Files API upload (%s)", max_mb_inline, vp.name)
+                uploaded = self.client.files.upload(file=str(vp))
+                waited = 0
+                while uploaded.state.name == "PROCESSING" and waited < 300:
+                    time.sleep(2)
+                    waited += 2
+                    uploaded = self.client.files.get(name=uploaded.name)
+                if uploaded.state.name != "ACTIVE":
+                    raise APIError(
+                        f"Gemini Files API: file not ACTIVE ({uploaded.state.name})",
+                        service="gemini",
+                    )
+                contents = [uploaded, prompt]
+
+            response = self._call_with_retry(contents, config=cfg)
+            text = self._extract_text(response)
+            if not text:
+                raise APIError("No text content in video-analysis response", service="gemini")
+            usage = self._get_usage(response, prompt, text)
+            logger.info(
+                "Gemini video analysis done - input: %d tokens, output: %d tokens",
+                usage["input_tokens"], usage["output_tokens"],
+            )
+            return {"text": text, "usage": usage, "model": self.model}
+        except APIError:
+            raise
+        except Exception as e:
+            logger.error(f"Gemini video analysis failed: {e}")
+            raise APIError(f"Gemini service error: {e}", service="gemini")
+        finally:
+            if uploaded is not None:
+                try:
+                    self.client.files.delete(name=uploaded.name)
+                except Exception:
+                    pass
+
+    # ================================================================
     # Batch generation
     # ================================================================
 

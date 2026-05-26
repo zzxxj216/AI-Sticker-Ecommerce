@@ -100,6 +100,8 @@ class Config:
         self._config['ai']['gemini']['api_key'] = os.getenv('IMAGE_API_KEY', '')
         self._config['ai']['gemini']['base_url'] = os.getenv('IMAGE_BASE_URL', 'https://generativelanguage.googleapis.com')
         self._config['ai']['gemini']['model'] = os.getenv('IMAGE_MODEL', AIModel.GEMINI_FLASH.value)
+        # Text/multimodal model (used for video understanding in video_narration)
+        self._config['ai']['gemini']['text_model'] = os.getenv('GEMINI_TEXT_MODEL', 'gemini-3.1-pro-preview')
 
         # OpenAI 配置
         if 'openai' not in self._config['ai']:
@@ -115,6 +117,13 @@ class Config:
         self._config['aihubmix']['api_key'] = os.getenv('AIHUBMIX_API_KEY', '')
         self._config['aihubmix']['base_url'] = os.getenv('AIHUBMIX_BASE_URL', 'https://aihubmix.com/v1/chat/completions')
         self._config['aihubmix']['model'] = os.getenv('AIHUBMIX_MODEL', 'gpt-5.4:surfing')
+
+        # ElevenLabs (TTS / 视频独白配音)
+        if 'elevenlabs' not in self._config:
+            self._config['elevenlabs'] = {}
+        self._config['elevenlabs']['api_key'] = os.getenv('ELEVENLABS_API_KEY', '')
+        self._config['elevenlabs']['voice_id'] = os.getenv('ELEVENLABS_VOICE_ID', '')
+        self._config['elevenlabs']['model_id'] = os.getenv('ELEVENLABS_MODEL_ID', 'eleven_multilingual_v2')
 
         # Feishu Bot
         if 'feishu' not in self._config:
@@ -249,6 +258,11 @@ class Config:
     def gemini_model(self) -> str:
         """Gemini 模型"""
         return self.get('ai.gemini.model', AIModel.GEMINI_FLASH.value)
+
+    @property
+    def gemini_text_model(self) -> str:
+        """Gemini 文本/多模态模型（视频理解用）"""
+        return self.get('ai.gemini.text_model', 'gemini-3.1-pro-preview')
     
     @property
     def default_sticker_count(self) -> int:
@@ -350,6 +364,18 @@ class Config:
     @property
     def aihubmix_model(self) -> str:
         return self.get('aihubmix.model', 'gpt-5.4:surfing')
+
+    @property
+    def elevenlabs_api_key(self) -> str:
+        return self.get('elevenlabs.api_key', '')
+
+    @property
+    def elevenlabs_voice_id(self) -> str:
+        return self.get('elevenlabs.voice_id', '')
+
+    @property
+    def elevenlabs_model_id(self) -> str:
+        return self.get('elevenlabs.model_id', 'eleven_multilingual_v2')
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
