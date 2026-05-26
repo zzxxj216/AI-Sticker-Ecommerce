@@ -603,6 +603,85 @@ class PreviewGenService:
         return {"status": "error", "sticker_id": sticker_id, "error": last_err}
 
     # ------------------------------------------------------------------
+    # One-click repair: retry failed previews + failed sticker splits
+    # ------------------------------------------------------------------
+
+    def series_failure_summary(self, series_id: int) -> dict[str, int]:
+        """Count failed previews + failed sticker splits for a series (drives
+        the repair button's visibility/label)."""
+        with _open_db(self.db_path) as conn:
+            prev_err = conn.execute(
+                "SELECT COUNT(*) FROM pack_previews "
+                "WHERE series_id = ? AND generation_status = 'error'",
+                (series_id,),
+            ).fetchone()[0]
+            stk_err = conn.execute(
+                """
+                SELECT COUNT(*) FROM pack_stickers ps
+                  JOIN pack_previews pp ON pp.id = ps.preview_id
+                 WHERE pp.series_id = ? AND ps.generation_status = 'error'
+                """,
+                (series_id,),
+            ).fetchone()[0]
+        return {"preview_failures": int(prev_err), "sticker_failures": int(stk_err),
+                "total": int(prev_err) + int(stk_err)}
+
+    def repair_series(
+        self,
+        series_id: int,
+        *,
+        max_workers: int = DEFAULT_MAX_WORKERS,
+        size: str = DEFAULT_IMAGE_SIZE,
+    ) -> dict[str, Any]:
+        """One-click repair for a series:
+          1. Re-run every failed / pending PREVIEW (``generate_pending_for_series``).
+          2. For previews that are now ``ok`` AND already have sticker rows in
+             error/pending state, re-run those SPLITS only.
+
+        Deliberately does NOT split previews that were never split (that's
+        'generate', not 'repair') — it only fixes what was attempted and failed.
+        Returns ``{'previews': {...}, 'stickers': {...}}``.
+        """
+        prev_res = self.generate_pending_for_series(
+            series_id, max_workers=max_workers, size=size)
+
+        with _open_db(self.db_path) as conn:
+            prev_ids = [r[0] for r in conn.execute(
+                """
+                SELECT DISTINCT pp.id
+                  FROM pack_previews pp
+                  JOIN pack_stickers ps ON ps.preview_id = pp.id
+                 WHERE pp.series_id = ?
+                   AND pp.generation_status = 'ok'
+                   AND COALESCE(pp.image_path, '') != ''
+                   AND ps.generation_status IN ('pending', 'error')
+                 ORDER BY pp.id
+                """,
+                (series_id,),
+            ).fetchall()]
+
+        st_attempted = st_ok = st_err = 0
+        st_errors: list[dict] = []
+        for pid in prev_ids:
+            try:
+                r = self.split_pending_for_preview(pid, max_workers=max_workers, size=size)
+                st_attempted += r.get("attempted", 0)
+                st_ok += r.get("ok", 0)
+                st_err += r.get("error", 0)
+                st_errors.extend(r.get("errors", []))
+            except Exception as e:  # noqa: BLE001
+                st_err += 1
+                st_errors.append({"preview_id": pid, "error": str(e)[:200]})
+
+        logger.info("repair_series #%s: previews ok=%s err=%s | stickers ok=%s err=%s",
+                    series_id, prev_res.get("ok"), prev_res.get("error"), st_ok, st_err)
+        return {
+            "previews": prev_res,
+            "stickers": {"attempted": st_attempted, "ok": st_ok,
+                         "error": st_err, "errors": st_errors[:20]},
+        }
+
+    # ------------------------------------------------------------------
     # Read APIs for UI
     # ------------------------------------------------------------------
 

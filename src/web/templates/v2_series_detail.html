@@ -56,6 +56,15 @@
         {% endif %}
       </button>
     </form>
+    {% if series.failure_summary and series.failure_summary.total > 0 %}
+    <form method="post" action="/v2/series/{{ series.id }}/repair" style="display:inline;"
+          onsubmit="return confirm('一键修复：后台重跑所有失败的预览图（{{ series.failure_summary.preview_failures }}）和失败的拆分贴纸（{{ series.failure_summary.sticker_failures }}）。继续?');">
+      <button type="submit"
+              style="padding:10px 20px;background:#f59e0b;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">
+        🔧 一键修复失败（预览 {{ series.failure_summary.preview_failures }} · 拆分 {{ series.failure_summary.sticker_failures }}）
+      </button>
+    </form>
+    {% endif %}
     {% if series.status_summary.ok > 0 %}
     <a href="/v2/series/{{ series.id }}/previews.zip"
        class="button ghost"
