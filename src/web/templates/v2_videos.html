@@ -140,6 +140,8 @@
     </div>
   </section>
 
+  <div data-video-deleted-banner style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;background:rgba(16,185,129,.1);border:1px solid var(--success);color:var(--success);font-size:13px;font-weight:600;"></div>
+
   <section class="panel video-panel">
     <div class="panel-header">
       <div>
@@ -404,7 +406,7 @@
           <div>
             <h4 style="margin:0 0 6px;font-size:13px;">回调 / 状态回查</h4>
             <div class="muted" style="font-size:12px;line-height:1.7;">
-              排期到点后由调度任务调用 Blotato；Blotato 返回 post id 后，可通过“回查回调”解析 TikTok 视频 ID，用于后续数据看板。
+              排期由 Blotato 服务端到点发布。系统每 5 分钟自动回查一次：已排期的帖子会在发布成功后自动转为「已发布」（失败转「失败」并记录原因），并解析 TikTok 视频 ID 用于数据看板。也可点「🔄 回查回调」立即回查。
             </div>
             <div style="margin-top:8px;font-size:12px;display:grid;gap:4px;">
               <div>blotato_post_id：<code>{{ v.blotato_post_id or '—' }}</code></div>
@@ -538,6 +540,11 @@
 
     </div>
     <div class="v2-dialog-footer">
+      <form method="post" action="/v2/videos/{{ v.id }}/delete" style="margin-right:auto;"
+            onsubmit="return confirm('删除视频 #{{ v.id }}？将一并删除其脚本、配音、统计数据和本地文件，不可恢复。注意：已发布或已排期到 Blotato 的帖子不会被撤回。');">
+        <input type="hidden" name="return_to" value="{{ list_return_url }}">
+        <button type="submit" class="button" style="background:#fff;color:var(--danger);border:1px solid var(--danger);font-weight:600;">🗑 删除视频</button>
+      </form>
       <button type="button" class="button ghost" data-close-dialog>关闭</button>
     </div>
   </dialog>
@@ -714,6 +721,14 @@
     });
 
     const params = new URLSearchParams(window.location.search || '');
+    const deletedId = params.get('video_deleted');
+    if (deletedId) {
+      const banner = document.querySelector('[data-video-deleted-banner]');
+      if (banner) {
+        banner.textContent = '✓ 视频 #' + deletedId + ' 已删除（脚本、配音、统计与本地文件一并清除）。';
+        banner.style.display = 'block';
+      }
+    }
     const openVideoId = params.get('open_video');
     if (openVideoId) {
       const dialogId = 'video-detail-dialog-' + openVideoId;

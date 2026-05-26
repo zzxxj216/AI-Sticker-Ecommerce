@@ -3076,6 +3076,30 @@ async def v2_video_publish_to_draft(request: Request, video_id: int):
     )
 
 
+@router.post("/videos/{video_id:int}/delete")
+async def v2_video_delete(request: Request, video_id: int):
+    """Hard-delete a video row (+ its scripts, narrations, metrics, files).
+
+    Does not recall anything already published or queued/scheduled on
+    TikTok/Blotato — that must be cancelled upstream. Always lands back on
+    the video list (never the now-deleted row's detail page/dialog).
+    """
+    form = await request.form()
+    svc = get_tk_video_service()
+    if not svc.delete_video(video_id):
+        raise HTTPException(status_code=404, detail="video not found")
+    # Force the filtered list, dropping any open_video=<id> that would try
+    # to reopen the deleted dialog.
+    return_to = (form.get("return_to") or "").strip()
+    if "/v2/videos/" in return_to or f"open_video={video_id}" in return_to:
+        return_to = ""
+    target = _safe_v2_redirect(return_to, "/v2/videos")
+    return RedirectResponse(
+        url=_append_query(target, {"video_deleted": video_id}),
+        status_code=303,
+    )
+
+
 _ANALYTICS_PAGE_SIZES = (10, 20, 50, 100)
 
 

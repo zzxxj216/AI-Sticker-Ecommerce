@@ -275,16 +275,23 @@ def tk_video_publish_dispatch_job(ctx: JobContext) -> None:
 
 
 def tk_dispatch_status_poll_job(ctx: JobContext) -> None:
-    """B.1.5 — poll Blotato for every dispatched post that still lacks a
-    tiktok_video_id, then capture it for B.2 metrics matching."""
+    """B.1.5 — poll Blotato for dispatched posts that aren't yet in a
+    terminal local state: reconcile scheduled posts (→ published/failed)
+    and backfill tiktok_video_id for published ones (B.2 metrics)."""
     from src.services.tk_videos import get_tk_video_service
     result = get_tk_video_service().refresh_dispatch_status()
-    ctx.affected_rows = result.get("matched", 0)
+    # Count any state change we made this tick as affected rows.
+    ctx.affected_rows = (
+        result.get("matched", 0)
+        + result.get("published", 0)
+        + result.get("failed", 0)
+    )
     if result.get("errors"):
         logger.warning("[%s] errors: %s", ctx.job_name, result["errors"][:3])
-    if result.get("checked", 0) > 0 or result.get("matched", 0) > 0:
-        logger.info("[%s] checked=%d matched=%d errors=%d",
+    if result.get("checked", 0) > 0 or ctx.affected_rows > 0:
+        logger.info("[%s] checked=%d published=%d failed=%d matched=%d errors=%d",
                     ctx.job_name, result.get("checked", 0),
+                    result.get("published", 0), result.get("failed", 0),
                     result.get("matched", 0), len(result.get("errors", [])))
 
 

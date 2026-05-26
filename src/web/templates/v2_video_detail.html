@@ -30,6 +30,11 @@
       {% if video.video_url %}<button type="button" class="button ghost" data-vp-url="{{ video.video_url }}" data-vp-title="#{{ video.id }} 视频文件">▶ 查看视频</button>{% endif %}
       <a href="#scripts" class="button"
          style="background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;font-weight:700;">🎬 视频脚本{% if scripts %}（{{ scripts|length }}）{% endif %}</a>
+      <form method="post" action="/v2/videos/{{ video.id }}/delete" style="display:inline;"
+            onsubmit="return confirm('删除视频 #{{ video.id }}？将一并删除其脚本、配音、统计数据和本地文件，不可恢复。注意：已发布或已排期到 Blotato 的帖子不会被撤回。');">
+        <input type="hidden" name="return_to" value="/v2/videos">
+        <button type="submit" class="button" style="background:#fff;color:var(--danger);border:1px solid var(--danger);font-weight:600;">🗑 删除视频</button>
+      </form>
     </div>
   </section>
 

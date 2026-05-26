@@ -60,6 +60,82 @@ def video_status_pill_cls(status: str) -> str:
     return VIDEO_STATUS_LABELS_ZH.get(status or "", ("", "pending"))[1]
 
 
+# Substrings (case-insensitive) that mark a Blotato post status terminal.
+# Blotato officially emits 'in-progress' | 'published' | 'failed', but the
+# exact value + nesting has drifted across API versions, so we match loosely.
+_BLOTATO_STATUS_PUBLISHED = (
+    "publish", "complete", "success", "succeed", "live", "posted", "done",
+)
+_BLOTATO_STATUS_FAILED = (
+    "fail", "error", "reject", "cancel", "abort",
+)
+_BLOTATO_STATUS_KEYS = ("status", "state", "submissionstatus", "poststatus")
+_BLOTATO_ERROR_KEYS = (
+    "error", "errormessage", "message", "failurereason", "reason",
+    "detail", "details",
+)
+
+
+def _extract_blotato_status(resp: Any) -> str:
+    """Best-effort read of a post's lifecycle status from a Blotato
+    GET /posts/{id} body, normalized to one of
+    ``'published' | 'failed' | 'in-progress' | ''`` (empty = couldn't tell).
+
+    Scans every key literally named status/state/submissionStatus anywhere
+    in the (possibly nested) response. A ``failed`` anywhere wins over a
+    ``published`` so we never mark a row live when any part reports failure.
+    """
+    seen: set[str] = set()
+    stack: list[Any] = [resp]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for k, val in cur.items():
+                if (
+                    isinstance(k, str)
+                    and k.lower() in _BLOTATO_STATUS_KEYS
+                    and isinstance(val, str)
+                ):
+                    v = val.strip().lower()
+                    if any(t in v for t in _BLOTATO_STATUS_FAILED):
+                        seen.add("failed")
+                    elif any(t in v for t in _BLOTATO_STATUS_PUBLISHED):
+                        seen.add("published")
+                    elif v:
+                        seen.add("in-progress")
+                stack.append(val)
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    if "failed" in seen:
+        return "failed"
+    if "published" in seen:
+        return "published"
+    if "in-progress" in seen:
+        return "in-progress"
+    return ""
+
+
+def _extract_blotato_error(resp: Any) -> str:
+    """Pull the first human-readable error string from a Blotato status
+    body, if any (used when a scheduled post comes back failed)."""
+    stack: list[Any] = [resp]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for k, val in cur.items():
+                if (
+                    isinstance(k, str)
+                    and k.lower() in _BLOTATO_ERROR_KEYS
+                    and isinstance(val, str)
+                    and val.strip()
+                ):
+                    return val.strip()[:500]
+                stack.append(val)
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    return ""
+
+
 def _open_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -441,13 +517,22 @@ class TKVideoService:
             return cur.rowcount > 0
 
     def refresh_dispatch_status(self) -> dict[str, Any]:
-        """Poll Blotato for every dispatched post that doesn't have a
-        ``tiktok_video_id`` yet, parse the response, and persist the ID
-        once the post reaches a terminal state.
+        """Poll Blotato for posts that haven't reached a terminal local
+        state, reusing one GET /posts/{id} per row for two reconciliations:
 
-        Blotato's GET /posts/{id} returns whatever shape they currently
-        emit; we look for a URL like ``https://www.tiktok.com/.../video/{id}``
-        in any string field and extract the numeric id.
+          1. ``scheduled`` rows — Blotato is holding the post until its
+             ``scheduledTime``. Without this, a scheduled row would sit at
+             "已排期" forever even after Blotato fired (or failed) it — the
+             "no publish callback" problem. We flip it to ``published``
+             (stamping ``published_at``) or ``failed`` (recording the error)
+             once Blotato reports a terminal status.
+          2. ``published`` rows still missing ``tiktok_video_id`` — extract
+             it from a ``tiktok.com/.../video/{id}`` URL in the response so
+             B.2 metrics can attach.
+
+        Blotato's GET /posts/{id} shape drifts across versions, so status is
+        read loosely (see ``_extract_blotato_status``) and the TikTok id is
+        scraped from any string field.
         """
         import re
         from src.services.tiktok.blotato_service import BlotaToService
@@ -455,52 +540,97 @@ class TKVideoService:
         with _open_db(self.db_path) as conn:
             rows = conn.execute(
                 """
-                SELECT id, blotato_post_id
+                SELECT id, blotato_post_id, publish_status, tiktok_video_id
                   FROM tk_videos
-                 WHERE publish_status = 'published'
-                   AND blotato_post_id != ''
-                   AND tiktok_video_id = ''
+                 WHERE blotato_post_id != ''
+                   AND (
+                         publish_status = 'scheduled'
+                      OR (publish_status = 'published' AND tiktok_video_id = '')
+                       )
                 """,
             ).fetchall()
         if not rows:
-            return {"checked": 0, "matched": 0, "errors": []}
+            return {"checked": 0, "matched": 0, "published": 0,
+                    "failed": 0, "errors": []}
 
         bsvc = BlotaToService()
         if not bsvc.is_configured():
-            return {"checked": 0, "matched": 0,
+            return {"checked": 0, "matched": 0, "published": 0, "failed": 0,
                     "errors": ["BLOTATO_API_KEY not set"]}
 
         url_re = re.compile(r"tiktok\.com/[^\s\"'<>]*?/video/(\d{8,25})", re.I)
-        matched, errors = 0, []
+        matched = published = failed = 0
+        errors: list[dict] = []
         for r in rows:
             try:
                 resp = bsvc.get_post_status(r["blotato_post_id"])
-                tid = ""
-                # Walk every string in the response looking for a TikTok video URL.
-                stack = [resp]
-                while stack:
-                    cur = stack.pop()
-                    if isinstance(cur, dict):
-                        stack.extend(cur.values())
-                    elif isinstance(cur, list):
-                        stack.extend(cur)
-                    elif isinstance(cur, str):
-                        m = url_re.search(cur)
-                        if m:
-                            tid = m.group(1)
-                            break
-                if tid:
+            except Exception as e:
+                errors.append({"video_id": r["id"],
+                               "error": f"{type(e).__name__}: {e}"[:200]})
+                continue
+
+            # Walk every string in the response looking for a TikTok video URL.
+            tid = ""
+            stack = [resp]
+            while stack:
+                cur = stack.pop()
+                if isinstance(cur, dict):
+                    stack.extend(cur.values())
+                elif isinstance(cur, list):
+                    stack.extend(cur)
+                elif isinstance(cur, str):
+                    m = url_re.search(cur)
+                    if m:
+                        tid = m.group(1)
+                        break
+
+            status = _extract_blotato_status(resp)
+
+            if r["publish_status"] == "scheduled":
+                # A resolved TikTok URL is itself proof the post went live,
+                # even if the status field is ambiguous.
+                if status == "published" or tid:
                     with _open_db(self.db_path) as conn:
                         conn.execute(
-                            "UPDATE tk_videos SET tiktok_video_id = ? WHERE id = ?",
-                            (tid, r["id"]),
+                            """
+                            UPDATE tk_videos
+                               SET publish_status = 'published',
+                                   published_at   = COALESCE(published_at, ?),
+                                   publish_error  = '',
+                                   tiktok_video_id = CASE
+                                       WHEN tiktok_video_id = '' THEN ?
+                                       ELSE tiktok_video_id END
+                             WHERE id = ?
+                            """,
+                            (int(time.time()), tid, r["id"]),
                         )
                         conn.commit()
-                    matched += 1
-                    logger.info("video #%d → tiktok_video_id %s", r["id"], tid)
-            except Exception as e:
-                errors.append({"video_id": r["id"], "error": f"{type(e).__name__}: {e}"[:200]})
-        return {"checked": len(rows), "matched": matched, "errors": errors}
+                    published += 1
+                    if tid:
+                        matched += 1
+                    logger.info("video #%d scheduled→published (blotato post %s)",
+                                r["id"], r["blotato_post_id"])
+                elif status == "failed":
+                    msg = _extract_blotato_error(resp) or "Blotato reported failed"
+                    self._set_status(r["id"], "failed", error=msg)
+                    failed += 1
+                    logger.info("video #%d scheduled→failed: %s", r["id"], msg[:120])
+                # else: still in-progress / queued — leave as scheduled.
+                continue
+
+            # Already published: only need to backfill the TikTok video id.
+            if tid:
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE tk_videos SET tiktok_video_id = ? WHERE id = ?",
+                        (tid, r["id"]),
+                    )
+                    conn.commit()
+                matched += 1
+                logger.info("video #%d → tiktok_video_id %s", r["id"], tid)
+
+        return {"checked": len(rows), "matched": matched,
+                "published": published, "failed": failed, "errors": errors}
 
     def dispatch_due(self) -> dict[str, Any]:
         """Send every tk_videos row with status='scheduled' and scheduled_at<=now.
@@ -794,6 +924,46 @@ class TKVideoService:
             )
             conn.commit()
             return cur.rowcount > 0
+
+    def delete_video(self, video_id: int) -> bool:
+        """Hard-delete a video row, its child rows, and its on-disk files.
+
+        ``tk_video_scripts`` / ``tk_video_narrations`` cascade via FK, but
+        ``tk_video_metrics`` has no ON DELETE CASCADE, so we clear it first
+        (a leftover metrics row would otherwise trip the FK constraint and
+        block the delete). The pack's ``videos/{id}/`` dir — local upload,
+        narration artifacts, caption raw — is removed best-effort.
+
+        This only removes our local tracking. A post already live on TikTok
+        (or queued/scheduled on Blotato) is NOT recalled; cancel those in
+        the TikTok app / Blotato dashboard.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT v.id, p.pack_uid
+                  FROM tk_videos v
+             LEFT JOIN packs     p ON p.id = v.pack_id
+                 WHERE v.id = ?
+                """,
+                (video_id,),
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute("DELETE FROM tk_video_metrics WHERE video_id = ?", (video_id,))
+            conn.execute("DELETE FROM tk_videos WHERE id = ?", (video_id,))
+            conn.commit()
+
+        pack_uid = row["pack_uid"]
+        if pack_uid:
+            try:
+                vdir = self.store.pack_dir(pack_uid) / "videos" / str(video_id)
+                if vdir.is_dir():
+                    shutil.rmtree(vdir, ignore_errors=True)
+            except Exception as e:
+                logger.warning("video #%d dir cleanup failed: %s", video_id, e)
+        logger.info("video #%d deleted", video_id)
+        return True
 
     # ------------------------------------------------------------------
     # Read
