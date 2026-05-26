@@ -174,24 +174,32 @@ def _friendly_platform_error(action: str, raw: str) -> str:
     return f"TikTok 拒绝: {raw[:300]}"
 
 
-def _slugify_for_sku(name: str) -> str:
-    """Pack name -> 1-10 char uppercased alphanumeric slug."""
-    return re.sub(r"[^A-Za-z0-9]", "", name or "").upper()[:10]
+def _slugify_for_sku(pack_uid: str) -> str:
+    """Uppercased alphanumeric slug from the NAME part of a pack_uid.
+
+    ``pack_uid`` is ``{YYYYMMDD}_{name}_{4hex}``. We strip the leading date
+    block and the trailing hex token first, so the slug reflects the pack
+    *name* rather than the (shared) date prefix. Otherwise every pack created
+    on the same day collapses to the same date-dominated first 10 chars and
+    their default SKUs collide.
+    """
+    s = re.sub(r"^\d{8}_", "", pack_uid or "")        # drop leading YYYYMMDD_
+    s = re.sub(r"_[0-9a-fA-F]{4}$", "", s)            # drop trailing _xxxx hex
+    return re.sub(r"[^A-Za-z0-9]", "", s).upper()[:12]
 
 
 def compute_default_seller_sku(
-    *, pack_uid: str, total_stickers: int, pack_id: int
+    *, pack_uid: str, total_stickers: int = 0, pack_id: int
 ) -> str:
-    """Default seller_sku = ``INK-{slug10}-{total_stickers}``.
+    """Default seller_sku = ``INK-{name_slug}-{pack_id}``.
 
-    slug10 is the uppercased alphanumeric pack_uid truncated to 10
-    characters. If pack_uid yields an empty slug (all punctuation), fall
-    back to ``P{pack_id}`` so we still emit a valid SKU.
+    ``pack_id`` (the DB primary key) is appended to GUARANTEE global
+    uniqueness — the old ``INK-{slug10}-{total}`` form collided for packs made
+    the same day (date-dominated slug) with the same sticker count.
+    ``total_stickers`` is accepted for backward compat but no longer encoded.
     """
-    slug = _slugify_for_sku(pack_uid)
-    if not slug:
-        slug = f"P{pack_id}"
-    sku = f"INK-{slug}-{int(total_stickers or 0)}"
+    slug = _slugify_for_sku(pack_uid) or f"P{pack_id}"
+    sku = f"INK-{slug}-{pack_id}"
     return sku[:25]
 
 
@@ -1135,7 +1143,10 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             if success:
                 # Honor TikTok-side status. Single mapping shared with sync.
-                local_status = self._local_status_from_tiktok(tiktok_status or "")
+                # Fall back to the raw value (or 'pending') if unmapped, since a
+                # successful publish must still land in a non-empty status.
+                local_status = (self._local_status_from_tiktok(tiktok_status or "")
+                                or (tiktok_status or "").strip().lower() or "pending")
                 conn.execute(
                     """
                     UPDATE tkshop_products
@@ -1817,7 +1828,10 @@ class TKShopService:
             return "seller_deactivated"
         if ts == "DELETED":
             return "deleted"
-        return remote.lower() or "unknown"
+        # Unrecognized / empty -> "" so sync callers know NOT to overwrite the
+        # local status with junk (e.g. when the platform response omits the
+        # status field). Callers that need a value supply their own fallback.
+        return ""
 
     def sync_one_status(self, product_id: int) -> dict[str, Any]:
         """Refresh the publish_status for a single product from TikTok."""
@@ -1838,7 +1852,18 @@ class TKShopService:
         data = result.get("data") or {}
         remote = (data.get("status") or "").strip()
         local = self._local_status_from_tiktok(remote)
-        if local and local != (row["publish_status"] or ""):
+        if not local:
+            # Platform response had no recognizable status field — DON'T
+            # overwrite the local value with junk; surface the raw shape so we
+            # can see what the wrapper actually returned.
+            logger.warning(
+                "sync_one_status #%s: empty/unmapped remote status %r; raw=%s",
+                product_id, remote, str(data)[:300],
+            )
+            return {"ok": False, "remote_status": remote,
+                    "local_status": row["publish_status"], "previous": row["publish_status"],
+                    "error_message": f"平台返回的状态无法识别（status={remote or '空'}）；已保留本地状态"}
+        if local != (row["publish_status"] or ""):
             with _open_db(self.db_path) as conn:
                 conn.execute(
                     "UPDATE tkshop_products SET publish_status = ? WHERE id = ?",
@@ -1864,10 +1889,12 @@ class TKShopService:
                 """
                 SELECT id, tiktok_product_id, publish_status, shop
                   FROM tkshop_products
-                 WHERE publish_status NOT IN ('draft', 'failed')
-                   AND tiktok_product_id != ''
+                 WHERE tiktok_product_id != ''
                 """,
             ).fetchall()
+            # Any product that exists on the platform (has a tiktok_product_id)
+            # is syncable — including ones locally marked 'failed', which may
+            # actually have gone live on TikTok (the old filter skipped them).
         if not rows:
             return {"checked": 0, "updated": 0, "errors": []}
 
@@ -1891,7 +1918,15 @@ class TKShopService:
                     data = body if isinstance(body, dict) else {}
                 remote = (data.get("status") or "").strip()
                 local = self._local_status_from_tiktok(remote)
-                if local and local != (r["publish_status"] or ""):
+                if not local:
+                    logger.warning(
+                        "sync_statuses #%s: empty/unmapped remote status %r; raw=%s",
+                        r["id"], remote, str(data)[:200],
+                    )
+                    errors.append({"product_id": r["id"],
+                                   "error": f"status unrecognized: {remote or 'empty'}"})
+                    continue
+                if local != (r["publish_status"] or ""):
                     with _open_db(self.db_path) as conn:
                         conn.execute(
                             "UPDATE tkshop_products SET publish_status = ? WHERE id = ?",
