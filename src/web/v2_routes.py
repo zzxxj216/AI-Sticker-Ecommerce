@@ -1446,6 +1446,7 @@ def v2_series_detail(request: Request, series_id: int):
         "total": len(enriched),
     }
     series["expected_count"] = len(briefs_by_idx)
+    series["failure_summary"] = svc.series_failure_summary(series_id)
     return templates.TemplateResponse(
         "v2_series_detail.html",
         {
@@ -1453,6 +1454,24 @@ def v2_series_detail(request: Request, series_id: int):
             "page_title": f"系列 #{series_id} {series['series_name']}",
             "series": series,
         },
+    )
+
+
+@router.post("/series/{series_id:int}/repair")
+async def v2_series_repair(request: Request, series_id: int):
+    """One-click repair: retry failed previews + failed sticker splits."""
+    form = await request.form()
+    svc = get_preview_gen_service()
+    if not svc.get_series_with_previews(series_id):
+        raise HTTPException(status_code=404, detail="series not found")
+    run_async(
+        f"repair_series:{series_id}",
+        svc.repair_series, series_id,
+        label=f"修复失败 (series #{series_id})",
+    )
+    return RedirectResponse(
+        url=_safe_v2_redirect(form.get("return_to"), f"/v2/series/{series_id}"),
+        status_code=303,
     )
 
 
@@ -2398,6 +2417,26 @@ def v2_video_new(request: Request, pack_id: int | None = None):
     return RedirectResponse(url="/v2/videos", status_code=303)
 
 
+def _kickoff_post_upload(video_id: int, *, include_caption: bool = True) -> None:
+    """After a video file lands, auto-fire background generation so the operator
+    gets文案 + 字幕 without clicking: full narration (Gemini analysis ->
+    voiceover + synced subtitles -> narrated mp4) always, plus the publish
+    caption unless the caller already triggered it. run_async keys make this
+    idempotent (won't double-fire if one is already running)."""
+    from src.services.video_narration import get_video_narration_service
+    run_async(
+        f"narration:{video_id}",
+        get_video_narration_service().generate, video_id,
+        label=f"配音独白 video #{video_id}",
+    )
+    if include_caption:
+        run_async(
+            f"caption_gen:{video_id}",
+            get_tk_video_service().generate_caption, video_id,
+            label=f"AI 文案 video #{video_id}",
+        )
+
+
 @router.post("/videos")
 async def v2_video_create(request: Request):
     """Create video row, then save uploaded file (multipart/form-data)."""
@@ -2428,6 +2467,7 @@ async def v2_video_create(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
     # If a file was uploaded, save it via PackStore.
+    file_saved = False
     if upload is not None and getattr(upload, "filename", ""):
         import tempfile
         tmp = Path(tempfile.mkdtemp()) / upload.filename
@@ -2435,6 +2475,7 @@ async def v2_video_create(request: Request):
             shutil.copyfileobj(upload.file, fh)
         try:
             svc.save_video_file(video_id, tmp, original_filename=upload.filename)
+            file_saved = True
         finally:
             try:
                 tmp.unlink()
@@ -2462,6 +2503,11 @@ async def v2_video_create(request: Request):
             except Exception as e:
                 logger.exception("sync caption generation failed for video #%d", video_id)
                 caption_error = str(e)[:180]
+
+    # Auto-process every upload: full narration (voiceover + subtitles) always;
+    # caption too unless the form already triggered it above.
+    if file_saved:
+        _kickoff_post_upload(video_id, include_caption=not generate_caption)
 
     dispatch_pending = False
     dispatch_error = ""
@@ -2521,6 +2567,13 @@ def v2_video_detail(request: Request, video_id: int):
         sc["created_human"] = _fmt_ts(sc.get("created_at"))
         sc["updated_human"] = _fmt_ts(sc.get("updated_at"))
     script_task_running = is_running(f"video_script:{video_id}")
+    # Video narration (dubbing) context
+    from src.services.video_narration import get_video_narration_service
+    nsvc = get_video_narration_service()
+    narration = nsvc.latest_for_video(video_id)
+    if narration:
+        narration["created_human"] = _fmt_ts(narration.get("created_at"))
+    narration_task_running = is_running(f"narration:{video_id}")
     return templates.TemplateResponse(
         "v2_video_detail.html",
         {
@@ -2533,6 +2586,8 @@ def v2_video_detail(request: Request, video_id: int):
             "script_templates": script_templates,
             "scripts": scripts,
             "script_task_running": script_task_running,
+            "narration": narration,
+            "narration_task_running": narration_task_running,
         },
     )
 
@@ -2654,6 +2709,84 @@ def v2_video_script_export_docx(script_id: int):
     )
 
 
+# ----------------------------------------------------------------------
+# Video narration (dubbing): analyze silent video -> voiceover + subtitles
+# ----------------------------------------------------------------------
+
+@router.post("/videos/{video_id:int}/narration/generate")
+async def v2_video_narration_generate(request: Request, video_id: int):
+    """Kick off background: Gemini analysis -> TTS voiceover -> subtitles ->
+    narrated mp4. Optional form field: voice_id (else service default)."""
+    form = await request.form()
+    voice_id = (form.get("voice_id") or "").strip() or None
+    from src.services.video_narration import get_video_narration_service
+    nsvc = get_video_narration_service()
+    run_async(
+        f"narration:{video_id}",
+        nsvc.generate, video_id,
+        voice_id=voice_id,
+        label=f"视频配音独白 (video #{video_id})",
+    )
+    return RedirectResponse(url=f"/v2/videos/{video_id}#narration", status_code=303)
+
+
+@router.get("/videos/narration/{narration_id:int}/file/{name}")
+def v2_video_narration_file(narration_id: int, name: str):
+    """Stream a narration artifact: 'video' (narrated.mp4), 'audio'
+    (voiceover.mp3) or 'srt' (subtitles.srt)."""
+    from io import BytesIO
+    from pathlib import Path
+    from src.services.video_narration import get_video_narration_service
+    n = get_video_narration_service().get_narration(narration_id)
+    if not n:
+        raise HTTPException(status_code=404, detail="narration not found")
+    spec = {
+        "video": (n.get("video_path"), "video/mp4", "narrated.mp4"),
+        "audio": (n.get("audio_path"), "audio/mpeg", "voiceover.mp3"),
+        "srt":   (str(Path(n.get("video_path") or ".").parent / "subtitles.srt") if n.get("video_path") else "",
+                  "text/plain; charset=utf-8", "subtitles.srt"),
+    }.get(name)
+    if not spec:
+        raise HTTPException(status_code=400, detail="bad name")
+    path_str, mime, fname = spec
+    p = Path(path_str or "")
+    if not path_str or not p.is_file():
+        raise HTTPException(status_code=404, detail="file not ready")
+    data = p.read_bytes()
+    disp = "attachment" if name == "srt" else "inline"
+    return StreamingResponse(
+        BytesIO(data), media_type=mime,
+        headers={"Content-Disposition": f'{disp}; filename="{fname}"',
+                 "Content-Length": str(len(data))},
+    )
+
+
+@router.post("/videos/narration/{narration_id:int}/promote")
+async def v2_video_narration_promote(narration_id: int):
+    """Copy the narrated mp4 into the publish slot so the existing Blotato
+    flow ships the dubbed version."""
+    from src.services.video_narration import get_video_narration_service
+    nsvc = get_video_narration_service()
+    n = nsvc.get_narration(narration_id)
+    if not n:
+        raise HTTPException(status_code=404, detail="narration not found")
+    try:
+        nsvc.promote_to_publish(narration_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(url=f"/v2/videos/{n['video_id']}#narration", status_code=303)
+
+
+@router.post("/videos/narration/{narration_id:int}/delete")
+async def v2_video_narration_delete(narration_id: int):
+    from src.services.video_narration import get_video_narration_service
+    nsvc = get_video_narration_service()
+    n = nsvc.get_narration(narration_id)
+    vid = n["video_id"] if n else 0
+    nsvc.delete(narration_id)
+    return RedirectResponse(url=f"/v2/videos/{vid}#narration", status_code=303)
+
+
 # ---- Template management page + CRUD ----
 
 @router.get("/video-script-templates", response_class=HTMLResponse)
@@ -2764,6 +2897,8 @@ async def v2_video_upload_video(request: Request, video_id: int):
             tmp.parent.rmdir()
         except Exception:
             pass
+    # Auto-process the (re)uploaded file: caption + full narration in background.
+    _kickoff_post_upload(video_id, include_caption=True)
     back = (form.get("return_to") or "").strip()
     return RedirectResponse(
         url=_safe_v2_redirect(back, f"/v2/videos/{video_id}"),
@@ -3160,6 +3295,8 @@ def v2_products_list(
     status: str = "all",
     shop: str = "",
     limit: int = 50,
+    synced: int | None = None,
+    checked: int | None = None,
 ):
     # Multi-shop default: if the operator hasn't explicitly chosen a shop in
     # the URL, land on the first configured shop instead of 'all' so each
@@ -3245,7 +3382,28 @@ def v2_products_list(
             "shop_counts": shop_counts,
             "limit": limit,
             "is_platform_view": False,
+            "synced": synced,
+            "checked": checked,
         },
+    )
+
+
+@router.post("/products/sync-all")
+async def v2_products_sync_all(request: Request):
+    """Batch-refresh publish_status for every product that exists on the
+    platform (has a tiktok_product_id), via the multi-channel-api wrapper."""
+    form = await request.form()
+    svc = get_tkshop_service()
+    try:
+        res = svc.sync_statuses()
+    except Exception as e:
+        logger.exception("sync_statuses failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/products")
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(
+        url=f"{back}{sep}synced={res.get('updated', 0)}&checked={res.get('checked', 0)}",
+        status_code=303,
     )
 
 
