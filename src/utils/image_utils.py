@@ -1,7 +1,8 @@
 """图片工具函数"""
 
+import io
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 from PIL import Image
 
 from src.core.exceptions import ImageError
@@ -142,6 +143,116 @@ def get_image_size(filepath: str) -> Tuple[int, int]:
     """
     with Image.open(filepath) as img:
         return img.size
+
+
+def average_hash(source: Union[str, bytes, Image.Image], hash_size: int = 8) -> int:
+    """计算图片的 average-hash（aHash），返回一个整数指纹。
+
+    将图片转灰度、缩到 hash_size×hash_size，每个像素与均值比较得到一位，
+    拼成 hash_size² 位的整数。用于判断两张图是否近似（感知哈希），无需额
+    外依赖。
+
+    Args:
+        source: 图片路径、原始字节、或 PIL Image 对象
+        hash_size: 边长（默认 8 → 64 位指纹）
+
+    Returns:
+        int: 感知哈希指纹
+    """
+    if isinstance(source, Image.Image):
+        img = source
+    elif isinstance(source, (bytes, bytearray)):
+        img = Image.open(io.BytesIO(bytes(source)))
+    else:
+        img = Image.open(source)
+
+    small = img.convert("L").resize((hash_size, hash_size), Image.Resampling.LANCZOS)
+    pixels = list(small.getdata())
+    avg = sum(pixels) / len(pixels)
+    bits = 0
+    for px in pixels:
+        bits = (bits << 1) | (1 if px >= avg else 0)
+    return bits
+
+
+def hash_distance(a: int, b: int) -> int:
+    """两个 average-hash 指纹之间的汉明距离（不同位的个数）。
+
+    距离越小越相似；0 表示（近乎）相同。
+    """
+    return bin(a ^ b).count("1")
+
+
+def read_dimensions(source: Union[str, bytes, Image.Image]) -> Tuple[int, int]:
+    """返回图片 (width, height)，接受路径 / 原始字节 / PIL Image。"""
+    if isinstance(source, Image.Image):
+        return source.size
+    if isinstance(source, (bytes, bytearray)):
+        with Image.open(io.BytesIO(bytes(source))) as im:
+            return im.size
+    with Image.open(source) as im:
+        return im.size
+
+
+def compose_reference_grid(
+    sources: list,
+    *,
+    cell: int = 512,
+    pad: int = 12,
+    max_side: int = 1024,
+    bg: Tuple[int, int, int] = (255, 255, 255),
+) -> bytes:
+    """把多张图片按网格合并到一张白底画布，返回 PNG 字节。
+
+    用于把一个 pack 的多张预览图（sticker sheet）本地聚合成单张「全套」参考图，
+    再交给 image-to-image 模型重排成「合集」主图 —— 单图输入可避开多图编辑接口
+    的超时，且 100% 取材于真实贴纸。
+
+    Args:
+        sources: 路径 / 字节 的列表（无法解码的项自动跳过）
+        cell: 每张缩略图的最大边长
+        pad: 网格内边距
+        max_side: 合并后整图的最大边长（超出则等比缩小）
+        bg: 画布底色（默认纯白）
+
+    Returns:
+        bytes: 合并图的 PNG 字节
+    """
+    import math
+
+    imgs = []
+    for s in sources:
+        try:
+            if isinstance(s, (bytes, bytearray)):
+                im = Image.open(io.BytesIO(bytes(s)))
+            else:
+                im = Image.open(s)
+            imgs.append(im.convert("RGB"))
+        except Exception:
+            continue
+    if not imgs:
+        raise ImageError("compose_reference_grid: 没有可解码的源图片")
+
+    n = len(imgs)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    width = cols * cell + pad * (cols + 1)
+    height = rows * cell + pad * (rows + 1)
+    canvas = Image.new("RGB", (width, height), bg)
+    for i, im in enumerate(imgs):
+        thumb = im.copy()
+        thumb.thumbnail((cell, cell), Image.Resampling.LANCZOS)
+        r, c = divmod(i, cols)
+        x = pad + c * (cell + pad) + (cell - thumb.width) // 2
+        y = pad + r * (cell + pad) + (cell - thumb.height) // 2
+        canvas.paste(thumb, (x, y))
+
+    if max(canvas.size) > max_side:
+        canvas.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+
+    out = io.BytesIO()
+    canvas.save(out, "PNG")
+    return out.getvalue()
 
 
 def convert_image_format(

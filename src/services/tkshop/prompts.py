@@ -10,11 +10,12 @@ from __future__ import annotations
 DETAIL_MAIN_SYSTEM_PROMPT = (
     "You write product listings for an overseas TikTok Shop sticker brand. "
     "All copy MUST be English (en-US), written for buyers in the US/UK/AU/CA "
-    "market. Tone: clear, scannable, lightly enthusiastic — not corporate, "
-    "not over-hyped. The product is physical waterproof vinyl die-cut "
-    "stickers shipped from a small e-commerce seller. Output a markdown "
-    "plan with the requested sections — do NOT output JSON; a separate "
-    "extractor will pull the structured fields."
+    "market. Tone: specific, buyer-facing, scannable, and natural — never "
+    "keyword-stuffed, never corporate, never over-hyped. The product is a "
+    "physical waterproof vinyl die-cut sticker pack shipped from a small "
+    "e-commerce seller. Output a markdown plan with the requested sections "
+    "— do NOT output JSON; a separate extractor will pull the structured "
+    "fields."
 )
 
 
@@ -29,7 +30,7 @@ def build_detail_main_prompt(
     suggested_seller_sku: str = "",
 ) -> str:
     """Markdown plan: title, description (HTML), selling points, keywords, sku."""
-    sample_lines = "\n".join(f"- {b}" for b in sticker_briefs_sample[:10]) or "- (no sample available)"
+    sample_lines = "\n".join(f"- {b}" for b in sticker_briefs_sample[:14]) or "- (no sample available)"
     sku_line = (
         f"Suggested seller_sku: `{suggested_seller_sku}` (you may keep this verbatim)."
         if suggested_seller_sku else
@@ -49,36 +50,45 @@ def build_detail_main_prompt(
 
 ### Product reality
 - Physical waterproof vinyl die-cut stickers
-- Common use cases: laptop, water bottle, phone case, journal, scrapbook,
-  party favor, gift bag, envelope seal
+- Common use cases, choose only the most relevant 3-5 in buyer copy:
+  laptop, water bottle, phone case, journal, scrapbook, party favor,
+  gift bag, envelope seal
 - Ships from small business
 - No copyrighted characters
 
 ### Output (markdown sections, no JSON)
 
 #### title
-A SEO-friendly product title in English. **HARD LIMIT: 255 characters
-maximum.** Target 90-180 characters for best buyer scannability.
-TikTok Shop will reject anything over 255. MUST include "Class of 2026"
-or the relevant year tag if archetype implies it. Front-load the
-most-searched keywords. NO emojis. Example (89 chars):
-"Class of 2026 Graduation Stickers | Black Gold Pack | Waterproof Vinyl
-Laptop Decals"
+Write one buyer-readable TikTok Shop title. **HARD LIMIT: 255 characters,
+but target 65-100 characters.** Use at most one separator (`|` or comma).
+Do not stack every keyword or every use case. Do not start with awkward
+marketplace phrasing like "50Pcs"; use "50 Waterproof Vinyl Stickers" or
+"50-Piece Sticker Pack" if the count matters. MUST include "Class of 2026"
+or the relevant year tag if archetype implies it. NO emojis. Strong shape:
+main search phrase + specific style/occasion + material/use case.
+Example:
+"Class of 2026 Graduation Stickers | Black Gold Waterproof Vinyl Decals"
 
 #### description_html
-A 3-5 paragraph product description in clean HTML. Use:
+A concise product description in clean HTML, written like a polished shop
+listing, not a generic template. Target 130-220 words. Use:
 - <p>...</p> for paragraphs
-- <ul><li>...</li></ul> for the use-cases list
+- <ul><li>...</li></ul> for 3-5 specific highlights
 - <strong>...</strong> for key emphasis
-NO inline styles, NO scripts. Open with a hook paragraph, then a "What's
-included" line with the count, then a use-cases list, then a small
-shipping/quality reassurance line. Keep total length 250-450 words.
+NO inline styles, NO scripts. Open with a concrete hook tied to THIS pack's
+theme and sample stickers. Mention the count once. Include specific design
+details from the sample sticker contents. Avoid empty openers like "Bring
+style to your everyday items" unless the pack truly needs that wording.
+Avoid repeating "waterproof vinyl" more than twice. End with a short,
+practical quality/use line; do not over-focus on shipping.
 
 #### selling_points
 Exactly 5 short selling-point bullets (one line each, plain text, no
 markdown bullet character). Each 6-12 words. Punchy, scannable.
-Examples: "60+ unique designs, no duplicates", "Waterproof vinyl, fade
-resistant", "Perfect for laptop, water bottle, scrapbook".
+At least 3 bullets must be specific to this pack's theme, art style, or
+sticker subjects. Avoid generic repeats across products.
+Examples: "60 unique retro travel-poster designs", "Waterproof vinyl for
+laptops and bottles", "Black-gold grad labels for party favors".
 
 #### keywords
 12-20 SEO keyword phrases (one per line, plain text, no #). Mix:
@@ -187,44 +197,102 @@ SELF_HEAL_EXTRACT_SCHEMA = {
 # Image design: synthesize main + secondary product image specs from previews
 # ---------------------------------------------------------------------------
 
+# Fidelity clause appended to every image_prompt — the #1 lever against
+# the image-to-image model silently redrawing / blurring the real sticker
+# artwork. The reference handed to the model is an actual die-cut sticker
+# (or sticker sheet), so staging must PRESERVE it, never reinterpret it.
+IMAGE_DESIGN_FIDELITY_CLAUSE = (
+    "Preserve the exact sticker artwork, colors and text from the reference "
+    "image — do not redraw, restyle, recolor, blur, or add any new text, "
+    "watermark or logo. Photorealistic product photography."
+)
+
+# Menu of secondary-image angles the art-director model picks from, tuned to
+# the pack instead of a rigid lifestyle/flat-lay/packaging triplet. Keep the
+# enum in sync with IMAGE_DESIGN_EXTRACT_SCHEMA.role_type.
+IMAGE_DESIGN_ROLE_MENU = """
+- "hero": the cover/bundle shot. ALL the pack's stickers clustered together
+  as one dense, slightly-overlapping collage that fills the frame on a pure
+  plain white background — no props, no surface, no text. Reserved for "main".
+- "lifestyle": stickers applied on a real-world surface that fits the theme
+  (laptop lid, water bottle, journal, phone case, helmet, guitar case…).
+  Hands / human presence fine. Natural daylight or warm indoor light.
+- "in_use": close, tactile shot — a hand peeling one sticker off its backing
+  or pressing it onto a surface. Shows it is a real die-cut vinyl sticker.
+- "flat_lay": top-down view of several stickers on a textured surface with a
+  coin / ruler / hand for implied scale. Shows the variety of designs.
+- "full_set": neat overview of the whole set so buyers see everything they
+  get — stickers arranged in a tidy grid or fan on a plain on-brand surface.
+- "packaging": stickers next to or inside small kraft / glassine packaging,
+  or fanned beside an envelope/journal. Implies small-business gifting.
+- "scene": a themed contextual still-life that matches the pack subject
+  (e.g. desert dunes for a van-life pack, a night desk for a celestial pack)
+  with the stickers placed naturally within it.
+""".strip()
+
 IMAGE_DESIGN_SYSTEM_PROMPT = (
     "You are an art director for a TikTok Shop sticker store. Given a "
     "design context describing a sticker pack (palette, style anchor, "
     "themes, sample sticker briefs), produce concrete image-generation "
     "prompts for a main product image (cover/hero) and several supporting "
-    "product images (lifestyle, flat-lay/scale, packaging mock). Each "
-    "prompt should be a single English sentence-paragraph, ready to feed "
-    "into an image-to-image model that uses one of the pack's stickers "
-    "as a visual reference. Output ONLY a JSON object matching the "
-    "schema; no prose, no code fences."
+    "product images. Each prompt is a single English sentence-paragraph, "
+    "fed into an image-to-image model whose reference is one of the pack's "
+    "ACTUAL die-cut stickers — so describe the SCENE / STAGING / CAMERA / "
+    "LIGHTING and insist the artwork is preserved, never the sticker design "
+    "itself. Pick supporting angles that genuinely fit THIS pack's theme "
+    "(not a fixed template). Output ONLY a JSON object matching the schema; "
+    "no prose, no code fences."
 )
 
-IMAGE_DESIGN_INSTRUCTIONS = """
+IMAGE_DESIGN_INSTRUCTIONS = f"""
 Design rules:
-- main: a clean hero shot. The main sticker(s) sit on a soft, on-brand
-  background. Studio lighting. Slight angle or flat-on. NO text overlay,
-  NO watermarks, NO logos. Photorealistic e-commerce listing aesthetic.
-- secondary[0] = lifestyle: stickers applied on a real-world surface
-  (laptop lid, water bottle, journal cover, phone case). Hands or human
-  presence is fine. Natural daylight or warm indoor light.
-- secondary[1] = flat-lay/scale: top-down view of multiple stickers on a
-  textured surface (desk, paper, fabric) with a coin or ruler-implied
-  scale cue. Shows variety of designs.
-- secondary[2] = packaging/giftable: stickers next to or inside small
-  kraft packaging, or fanned out alongside an envelope/journal. Implies
-  small-business gifting.
+- "main" is always role_type "hero": a clean, scroll-stopping cover shot.
+  Photorealistic e-commerce listing aesthetic.
+- "secondary" angles are chosen from this menu to suit the pack — vary them,
+  do NOT just repeat lifestyle/flat-lay/packaging every time:
+{IMAGE_DESIGN_ROLE_MENU}
+
+Pick secondary angles that best sell THIS specific pack and its current
+product state. Do not force a fixed set of angles. Choose lifestyle, in_use,
+flat_lay, full_set, packaging, or scene in whatever mix makes the listing more
+convincing for this product.
 
 Each "image_prompt" must:
-- Be 1-3 English sentences, < 350 characters.
+- Be 1-3 English sentences, < 320 characters (before the fidelity clause).
 - Reference the palette, style anchor, and 1-2 sample sticker subjects.
 - Specify camera angle + lighting + surface/background.
-- End with: "Photorealistic product photography, no text overlay, no
-  watermark, no logo."
+- ALWAYS in English regardless of locale (the image model expects English);
+  use the locale only to influence staging / props.
+- End with exactly this sentence: "{IMAGE_DESIGN_FIDELITY_CLAUSE}"
 
 Each "concept" is a 5-12 word internal label for the operator (e.g.
-"hero on cream paper", "lifestyle laptop lid").
+"hero on cream paper", "lifestyle laptop lid"). Set "role_type" to the
+menu key you chose.
 """.strip()
 
+
+# role_type enum — keep in sync with IMAGE_DESIGN_ROLE_MENU keys.
+IMAGE_DESIGN_ROLE_TYPES = [
+    "hero", "lifestyle", "in_use", "flat_lay", "full_set", "packaging", "scene",
+]
+
+# Fixed prompt for the main "bundle" hero — the operator-approved style: every
+# sticker densely clustered on pure white. It is fed a MERGED reference grid of
+# the pack's preview sheets (built locally in image_utils.compose_reference_grid),
+# so the model only recomposes real artwork rather than inventing a scene. This
+# style is deterministic, so we don't leave it to the art-director model.
+MAIN_BUNDLE_PROMPT = (
+    "Studio e-commerce main image for a large sticker/card pack on a pure plain "
+    "white background. Use the reference image as the complete visual source "
+    "for the pack, then recompose the visible sticker/card designs into one "
+    "dense overlapping round or oval product collage, similar to marketplace "
+    "bundle photos where dozens of cards fan and stack into a clean circular "
+    "pile. Fill most of the frame, varied sizes and rotations, layered edges, "
+    "subtle studio shadows, no props, no surface, no text overlay. Do not copy "
+    "the reference grid layout or panel boundaries. Preserve the source artwork "
+    "style, colors, text, and quantity impression; do not invent unrelated new "
+    "designs."
+)
 
 IMAGE_DESIGN_EXTRACT_SCHEMA = {
     "type": "object",
@@ -235,7 +303,8 @@ IMAGE_DESIGN_EXTRACT_SCHEMA = {
             "required": ["concept", "image_prompt"],
             "properties": {
                 "concept":      {"type": "string", "maxLength": 100},
-                "image_prompt": {"type": "string", "maxLength": 800},
+                "image_prompt": {"type": "string", "maxLength": 900},
+                "role_type":    {"type": "string", "enum": IMAGE_DESIGN_ROLE_TYPES},
             },
         },
         "secondary": {
@@ -247,7 +316,8 @@ IMAGE_DESIGN_EXTRACT_SCHEMA = {
                 "required": ["concept", "image_prompt"],
                 "properties": {
                     "concept":      {"type": "string", "maxLength": 100},
-                    "image_prompt": {"type": "string", "maxLength": 800},
+                    "image_prompt": {"type": "string", "maxLength": 900},
+                    "role_type":    {"type": "string", "enum": IMAGE_DESIGN_ROLE_TYPES},
                 },
             },
         },
@@ -266,9 +336,16 @@ def build_image_design_prompt(
     preview_prompt_samples: list[str],
     secondary_count: int = 3,
     language: str = "en",
+    selected_sticker_subjects: list[str] | None = None,
 ) -> str:
     sample_lines = "\n".join(f"- {b}" for b in sticker_briefs_sample[:12]) or "- (no brief)"
     preview_lines = "\n".join(f"- {p[:200]}" for p in preview_prompt_samples[:6]) or "- (no preview prompt)"
+    selected = selected_sticker_subjects or []
+    selected_block = (
+        "\n### Hero candidates (operator-selected stickers — favor these)\n"
+        + ("\n".join(f"- {s}" for s in selected[:8]))
+        if selected else ""
+    )
     lang_lookup = {
         "en": "Western (US/UK/AU/CA) e-commerce aesthetic — clean studio, "
               "natural daylight, common Western household surfaces.",
@@ -293,23 +370,21 @@ def build_image_design_prompt(
 
 ### Sticker subjects (sample)
 {sample_lines}
+{selected_block}
 
 ### Existing preview prompts (used to render the stickers themselves)
 {preview_lines}
 
 ### Output (JSON only)
-Produce one "main" image spec and {secondary_count} "secondary" image specs
-following the design rules. Each spec has:
-- "concept": short label
-- "image_prompt": the actual image-generation prompt — ALWAYS in English
-  regardless of locale code, because the downstream image-to-image model
-  expects English. Use the locale to influence STAGING / PROPS, not the
-  prompt language itself.
+Produce one "main" image spec (role_type "hero") and {secondary_count}
+"secondary" image specs, each with a "concept" label, an English
+"image_prompt", and a "role_type" from the menu in the instructions.
 
-The prompts will be fed into an image-to-image model that takes ONE of
-the pack's existing stickers as the visual reference, so the prompts
-should describe the SCENE / STAGING / CAMERA / LIGHTING — not the
-sticker artwork itself.
+The prompts will be fed into an image-to-image model that takes ONE of the
+pack's ACTUAL die-cut stickers as the visual reference, so the prompts must
+describe the SCENE / STAGING / CAMERA / LIGHTING and insist the sticker
+artwork is preserved — never describe or redraw the sticker design itself.
+Choose supporting angles that genuinely fit this pack; vary them.
 """
 
 

@@ -62,7 +62,7 @@
   </div>
   <form method="post" action="/v2/products/{{ product.id }}/edit-detail" style="padding:0 24px 18px;">
     <div style="margin-bottom:10px;">
-      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">title (en, ≤255 chars，推荐 90-180)</label>
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">title (en, ≤255 chars，推荐 65-100)</label>
       <input type="text" name="title" value="{{ product.title }}" maxlength="255"
              style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
     </div>
@@ -194,15 +194,15 @@
   <div class="panel-header" style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
     <div>
       <h3 style="margin:0;font-size:16px;">产品图 <span id="img-count">({{ product.images|length }})</span></h3>
-      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">主图（main）= 1 张，TikTok 强制；其余为附图（secondary）。 ↑↓ 调整顺序，「设为主图」切换。</p>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">推荐用「AI 生成主图+附图」产出实拍级图片。主图（main）= 1 张，TikTok 强制；其余为附图（secondary）。 ↑↓ 调整顺序，「设为主图」切换。</p>
     </div>
-    <div style="display:flex;gap:8px;">
-      <form method="post" action="/v2/products/{{ product.id }}/import_pack_previews" style="margin:0;">
-        <button type="submit" title="把当前 pack 的所有 ok 预览图一键复制到产品图"
-                style="padding:6px 12px;background:var(--surface);color:var(--text-primary);border:1px solid var(--line);border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">📥 从 pack 预览导入</button>
-      </form>
+    <div style="display:flex;gap:8px;align-items:center;">
       <button type="button" id="ai-modal-open"
               style="padding:6px 12px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">🎨 AI 生成主图+附图…</button>
+      <form method="post" action="/v2/products/{{ product.id }}/import_pack_previews" style="margin:0;">
+        <button type="submit" title="后备方案：把当前 pack 的所有 ok 预览图（贴纸表）原样复制为产品图。建议优先用左侧 AI 生成。"
+                style="padding:6px 12px;background:var(--surface);color:var(--text-muted);border:1px solid var(--line);border-radius:6px;font-weight:500;cursor:pointer;font-size:12px;">📥 后备：导入预览图</button>
+      </form>
     </div>
   </div>
 
@@ -269,10 +269,9 @@
       <div>
         <label for="ai-size">尺寸</label>
         <select id="ai-size">
-          <option value="1024x1024" selected>1024×1024 (方)</option>
-          <option value="1024x1280">1024×1280 (4:5 立)</option>
-          <option value="1280x1024">1280×1024 (5:4 横)</option>
-          <option value="768x1024">768×1024 (3:4 立)</option>
+          <option value="1024x1024" selected>1024×1024 (1:1 方)</option>
+          <option value="1024x1536">1024×1536 (2:3 立)</option>
+          <option value="1536x1024">1536×1024 (3:2 横)</option>
         </select>
       </div>
     </div>

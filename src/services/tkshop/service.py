@@ -35,6 +35,7 @@ from src.services.tkshop.prompts import (
     IMAGE_DESIGN_EXTRACT_SCHEMA,
     IMAGE_DESIGN_INSTRUCTIONS,
     IMAGE_DESIGN_SYSTEM_PROMPT,
+    MAIN_BUNDLE_PROMPT,
     SELF_HEAL_EXTRACT_SCHEMA,
     SELF_HEAL_INSTRUCTIONS,
     SELF_HEAL_SYSTEM_PROMPT,
@@ -99,6 +100,15 @@ TKSHOP_IMAGE_PUBLIC_BASE = os.getenv(
 # .env when shop="main" is not present in TIKTOK_SHOPS_JSON.
 TKSHOP_SHOPS = [s.strip() for s in (os.getenv("TKSHOP_SHOPS") or "main").split(",") if s.strip()]
 TKSHOP_DEFAULT_SHOP = TKSHOP_SHOPS[0] if TKSHOP_SHOPS else "main"
+
+# Size whitelist accepted by JieKou's gpt-image-2 text-to-image / edit endpoints
+# (from its 400 VALIDATION_ERROR schema). Anything outside this set is rejected,
+# so callers must snap to a member before sending.
+_JIEKOU_IMAGE_SIZES = {
+    "1024x1024", "1024x1536", "1536x1024",
+    "688x2048", "880x2048", "1024x2048", "1152x2048", "1360x2048", "1536x2048", "2048x2048",
+    "2048x688", "2048x880", "2048x1024", "2048x1152", "2048x1360", "2048x1536",
+}
 
 
 def _get_product_shop(db_path: Path, product_id: int) -> str:
@@ -207,6 +217,55 @@ def _is_valid_seller_sku(sku: str) -> bool:
     return bool(sku) and bool(_SKU_VALID_RE.match(sku))
 
 
+_MOJIBAKE_MARKERS = ("�", "��", "锛", "涓", "鍙", "鈥", "馃", "浜", "鎻", "è", "ɳ")
+
+
+def _mojibake_score(s: str) -> int:
+    if not s:
+        return 0
+    return sum(s.count(m) for m in _MOJIBAKE_MARKERS)
+
+
+def _ascii_alpha_count(s: str) -> int:
+    return sum(1 for c in (s or "") if c.isascii() and c.isalpha())
+
+
+def _clean_listing_context_text(s: str, *, max_len: int = 300) -> str:
+    """Keep model context buyer-useful when upstream bilingual fields contain
+    mojibake. Prefer the English side of slash-delimited names and drop noisy
+    replacement/control characters without trying to recover corrupted text.
+    """
+    s = (s or "").replace("\r", " ").replace("\n", " ").strip()
+    s = s.translate(str.maketrans({
+        "’": "'", "‘": "'", "“": '"', "”": '"',
+        "—": "-", "–": "-", "·": " ", "•": " ",
+    }))
+    if "/" in s:
+        parts = [p.strip(" -|") for p in s.split("/") if p.strip(" -|")]
+        if parts:
+            s = max(parts, key=lambda p: (_ascii_alpha_count(p), -_mojibake_score(p)))
+    s = re.sub(r"[^\x09\x0A\x0D\x20-\x7E]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" -|")
+    for src, dst in {
+        "Father s": "Father's",
+        "Mother s": "Mother's",
+        "Valentine s": "Valentine's",
+        "World s": "World's",
+        "New Year s": "New Year's",
+        "Dad s": "Dad's",
+        "Mom s": "Mom's",
+    }.items():
+        s = s.replace(src, dst)
+    return s[:max_len]
+
+
+def _clean_brief_text(s: str, *, max_len: int = 120) -> str:
+    s = _clean_listing_context_text(s, max_len=max_len)
+    if len(s) < 3 or _mojibake_score(s) > 0:
+        return ""
+    return s
+
+
 def _local_path_to_public_url(local_path: str) -> str:
     """Turn ``output/packs/<uid>/...`` into the public ``/v2-outputs/...`` URL.
 
@@ -308,13 +367,24 @@ class TKShopService:
             if not row:
                 raise ValueError(f"tkshop_product #{product_id} not found")
 
-        # Pull a representative sample of sticker briefs from the series
-        # metadata (preview_briefs flatten).
+        # Pull a representative, de-duplicated sample of sticker briefs from
+        # the series metadata. A larger, cleaner sample makes the copy less
+        # template-like and avoids leaking mojibake from older bilingual data.
         briefs_sample: list[str] = []
         try:
             md = json.loads(row["metadata_json"] or "{}")
-            for pb in md.get("preview_briefs", [])[:3]:
-                briefs_sample.extend(pb.get("stickers", [])[:4])
+            seen: set[str] = set()
+            for pb in md.get("preview_briefs", [])[:8]:
+                for raw in (pb.get("stickers", []) or [])[:8]:
+                    brief = _clean_brief_text(str(raw))
+                    key = brief.lower()
+                    if brief and key not in seen:
+                        briefs_sample.append(brief)
+                        seen.add(key)
+                    if len(briefs_sample) >= 18:
+                        break
+                if len(briefs_sample) >= 18:
+                    break
         except Exception:
             pass
 
@@ -326,10 +396,10 @@ class TKShopService:
         )
 
         prompt = build_detail_main_prompt(
-            pack_display_name=row["display_name"] or "",
-            pack_archetype=row["pack_archetype"] or "",
-            style_anchor=row["style_anchor"] or "",
-            palette=row["palette"] or "",
+            pack_display_name=_clean_listing_context_text(row["display_name"] or "", max_len=120),
+            pack_archetype=_clean_listing_context_text(row["pack_archetype"] or "", max_len=80),
+            style_anchor=_clean_listing_context_text(row["style_anchor"] or "", max_len=420),
+            palette=_clean_listing_context_text(row["palette"] or "", max_len=140),
             total_stickers=row["total_stickers"] or 0,
             sticker_briefs_sample=briefs_sample,
             suggested_seller_sku=default_sku,
@@ -799,7 +869,24 @@ class TKShopService:
                   FROM pack_previews
                  WHERE series_id = ? AND generation_status = 'ok'
                  ORDER BY preview_idx
-                 LIMIT 6
+                 LIMIT 60
+                """,
+                (row["series_id"],),
+            ).fetchall() if row["series_id"] else []
+            # High-fidelity split stickers (A.3 image-edit output) make far
+            # better image-to-image references than a full sheet. Keep enough
+            # of them to represent the whole pack in the main-image reference
+            # grid; selected stickers only influence ordering.
+            stickers = conn.execute(
+                """
+                SELECT ps.image_path, ps.name, ps.is_selected
+                  FROM pack_stickers ps
+                  JOIN pack_previews pv ON pv.id = ps.preview_id
+                 WHERE pv.series_id = ?
+                   AND ps.generation_status = 'ok'
+                   AND ps.image_path != ''
+                 ORDER BY ps.is_selected DESC, ps.id
+                 LIMIT 80
                 """,
                 (row["series_id"],),
             ).fetchall() if row["series_id"] else []
@@ -823,6 +910,10 @@ class TKShopService:
             "briefs_sample": briefs,
             "preview_prompts": [p["prompt_text"] or "" for p in previews],
             "preview_image_paths": [p["image_path"] for p in previews if p["image_path"]],
+            "sticker_image_paths": [s["image_path"] for s in stickers if s["image_path"]],
+            "selected_sticker_subjects": [
+                s["name"] for s in stickers if s["is_selected"] and (s["name"] or "").strip()
+            ],
         }
 
     def synthesize_image_specs(
@@ -847,6 +938,7 @@ class TKShopService:
             preview_prompt_samples=ctx["preview_prompts"],
             secondary_count=secondary_count,
             language=language,
+            selected_sticker_subjects=ctx.get("selected_sticker_subjects") or [],
         )
         chosen_model = model or os.getenv("TKSHOP_IMAGE_DESIGN_MODEL", "gpt-5.4")
         main_text = self.router.text_complete(
@@ -874,6 +966,11 @@ class TKShopService:
             "raw": main_text,
         }
 
+    # Secondary angles that show the whole set benefit from a full SHEET as
+    # the image-to-image reference; single-subject angles stage one clean
+    # die-cut sticker better. role_type keys come from tkshop.prompts.
+    _VARIETY_ROLE_TYPES = {"hero", "flat_lay", "full_set"}
+
     def auto_design_images(
         self,
         product_id: int,
@@ -882,31 +979,130 @@ class TKShopService:
         language: str = "en",
         replace_existing_ai: bool = True,
         size: str = "1024x1024",
+        main_size: Optional[str] = None,
+        main_quality: Optional[str] = None,
+        secondary_quality: Optional[str] = None,
     ) -> dict[str, Any]:
         """End-to-end: design context → AI spec → image_edit per concept
         → save as tkshop_product_images rows (source='ai').
 
-        Uses the first available preview image as the visual reference
-        for image-to-image. If ``replace_existing_ai`` is True, deletes
-        prior source='ai' images for this product before generating new
-        ones (manual uploads are kept).
+        Reference selection is per-role: "variety" angles (hero / flat_lay /
+        full_set) edit a single MERGED grid of all the pack's preview sheets so
+        the bundle shows every design (and single-image input avoids the
+        edit-endpoint's multi-image timeout); single-subject angles (lifestyle /
+        in_use / scene / packaging) prefer a high-fidelity split sticker. The
+        main/hero uses a fixed white-bg "bundle" prompt over that merged grid.
+        The main (hero) image renders at ``main_quality`` /
+        ``main_size`` (defaults: high quality, falls back to ``size``);
+        secondary images use ``secondary_quality`` / ``size``.
+
+        Each output passes a QA gate (decodable, sane dimensions, and not a
+        near-identical copy of its reference); a flagged concept is retried
+        once with a stronger re-staging instruction. If ``replace_existing_ai``
+        is True, prior source='ai' images are deleted first (manual uploads
+        are kept).
         """
+        from src.utils.image_utils import (
+            average_hash, hash_distance, read_dimensions, compose_reference_grid,
+        )
+
         synth = self.synthesize_image_specs(
             product_id, secondary_count=secondary_count, language=language,
         )
         spec = synth["spec"]
         ctx = synth["context"]
 
-        ref_path = next(
-            (Path(p) for p in ctx["preview_image_paths"] if Path(p).exists()),
-            None,
-        )
-        if ref_path is None:
+        sheet_paths = [Path(p) for p in ctx.get("preview_image_paths", []) if Path(p).exists()]
+        sticker_paths = [Path(p) for p in ctx.get("sticker_image_paths", []) if Path(p).exists()]
+        if not sheet_paths and not sticker_paths:
             raise ValueError(
-                "no preview image available to use as reference; "
+                "no preview or sticker image available to use as reference; "
                 "generate at least one pack preview first"
             )
-        ref_bytes = ref_path.read_bytes()
+
+        # Resolve per-role size / quality (env-overridable).
+        main_size = main_size or os.getenv("TKSHOP_MAIN_IMAGE_SIZE") or size
+        main_quality = main_quality or os.getenv("TKSHOP_MAIN_IMAGE_QUALITY", "high")
+        secondary_quality = secondary_quality or os.getenv("TKSHOP_SECONDARY_IMAGE_QUALITY", "medium")
+        noop_threshold = int(os.getenv("TKSHOP_IMAGE_NOOP_AHASH_DIST", "6"))
+
+        # JieKou gpt-image-2 only accepts a fixed size whitelist; snap anything
+        # else to 1024x1024 so a bad UI/env value can't 400 the whole run.
+        def _safe_size(s: str) -> str:
+            s = (s or "").strip().lower()
+            if s in _JIEKOU_IMAGE_SIZES:
+                return s
+            logger.warning("auto_design_images: unsupported size %r → 1024x1024", s)
+            return "1024x1024"
+        size = _safe_size(size)
+        main_size = _safe_size(main_size)
+
+        # One MERGED reference: a clean white-bg grid of every split sticker
+        # when available. This fixes the old failure mode where large packs
+        # with one preview sheet generated a "bundle" from that one sheet only.
+        # Preview sheets are now only a fallback for packs that have not been
+        # split into sticker rows yet.
+        if sticker_paths:
+            main_bundle_paths = sticker_paths
+            main_bundle_ref_label = "split_stickers_merged_grid"
+        else:
+            main_bundle_paths = sheet_paths
+            main_bundle_ref_label = "preview_sheets_merged_grid"
+        merge_sources = [p.as_posix() for p in main_bundle_paths]
+        merged_ref_bytes = compose_reference_grid(
+            merge_sources,
+            cell=384 if len(main_bundle_paths) >= 12 else 512,
+            max_side=2048,
+        )
+        merged_ref_hash = average_hash(merged_ref_bytes)
+
+        reference_grid_path: Optional[Path] = None
+        try:
+            with _open_db(self.db_path) as conn:
+                ref_row = conn.execute(
+                    """
+                    SELECT p.pack_uid
+                      FROM tkshop_products pr
+                      JOIN packs p ON p.id = pr.pack_id
+                     WHERE pr.id = ?
+                    """,
+                    (product_id,),
+                ).fetchone()
+            if ref_row:
+                ref_dir = self.store.product_dir(
+                    ref_row["pack_uid"], f"draft_{product_id}",
+                ) / "references"
+                ref_dir.mkdir(parents=True, exist_ok=True)
+                reference_grid_path = ref_dir / f"{main_bundle_ref_label}.png"
+                reference_grid_path.write_bytes(merged_ref_bytes)
+        except Exception as e:
+            logger.warning("auto_design_images: could not persist reference grid: %s", e)
+
+        # Bytes + aHash cache per reference path (read once, reused across calls).
+        _ref_cache: dict[str, tuple[bytes, int]] = {}
+
+        def _ref_for(role_type: str, idx: int) -> tuple[str, bytes, int, bool]:
+            """Pick a reference for a concept. Returns (label, bytes, ahash,
+            is_merged). Variety angles use the merged grid; single-subject
+            angles rotate through individual split stickers.
+            """
+            rt = (role_type or "hero").strip().lower()
+            if rt in self._VARIETY_ROLE_TYPES or not sticker_paths:
+                return main_bundle_ref_label, merged_ref_bytes, merged_ref_hash, True
+            pick = sticker_paths[idx % len(sticker_paths)]
+            key = pick.as_posix()
+            if key not in _ref_cache:
+                b = pick.read_bytes()
+                _ref_cache[key] = (b, average_hash(b))
+            b, h = _ref_cache[key]
+            return key, b, h, False
+
+        def _expected_wh(size_str: str) -> Optional[tuple[int, int]]:
+            try:
+                w, h = size_str.lower().split("x")
+                return int(w), int(h)
+            except Exception:
+                return None
 
         if replace_existing_ai:
             with _open_db(self.db_path) as conn:
@@ -921,7 +1117,9 @@ class TKShopService:
         results: list[dict[str, Any]] = []
         concepts: list[tuple[str, dict[str, str]]] = []
         if isinstance(spec.get("main"), dict):
-            concepts.append(("main", spec["main"]))
+            m = dict(spec["main"])
+            m["role_type"] = "hero"  # main is always the hero shot
+            concepts.append(("main", m))
         for sec in (spec.get("secondary") or [])[:secondary_count]:
             if isinstance(sec, dict):
                 concepts.append(("secondary", sec))
@@ -938,36 +1136,92 @@ class TKShopService:
         from concurrent.futures import ThreadPoolExecutor
         tmpdir = Path(tempfile.mkdtemp())
 
+        def _qa_ok(out_bytes: bytes, ref_hash: int, want: Optional[tuple[int, int]],
+                   check_noop: bool) -> Optional[str]:
+            """Return None if the output passes QA, else a short reason.
+
+            ``check_noop`` is skipped for merged-grid (bundle) references: there
+            we WANT the output to resemble the real stickers, so an aHash close
+            to the reference is acceptable, not a failure.
+            """
+            try:
+                w, h = read_dimensions(out_bytes)
+            except Exception as e:
+                return f"undecodable ({type(e).__name__})"
+            if min(w, h) < 512:
+                return f"too small ({w}x{h})"
+            if check_noop and hash_distance(average_hash(out_bytes), ref_hash) <= noop_threshold:
+                return "near-identical to reference (no-op edit)"
+            return None
+
         def _gen_one(idx_role_concept: tuple[int, str, dict[str, str]]) -> dict[str, Any]:
             idx, role, c = idx_role_concept
             concept_label = (c.get("concept") or "").strip()[:80]
-            image_prompt = (c.get("image_prompt") or "").strip()
-            if not image_prompt:
+            role_type = (c.get("role_type") or ("hero" if role == "main" else "")).strip()
+            # The main/hero is the operator-approved white-bg bundle: use the
+            # fixed bundle prompt over the merged grid, not the model's free-form
+            # scene prompt. Secondary angles keep their model-authored prompts.
+            base_prompt = MAIN_BUNDLE_PROMPT if role == "main" else (c.get("image_prompt") or "").strip()
+            if not base_prompt:
                 return {"idx": idx, "role": role, "ok": False,
                         "error": "empty image_prompt", "concept": concept_label}
-            try:
-                out_bytes = self.router.image_edit(
-                    ref_bytes,
-                    image_prompt,
-                    size=size,
-                    task="tkshop_image_design:edit",
-                    related_table="tkshop_products",
-                    related_id=product_id,
+
+            ref_label, ref_bytes, ref_hash, is_merged = _ref_for(role_type, idx)
+            this_size = main_size if role == "main" else size
+            this_quality = main_quality if role == "main" else secondary_quality
+            want = _expected_wh(this_size)
+
+            attempts = 2  # initial + one retry on QA failure
+            last_reason = ""
+            for attempt in range(1, attempts + 1):
+                prompt = base_prompt
+                # On retry, nudge single-subject angles to re-stage in a new
+                # scene (their failure mode is a no-op echo of the sticker). For
+                # merged bundles we keep the same prompt — we want it to stay a
+                # faithful bundle, and its only retry trigger is a transient
+                # decode/size glitch.
+                if attempt > 1 and not is_merged:
+                    prompt = (
+                        base_prompt
+                        + " IMPORTANT: fully re-stage this in a NEW scene — the "
+                        "output must look clearly different from the flat reference "
+                        "(new background, real-world surface, perspective and lighting)."
+                    )
+                try:
+                    out_bytes = self.router.image_edit(
+                        ref_bytes,
+                        prompt,
+                        size=this_size,
+                        quality=this_quality,
+                        task="tkshop_image_design:edit",
+                        related_table="tkshop_products",
+                        related_id=product_id,
+                    )
+                except APIError as e:
+                    return {"idx": idx, "role": role, "ok": False,
+                            "error": str(e)[:300], "concept": concept_label,
+                            "image_prompt": base_prompt}
+                reason = _qa_ok(out_bytes, ref_hash, want, check_noop=not is_merged)
+                if reason is None:
+                    tmp = tmpdir / f"ai_{role}_{idx}_{int(time.time()*1000)}.png"
+                    tmp.write_bytes(out_bytes)
+                    return {"idx": idx, "role": role, "ok": True,
+                            "tmp_path": tmp, "concept": concept_label,
+                            "image_prompt": base_prompt, "role_type": role_type,
+                            "reference": ref_label,
+                            "reference_count": len(main_bundle_paths) if is_merged else 1}
+                last_reason = reason
+                logger.warning(
+                    "auto_design_images: QA rejected %s/%s (attempt %d/%d): %s",
+                    role, role_type or "?", attempt, attempts, reason,
                 )
-            except APIError as e:
-                return {"idx": idx, "role": role, "ok": False,
-                        "error": str(e)[:300], "concept": concept_label,
-                        "image_prompt": image_prompt}
-            tmp = tmpdir / f"ai_{role}_{idx}_{int(time.time()*1000)}.png"
-            tmp.write_bytes(out_bytes)
-            return {"idx": idx, "role": role, "ok": True,
-                    "tmp_path": tmp, "concept": concept_label,
-                    "image_prompt": image_prompt}
+            return {"idx": idx, "role": role, "ok": False,
+                    "error": f"failed QA: {last_reason}", "concept": concept_label,
+                    "image_prompt": base_prompt}
 
         try:
             t0 = time.time()
-            tasks = list(enumerate(concepts))  # [(idx, role, concept), ...]
-            tasks_packed = [(i, r, c) for i, (r, c) in tasks]
+            tasks_packed = [(i, r, c) for i, (r, c) in enumerate(concepts)]
             logger.info(
                 "auto_design_images: dispatching %d concepts with workers=%d",
                 len(tasks_packed), max_workers,
@@ -991,7 +1245,10 @@ class TKShopService:
                     ai_prompt=r["image_prompt"],
                 )
                 results.append({"role": r["role"], "ok": True,
-                                "image_id": img_id, "concept": r["concept"]})
+                                "image_id": img_id, "concept": r["concept"],
+                                "role_type": r.get("role_type", ""),
+                                "reference": r.get("reference", ""),
+                                "reference_count": r.get("reference_count", 0)})
         finally:
             try:
                 for f in tmpdir.iterdir():
@@ -1005,7 +1262,12 @@ class TKShopService:
             "generated": sum(1 for r in results if r.get("ok")),
             "failed": sum(1 for r in results if not r.get("ok")),
             "results": results,
-            "reference_preview": ref_path.as_posix(),
+            "reference_preview": (
+                reference_grid_path.as_posix()
+                if reference_grid_path else main_bundle_paths[0].as_posix()
+            ),
+            "reference_count": len(main_bundle_paths),
+            "reference_kind": main_bundle_ref_label,
             "spec": spec,
         }
 
