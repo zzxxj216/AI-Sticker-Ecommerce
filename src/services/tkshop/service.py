@@ -1201,6 +1201,15 @@ class TKShopService:
                     return {"idx": idx, "role": role, "ok": False,
                             "error": str(e)[:300], "concept": concept_label,
                             "image_prompt": base_prompt}
+                except Exception as e:
+                    logger.exception(
+                        "auto_design_images: unexpected image generation failure for %s/%s",
+                        role, role_type or "?",
+                    )
+                    return {"idx": idx, "role": role, "ok": False,
+                            "error": f"{type(e).__name__}: {e}"[:300],
+                            "concept": concept_label,
+                            "image_prompt": base_prompt}
                 reason = _qa_ok(out_bytes, ref_hash, want, check_noop=not is_merged)
                 if reason is None:
                     tmp = tmpdir / f"ai_{role}_{idx}_{int(time.time()*1000)}.png"

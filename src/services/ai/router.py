@@ -561,24 +561,62 @@ class AIRouter:
         OpenAI shape ({data:[{b64_json|url},...]})."""
         import base64
         import httpx
+        import time as _time
         out: list[bytes] = []
+
+        def _download_image_url(url: str) -> bytes:
+            max_attempts = int(os.getenv("V2_IMAGE_URL_RETRIES", "4"))
+            timeout = float(os.getenv("V2_IMAGE_URL_TIMEOUT", "180"))
+            last_err: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                        resp = client.get(url)
+                        resp.raise_for_status()
+                        content = resp.content
+                    if not content:
+                        raise APIError("image URL download returned empty body", service="image")
+                    return content
+                except (
+                    httpx.RemoteProtocolError,
+                    httpx.ReadTimeout,
+                    httpx.ConnectError,
+                    httpx.ReadError,
+                    httpx.WriteError,
+                    httpx.HTTPStatusError,
+                ) as e:
+                    last_err = e
+                    if attempt >= max_attempts:
+                        break
+                    wait = min(2 ** attempt, 12)
+                    logger.warning(
+                        "image URL download failed (attempt %d/%d): %s; retry in %.1fs",
+                        attempt, max_attempts, type(e).__name__, wait,
+                    )
+                    _time.sleep(wait)
+            raise APIError(
+                f"image URL download failed after {max_attempts} attempts: "
+                f"{type(last_err).__name__}: {last_err}",
+                service="image",
+            )
+
         # JieKou-documented shape: {"images": ["https://...", ...]}
         if isinstance(data.get("images"), list):
             for entry in data["images"]:
                 if isinstance(entry, str) and entry.startswith("http"):
-                    out.append(httpx.get(entry, timeout=120).content)
+                    out.append(_download_image_url(entry))
                 elif isinstance(entry, dict):
                     if entry.get("b64_json"):
                         out.append(base64.b64decode(entry["b64_json"]))
                     elif entry.get("url"):
-                        out.append(httpx.get(entry["url"], timeout=120).content)
+                        out.append(_download_image_url(entry["url"]))
         # OpenAI-compatible shape: {"data": [{"b64_json":..., "url":...}]}
         elif isinstance(data.get("data"), list):
             for item in data["data"]:
                 if item.get("b64_json"):
                     out.append(base64.b64decode(item["b64_json"]))
                 elif item.get("url"):
-                    out.append(httpx.get(item["url"], timeout=120).content)
+                    out.append(_download_image_url(item["url"]))
         return out
 
     def image_generate(

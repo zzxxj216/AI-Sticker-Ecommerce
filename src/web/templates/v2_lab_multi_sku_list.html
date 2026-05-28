@@ -24,6 +24,11 @@
   #lab-pack-list label:hover { background:var(--bg-subtle); }
   #lab-pack-list input { width:auto; }
   .lab-form .help { font-size:11px; color:var(--text-muted); margin-top:4px; line-height:1.6; }
+  .msku-f { padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:var(--surface);font-family:inherit; }
+  .msku-act { padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-size:11px;cursor:pointer;text-decoration:none;color:var(--text-primary);white-space:nowrap;font-weight:600; }
+  .msku-act:hover { border-color:#8b5cf6;color:#8b5cf6; }
+  .pill-shop { background:#f1f5f9;color:#334155;padding:1px 7px;border-radius:9px;font-size:11px;margin-left:4px; }
+  .msku-row { align-items:center; }
 </style>
 
 <div class="lab-page">
@@ -39,43 +44,118 @@
     🧪 <b>实验性功能</b> · 数据存于独立表 <code>lab_msku_products</code> / <code>lab_msku_product_skus</code>。发布走 multi-channel-api 新端点 <code>/products/sticker_multi_sku_publish</code>。不影响现有 TKShop 产品。
   </div>
 
-  <!-- 新建入口（可视化单页） -->
-  <section class="panel" style="padding:18px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
-    <div>
-      <h3 style="margin:0 0 4px;font-size:15px;">＋ 新建多 SKU 产品</h3>
-      <p class="help" style="margin:0;">选热点 → 点封面挑卡包 → AI 生成标题/描述 → 一个 listing 多个 SKU 变体。</p>
+  <!-- 新建入口:两条路 -->
+  <section class="panel" style="padding:18px;margin-bottom:18px;">
+    <h3 style="margin:0 0 12px;font-size:15px;">＋ 新建多 SKU 产品</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <!-- 路1:按主题批量 -->
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;">
+        <div style="font-weight:700;margin-bottom:4px;">🎨 按主题批量</div>
+        <p class="help" style="margin:0 0 10px;">选热点 → 封面网格多选卡包 → AI 一键填 → 一个 listing 多个变体。适合一次性建一组。</p>
+        <a href="/v2/lab/multi-sku/new"
+           style="display:inline-block;padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border-radius:8px;font-weight:700;text-decoration:none;font-size:13px;">可视化创建 →</a>
+      </div>
+      <!-- 路2:从单个卡包起 -->
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;">
+        <div style="font-weight:700;margin-bottom:4px;">📦 从单个卡包起</div>
+        <p class="help" style="margin:0 0 8px;">用一个卡包先建草稿,之后在详情页用封面网格继续加变体。</p>
+        <form id="fromPackForm" method="post"
+              onsubmit="if(!document.getElementById('fpPack').value){return false;} this.action='/v2/lab/multi-sku/from-pack/'+document.getElementById('fpPack').value;"
+              style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <select id="fpPack" required class="msku-f" style="min-width:170px;">
+            <option value="">选卡包…</option>
+            {% for pk in packs %}<option value="{{ pk.id }}">#{{ pk.id }} {{ (pk.display_name or pk.pack_uid)[:24] }}</option>{% endfor %}
+          </select>
+          <select name="shop" class="msku-f">
+            {% for s in tkshop_shops %}<option value="{{ s }}">🏪 {{ s }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="msku-act" style="background:var(--accent);color:#fff;border-color:var(--accent);">创建 →</button>
+        </form>
+      </div>
     </div>
-    <a href="/v2/lab/multi-sku/new"
-       style="padding:10px 22px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:700;text-decoration:none;font-size:14px;white-space:nowrap;">
-      🎨 可视化创建 →
-    </a>
+    <p class="help" style="margin:10px 0 0;color:var(--text-muted);">想把卡包<b>加到已有产品</b>(含平台 live)?去卡包页 →「＋ 新建产品」→「加到已有」(带同主题智能匹配)。</p>
   </section>
 
-  <!-- 已有产品 -->
+  <!-- 管理台 -->
   <section class="panel" style="padding:18px;">
-    <h3 style="margin:0 0 12px;font-size:15px;">已有 {{ products|length }} 个 Lab 多 SKU 产品</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      <h3 style="margin:0;font-size:15px;">产品管理台 · 共 {{ products|length }}</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted);">
+        <select id="fShop" onchange="mskuFilter()" class="msku-f">
+          <option value="">全部店铺</option>
+          {% for s in tkshop_shops %}<option value="{{ s }}">🏪 {{ s }}</option>{% endfor %}
+        </select>
+        <select id="fStatus" onchange="mskuFilter()" class="msku-f">
+          <option value="">全部状态</option>
+          <option value="draft">草稿</option>
+          <option value="draft_on_platform">平台草稿</option>
+          <option value="published">已上架</option>
+          <option value="publishing">推送中</option>
+          <option value="failed">失败</option>
+        </select>
+        <label style="cursor:pointer;"><input type="checkbox" id="fAttn" onchange="mskuFilter()"> ⚠ 只看待处理</label>
+      </div>
+    </div>
+
     {% for p in products %}
-    <div class="lab-card">
+    <div class="msku-row lab-card" data-shop="{{ p.shop or '' }}" data-status="{{ p.publish_status }}" data-attn="{{ '1' if p.needs_attention else '0' }}">
+      {% if p.cover_url %}<img src="{{ p.cover_url }}" style="width:54px;height:54px;object-fit:cover;border-radius:8px;flex:none;">{% else %}<div style="width:54px;height:54px;border-radius:8px;background:var(--bg-subtle);flex:none;"></div>{% endif %}
       <div class="lab-card-meta">
-        <h4>#{{ p.id }} {{ p.title or '(未命名)' }}</h4>
+        <h4 style="margin:0 0 4px;">#{{ p.id }} {{ p.title or '(未命名)' }}</h4>
         <div class="muted-line">
           <span class="lab-status-pill {{ p.publish_status }}">{{ status_label_zh(p.publish_status) }}</span>
-          {{ p.sku_count }} 个 SKU · 维度 <code>{{ p.sales_attribute_name }}</code>
-          {% if p.topic_name %} · 来自热点 {{ p.topic_name }}{% endif %}
+          {% if p.shop %}<span class="pill-shop">🏪 {{ p.shop }}</span>{% endif %}
+          · {{ p.sku_count }} SKU{% if p.topic_name %} · {{ p.topic_name }}{% endif %}
         </div>
-        {% if p.tiktok_product_id %}<div class="muted-line">tiktok_product_id: <code>{{ p.tiktok_product_id }}</code></div>{% endif %}
-        <div class="muted-line">{{ p.created_human }} 创建 · {{ p.updated_human }} 更新</div>
+        <div class="muted-line">{{ p.updated_human }} 更新{% if p.tiktok_product_id %} · TT <code>{{ p.tiktok_product_id }}</code>{% endif %}</div>
       </div>
-      <a href="/v2/lab/multi-sku/{{ p.id }}" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;">编辑 →</a>
-      <form method="post" action="/v2/lab/multi-sku/{{ p.id }}/delete" style="margin:0;"
-            onsubmit="return confirm('删除产品 #{{ p.id }}?\n\n会一并删除其所有 SKU 子行，但不会删 TikTok 上已上架的商品。');">
-        <button type="submit" style="padding:7px 12px;background:#f3f4f6;color:var(--danger);border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🗑 删除</button>
-      </form>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+        <a href="/v2/lab/multi-sku/{{ p.id }}" class="msku-act" style="background:var(--accent);color:#fff;border-color:var(--accent);">编辑 →</a>
+        {% if p.tiktok_product_id %}
+        <button class="msku-act" onclick="mskuPush({{ p.id }},this)">推送</button>
+        <button class="msku-act" onclick="mskuSync({{ p.id }},this)">同步</button>
+        {% endif %}
+        <form method="post" action="/v2/lab/multi-sku/{{ p.id }}/delete" style="margin:0;"
+              onsubmit="return confirm('删除产品 #{{ p.id }}?会删本地记录及其 SKU 子行,但不会删 TikTok 上已上架的商品。');">
+          <button type="submit" class="msku-act" style="color:var(--danger);">🗑</button>
+        </form>
+      </div>
     </div>
     {% else %}
     <p class="muted" style="text-align:center;padding:40px 0;">尚无 Lab 多 SKU 产品。点上方「可视化创建」做第一个。</p>
     {% endfor %}
+    <p id="mskuEmpty" class="muted" style="display:none;text-align:center;padding:20px 0;">没有符合筛选的产品。</p>
   </section>
 </div>
+
+<script>
+function mskuFilter(){
+  var shop=document.getElementById('fShop').value;
+  var st=document.getElementById('fStatus').value;
+  var attn=document.getElementById('fAttn').checked;
+  var rows=document.querySelectorAll('.msku-row'); var shown=0;
+  rows.forEach(function(r){
+    var ok=(!shop||r.dataset.shop===shop)&&(!st||r.dataset.status===st)&&(!attn||r.dataset.attn==='1');
+    r.style.display=ok?'':'none'; if(ok) shown++;
+  });
+  document.getElementById('mskuEmpty').style.display=shown?'none':'block';
+}
+async function mskuSync(id,btn){
+  btn.disabled=true; var t=btn.textContent; btn.textContent='…';
+  try{
+    var r=await fetch('/v2/lab/multi-sku/'+id+'/sync-status',{method:'POST'});
+    var d=await r.json();
+    btn.textContent=d.ok?('✓ '+(d.remote_status||'已同步')):'✗';
+    btn.title=d.error||('线上: '+(d.remote_status||'?'));
+  }catch(e){ btn.textContent='✗'; }
+  setTimeout(function(){ btn.disabled=false; btn.textContent=t; }, 3000);
+}
+async function mskuPush(id,btn){
+  if(!confirm('推送 #'+id+' 到平台?整单覆盖该产品并触发 TikTok 审核。')) return;
+  btn.disabled=true; btn.textContent='推送中…';
+  try{ await fetch('/v2/lab/multi-sku/'+id+'/update-on-platform',{method:'POST'}); btn.textContent='✓ 已触发(后台)'; }
+  catch(e){ btn.textContent='✗'; btn.disabled=false; }
+}
+</script>
 
 {% endblock %}

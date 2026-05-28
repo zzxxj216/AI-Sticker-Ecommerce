@@ -4198,13 +4198,24 @@ def v2_lab_multi_sku_list(request: Request):
     from src.services.lab_multi_sku import get_lab_multi_sku_service
     svc = get_lab_multi_sku_service()
     products = svc.list_products()
-    for p in products:
-        p["created_human"] = _fmt_ts(p.get("created_at"))
-        p["updated_human"] = _fmt_ts(p.get("updated_at"))
     import sqlite3 as _sql
     conn = _sql.connect("data/ops_workbench.db")
     conn.row_factory = _sql.Row
     try:
+        for p in products:
+            p["created_human"] = _fmt_ts(p.get("created_at"))
+            p["updated_human"] = _fmt_ts(p.get("updated_at"))
+            cover = ""
+            if p.get("primary_pack_id"):
+                rr = conn.execute("SELECT cover_image_path FROM packs WHERE id=?",
+                                  (p["primary_pack_id"],)).fetchone()
+                if rr and rr["cover_image_path"]:
+                    cover = _path_to_v2_url(rr["cover_image_path"])
+            p["cover_url"] = cover
+            # needs-attention flag for the operations '待处理' filter
+            st = (p.get("publish_status") or "").lower()
+            p["needs_attention"] = (st in ("draft", "failed")
+                                    or (st == "draft_on_platform"))
         topics = conn.execute(
             """SELECT ht.id, ht.topic_name, ht.region, ht.status,
                       (SELECT COUNT(DISTINCT pk.id)
@@ -4217,6 +4228,10 @@ def v2_lab_multi_sku_list(request: Request):
                 LIMIT 200"""
         ).fetchall()
         topics = [dict(t) for t in topics if (t["pack_count"] or 0) >= 1]
+        active_packs = [dict(r) for r in conn.execute(
+            "SELECT id, display_name, pack_uid FROM packs WHERE status='active' "
+            "ORDER BY id DESC LIMIT 200"
+        ).fetchall()]
     finally:
         conn.close()
     return templates.TemplateResponse(
@@ -4226,6 +4241,8 @@ def v2_lab_multi_sku_list(request: Request):
             "page_title": "🧪 Lab · 多 SKU 产品",
             "products": products,
             "topics": topics,
+            "packs": active_packs,
+            "tkshop_shops": TKSHOP_SHOPS,
         },
     )
 
@@ -4619,23 +4636,38 @@ def v2_lab_multi_sku_detail(request: Request, product_id: int):
         finally:
             conn.close()
     p["cover_url"] = cover_url
-    avail_packs = []
-    if p.get("topic_id"):
-        import sqlite3 as _sql
-        conn = _sql.connect("data/ops_workbench.db")
-        conn.row_factory = _sql.Row
-        try:
-            avail_packs = [dict(r) for r in conn.execute(
-                """SELECT pk.id, pk.display_name, pk.pack_uid, pk.total_stickers
+    for s in (p.get("skus") or []):
+        s["cover_url"] = _path_to_v2_url(s["pack_cover"]) if s.get("pack_cover") else ""
+    existing_pack_ids = {s.get("pack_id") for s in (p.get("skus") or []) if s.get("pack_id")}
+    import sqlite3 as _sql
+    conn = _sql.connect("data/ops_workbench.db")
+    conn.row_factory = _sql.Row
+    try:
+        rows = []
+        if p.get("topic_id"):
+            rows = conn.execute(
+                """SELECT pk.id, pk.display_name, pk.pack_uid, pk.total_stickers, pk.cover_image_path
                      FROM topic_plans tp
                 LEFT JOIN pack_series ps ON ps.plan_id = tp.id
                 LEFT JOIN packs pk       ON pk.series_id = ps.id
                     WHERE tp.topic_id = ? AND pk.id IS NOT NULL
                     ORDER BY pk.id""",
                 (p["topic_id"],),
-            ).fetchall()]
-        finally:
-            conn.close()
+            ).fetchall()
+        if not rows:
+            # no topic (created/merged from packs) → offer recent active packs
+            rows = conn.execute(
+                """SELECT id, display_name, pack_uid, total_stickers, cover_image_path
+                     FROM packs WHERE status='active' ORDER BY id DESC LIMIT 36"""
+            ).fetchall()
+        avail_packs = []
+        for r in rows:
+            d = dict(r)
+            d["cover_url"] = _path_to_v2_url(d["cover_image_path"]) if d.get("cover_image_path") else ""
+            d["in_product"] = d["id"] in existing_pack_ids
+            avail_packs.append(d)
+    finally:
+        conn.close()
     return templates.TemplateResponse(
         "v2_lab_multi_sku_detail.html",
         {

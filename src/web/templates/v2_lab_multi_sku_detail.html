@@ -188,6 +188,7 @@
     <table class="sku-table">
       <thead>
         <tr>
+          <th style="width:44px;">图</th>
           <th style="width:30px;">#</th>
           <th>seller_sku</th>
           <th>变体值（{{ product.sales_attribute_name }}）</th>
@@ -202,6 +203,7 @@
         {% for s in product.skus %}
         <tr id="sku-{{ s.id }}">
           <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/sku/{{ s.id }}/edit" id="sku-edit-{{ s.id }}">
+            <td>{% if s.cover_url %}<img src="{{ s.cover_url }}" style="width:36px;height:36px;object-fit:cover;border-radius:5px;">{% endif %}</td>
             <td>
               <input type="number" name="sort_order" value="{{ s.sort_order }}" class="short" min="1" max="999">
             </td>
@@ -222,14 +224,35 @@
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">尚无 SKU，下方表单添加</td></tr>
+        <tr><td colspan="9" style="padding:30px 0;text-align:center;color:var(--text-muted);">尚无 SKU，下方点卡包封面快速添加</td></tr>
         {% endfor %}
       </tbody>
     </table>
 
-    <!-- 添加 SKU -->
+    <!-- 快速加变体:点卡包封面 -->
+    <div style="margin-top:16px;">
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">＋ 加变体 —— 点卡包封面即可(自动生成 SKU 码 / 变体名 / 变体图)</div>
+      {% set addable = avail_packs | rejectattr('in_product') | list %}
+      {% if addable %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;">
+        {% for pk in addable %}
+        <div onclick="addVariantFromPack({{ pk.id }}, this)" title="{{ pk.display_name or pk.pack_uid }}"
+             style="cursor:pointer;border:1px solid var(--line);border-radius:8px;overflow:hidden;text-align:center;background:var(--surface);"
+             onmouseover="this.style.borderColor='#8b5cf6'" onmouseout="this.style.borderColor='var(--line)'">
+          {% if pk.cover_url %}<img src="{{ pk.cover_url }}" style="width:100%;height:80px;object-fit:cover;display:block;">{% else %}<div style="height:80px;background:var(--bg-subtle);"></div>{% endif %}
+          <div style="font-size:10px;padding:4px;line-height:1.3;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ (pk.display_name or pk.pack_uid)[:18] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted" style="font-size:12px;margin:0;">可用卡包都已加入(或本产品无关联主题)。可用下方「手动添加」。</p>
+      {% endif %}
+      <div id="addVariantMsg" style="font-size:12px;margin-top:8px;"></div>
+    </div>
+
+    <!-- 手动添加 SKU(高级:自定义 seller_sku/变体值) -->
     <details style="margin-top:14px;">
-      <summary style="cursor:pointer;padding:8px 12px;background:var(--bg-subtle);border-radius:6px;font-size:12px;font-weight:700;">＋ 添加新 SKU</summary>
+      <summary style="cursor:pointer;padding:8px 12px;background:var(--bg-subtle);border-radius:6px;font-size:12px;font-weight:700;">＋ 手动添加 SKU(自定义)</summary>
       <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/sku/add" class="lab-meta-form" style="padding:12px;background:var(--bg-subtle);border-radius:6px;margin-top:8px;">
         <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr;gap:10px;align-items:end;">
           <div>
@@ -294,6 +317,19 @@
     } finally { btn.textContent = old; btn.disabled = false; }
   });
 })();
+
+async function addVariantFromPack(packId, el){
+  var msg=document.getElementById('addVariantMsg');
+  el.style.opacity='.5'; el.style.pointerEvents='none'; msg.textContent='⏳ 添加中…';
+  var fd=new FormData();
+  fd.append('target_ref','lab_msku:{{ product.id }}'); fd.append('pack_id',packId);
+  try{
+    var r=await fetch('/v2/lab/multi-sku/add-pack-sku',{method:'POST',body:fd});
+    var d=await r.json();
+    if(d.ok){ msg.innerHTML='<span style="color:#16a34a;">✓ '+(d.already_present?'该卡包已是变体':'已加为变体')+',刷新中…</span>'; setTimeout(function(){location.reload();},500); }
+    else{ el.style.opacity='1'; el.style.pointerEvents=''; msg.innerHTML='<span style="color:#dc2626;">✗ '+(d.error||'失败')+'</span>'; }
+  }catch(e){ el.style.opacity='1'; el.style.pointerEvents=''; msg.innerHTML='<span style="color:#dc2626;">✗ '+e+'</span>'; }
+}
 </script>
 
 {% endblock %}
