@@ -255,6 +255,46 @@ def compose_reference_grid(
     return out.getvalue()
 
 
+def compress_image_bytes_for_api(
+    data: bytes,
+    *,
+    max_side: int = 1536,
+    max_bytes: int = 1_800_000,
+) -> bytes:
+    """Shrink PNG bytes before base64 upload to image-edit APIs.
+
+    JieKou ``gpt-image-2-edit`` often drops connections when the JSON body
+    is several MiB or ``quality=high`` runs concurrently with other edits.
+    """
+    if not data:
+        return data
+    try:
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        return data
+
+    def _encode(img: Image.Image) -> bytes:
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        return buf.getvalue()
+
+    if max(im.size) > max_side:
+        im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    result = _encode(im)
+    if len(result) <= max_bytes:
+        return result
+
+    for side in (1280, 1024, 768):
+        if side >= max_side:
+            continue
+        smaller = Image.open(io.BytesIO(data)).convert("RGB")
+        smaller.thumbnail((side, side), Image.Resampling.LANCZOS)
+        result = _encode(smaller)
+        if len(result) <= max_bytes:
+            return result
+    return result
+
+
 def convert_image_format(
     input_path: str,
     output_path: str,

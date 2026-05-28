@@ -22,6 +22,7 @@
   .shop-badge.ok       { color:var(--success);     border-color:rgba(34,197,94,.30);  background:rgba(34,197,94,.10); }
   .shop-badge.draft    { color:var(--accent-dark); border-color:var(--accent-glow);   background:var(--accent-bg); }
   .shop-badge.missing  { opacity:.55; }
+  .shop-badge.push-pending { color:#b45309; border-color:rgba(245,158,11,.45); background:rgba(245,158,11,.12); }
   /* Bulk-publish toolbar — slides in when the operator picks rows. */
   .lp-bulk-bar {
     display:none; align-items:center; gap:10px;
@@ -186,6 +187,7 @@
             <th>title (en) / pack</th>
             <th style="width:170px;">seller_sku</th>
             <th style="width:140px;">上架进度</th>
+            <th style="width:110px;">平台同步</th>
             <th style="width:120px;">created</th>
             <th style="width:120px;">updated</th>
             <th style="width:140px;text-align:right;">操作</th>
@@ -213,9 +215,9 @@
                   {% set _info = (p.shops or {}).get(s) %}
                   {% set _label = shop_label(s) %}
                   {% if _info and _info.tiktok_product_id %}
-                    <span class="shop-badge ok" title="已上架到 {{ _label }}（listing #{{ _info.product_id }}）">🏪 {{ _label }} ✓</span>
+                    <span class="shop-badge ok{% if _info.needs_push %} push-pending{% endif %}" title="已上架到 {{ _label }}（listing #{{ _info.product_id }}{% if _info.needs_push %} · 本地有未推送修改{% endif %}）">🏪 {{ _label }} ✓{% if _info.needs_push %} ⚠{% endif %}</span>
                   {% elif _info %}
-                    <span class="shop-badge draft" title="{{ _label }} 已有本地 listing #{{ _info.product_id }}（{{ _info.publish_status }}）">🏪 {{ _label }} · {{ _info.publish_status }}</span>
+                    <span class="shop-badge draft{% if _info.needs_push %} push-pending{% endif %}" title="{{ _label }} 已有本地 listing #{{ _info.product_id }}（{{ _info.publish_status }}{% if _info.needs_push %} · 本地有未推送修改{% endif %}）">🏪 {{ _label }} · {{ _info.publish_status }}{% if _info.needs_push %} ⚠{% endif %}</span>
                   {% else %}
                     <span class="shop-badge missing" title="{{ _label }} 暂未上架">🏪 {{ _label }} —</span>
                   {% endif %}
@@ -231,6 +233,15 @@
               <span class="v2-status-pill {% if _total == 0 %}pending{% elif _live %}ok{% else %}pending{% endif %}">
                 {% if _total == 0 %}未上架{% else %}{{ _live }} / {{ _total }} 在店{% endif %}
               </span>
+            </td>
+            <td>
+              {% if p.needs_push %}
+              <span class="v2-status-pill running" title="本地主版本比上次成功推送更新，需逐店点「📤 推送」">待推送</span>
+              {% elif p.has_live_listing %}
+              <span class="v2-status-pill ok" title="已上架店铺与本地主版本同步">已同步</span>
+              {% else %}
+              <span class="muted" style="font-size:11px;">—</span>
+              {% endif %}
             </td>
             <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
             <td style="color:var(--text-muted);font-size:11px;">{{ p.updated_human or '—' }}</td>

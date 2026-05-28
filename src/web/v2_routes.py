@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import io
 import re
+import threading
 import time
 import zipfile
 from datetime import datetime, timezone, timedelta
@@ -50,6 +51,7 @@ from src.services.tkshop import get_tkshop_service
 from src.services.tkshop.service import (
     TKSHOP_DEFAULT_SHOP,
     TKSHOP_SHOPS,
+    TKShopService,
     get_shop_label,
     get_shop_labels_map,
     status_label_zh,
@@ -64,6 +66,22 @@ from src.services.topic_plans.service import (
 )
 
 logger = get_logger("web.v2")
+
+# One AI image-gen job at a time in the web UI — concurrent background
+# tasks on a shared singleton caused listing→master mirror to be skipped.
+_auto_design_lock = threading.Lock()
+
+
+def _run_local_auto_design_bg(local_product_id: int, **kwargs: Any) -> dict:
+    with _auto_design_lock:
+        return TKShopService().auto_design_images_for_local_product(
+            local_product_id, **kwargs,
+        )
+
+
+def _run_listing_auto_design_bg(product_id: int, **kwargs: Any) -> dict:
+    with _auto_design_lock:
+        return TKShopService().auto_design_images(product_id, **kwargs)
 
 DEFAULT_DB_PATH = Path("data/ops_workbench.db")
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -151,18 +169,138 @@ def _path_to_v2_url(disk_path: str) -> str:
     return "/v2-outputs/" + p[idx + len(marker):]
 
 
-def _versioned_product_image_url(img: dict[str, Any]) -> str:
-    url = _path_to_v2_url(img.get("local_path") or "")
-    if not url:
-        return ""
-    cache_key = int(img.get("created_at") or 0)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_disk_path(disk_path: str) -> Path:
+    norm = (disk_path or "").replace("\\", "/").strip()
+    if not norm:
+        return Path()
+    p = Path(norm)
+    if p.is_file():
+        return p
+    candidate = _PROJECT_ROOT / norm
+    return candidate if candidate.is_file() else Path()
+
+
+def _cover_cache_key(disk_path: str, created_at: int = 0) -> int:
     try:
-        lp = Path(img.get("local_path") or "")
-        if lp.exists():
-            cache_key = max(cache_key, int(lp.stat().st_mtime))
+        p = _resolve_disk_path(disk_path)
+        if p.is_file():
+            return max(int(created_at or 0), int(p.stat().st_mtime))
     except Exception:
         pass
-    return f"{url}?v={cache_key}" if cache_key else url
+    return int(created_at or 0)
+
+
+def _versioned_url_from_path(disk_path: str, *, cache_key: int = 0) -> str:
+    url = _path_to_v2_url(disk_path)
+    if not url:
+        return ""
+    key = cache_key or _cover_cache_key(disk_path)
+    return f"{url}?v={key}" if key else url
+
+
+def _ensure_sqlite_row_factory(conn: sqlite3.Connection) -> None:
+    if conn.row_factory is not sqlite3.Row:
+        conn.row_factory = sqlite3.Row
+
+
+def _row_val(row: Any, key: str, idx: int = 0) -> Any:
+    if row is None:
+        return None
+    if hasattr(row, "keys"):
+        return row[key]
+    return row[idx]
+
+
+def _first_ok_pack_preview_url(conn: sqlite3.Connection, pack_id: int) -> str:
+    _ensure_sqlite_row_factory(conn)
+    row = conn.execute(
+        """SELECT pp.image_path
+             FROM packs pk
+        LEFT JOIN pack_previews pp ON pp.series_id = pk.series_id
+                                  AND pp.generation_status = 'ok'
+                                  AND COALESCE(pp.image_path,'') != ''
+            WHERE pk.id = ?
+            ORDER BY pp.preview_idx LIMIT 1""",
+        (pack_id,),
+    ).fetchone()
+    image_path = _row_val(row, "image_path", 0)
+    if image_path:
+        return _versioned_url_from_path(str(image_path))
+    return ""
+
+
+def _resolve_local_product_cover_url(
+    conn: sqlite3.Connection,
+    *,
+    local_product_id: int,
+    pack_id: int,
+    pack_cover_path: str = "",
+    updated_at: int = 0,
+) -> str:
+    """Gallery main wins over packs.cover_image_path so deleting the main
+    image does not keep showing a stale product draft file on disk."""
+    _ensure_sqlite_row_factory(conn)
+    row = conn.execute(
+        """
+        SELECT local_path, created_at FROM local_product_images
+         WHERE local_product_id = ? AND role = 'main'
+         ORDER BY sort_order ASC, id ASC
+         LIMIT 1
+        """,
+        (local_product_id,),
+    ).fetchone()
+    local_path = _row_val(row, "local_path", 0)
+    created_at = int(_row_val(row, "created_at", 1) or 0)
+    if local_path and _resolve_disk_path(str(local_path)).is_file():
+        return _versioned_url_from_path(str(local_path), cache_key=created_at)
+    preview = _first_ok_pack_preview_url(conn, pack_id)
+    if preview:
+        return preview
+    if pack_cover_path and _resolve_disk_path(pack_cover_path).is_file():
+        return _versioned_url_from_path(
+            pack_cover_path, cache_key=int(updated_at or 0),
+        )
+    return ""
+
+
+def _resolve_listing_cover_url(
+    conn: sqlite3.Connection,
+    *,
+    product_id: int,
+    pack_id: int,
+    pack_cover_path: str = "",
+    updated_at: int = 0,
+) -> str:
+    _ensure_sqlite_row_factory(conn)
+    row = conn.execute(
+        """
+        SELECT local_path, created_at FROM tkshop_product_images
+         WHERE product_id = ? AND role = 'main'
+         ORDER BY sort_order ASC, id ASC
+         LIMIT 1
+        """,
+        (product_id,),
+    ).fetchone()
+    local_path = _row_val(row, "local_path", 0)
+    created_at = int(_row_val(row, "created_at", 1) or 0)
+    if local_path and _resolve_disk_path(str(local_path)).is_file():
+        return _versioned_url_from_path(str(local_path), cache_key=created_at)
+    preview = _first_ok_pack_preview_url(conn, pack_id)
+    if preview:
+        return preview
+    if pack_cover_path and _resolve_disk_path(pack_cover_path).is_file():
+        return _versioned_url_from_path(
+            pack_cover_path, cache_key=int(updated_at or 0),
+        )
+    return ""
+
+
+def _versioned_product_image_url(img: dict[str, Any]) -> str:
+    p = img.get("local_path") or ""
+    return _versioned_url_from_path(p, cache_key=_cover_cache_key(p, int(img.get("created_at") or 0)))
 
 
 def _safe_v2_redirect(back: Any, fallback: str) -> str:
@@ -3808,40 +3946,23 @@ def v2_products_list(
         for p in products:
             p["created_human"] = _fmt_ts(p.get("created_at"))
             p["published_human"] = _fmt_ts(p.get("published_at"))
-            cover = _path_to_v2_url(p.get("pack_cover") or "")
-            if not cover:
-                # Fallback 1: master's main image (local tab) or listing's
-                # main image (shop tabs).
-                if is_local_tab:
-                    row = fb_conn.execute(
-                        "SELECT local_path FROM local_product_images "
-                        "WHERE local_product_id = ? AND role = 'main' "
-                        "ORDER BY sort_order LIMIT 1",
-                        (p["id"],),
-                    ).fetchone()
-                else:
-                    row = fb_conn.execute(
-                        "SELECT local_path FROM tkshop_product_images "
-                        "WHERE product_id = ? AND role = 'main' "
-                        "ORDER BY sort_order LIMIT 1",
-                        (p["id"],),
-                    ).fetchone()
-                if row and row["local_path"]:
-                    cover = _path_to_v2_url(row["local_path"])
-            if not cover:
-                # Fallback 2: any 'ok' preview from this pack's series
-                row = fb_conn.execute(
-                    """SELECT pp.image_path
-                         FROM packs pk
-                    LEFT JOIN pack_previews pp ON pp.series_id = pk.series_id
-                                              AND pp.generation_status = 'ok'
-                                              AND COALESCE(pp.image_path,'') != ''
-                        WHERE pk.id = ?
-                        ORDER BY pp.preview_idx LIMIT 1""",
-                    (p["pack_id"],),
-                ).fetchone()
-                if row and row["image_path"]:
-                    cover = _path_to_v2_url(row["image_path"])
+            cover = ""
+            if is_local_tab:
+                cover = _resolve_local_product_cover_url(
+                    fb_conn,
+                    local_product_id=p["id"],
+                    pack_id=p["pack_id"],
+                    pack_cover_path=p.get("pack_cover") or "",
+                    updated_at=int(p.get("updated_at") or 0),
+                )
+            elif p.get("pack_id"):
+                cover = _resolve_listing_cover_url(
+                    fb_conn,
+                    product_id=p["id"],
+                    pack_id=p["pack_id"],
+                    pack_cover_path=p.get("pack_cover") or "",
+                    updated_at=int(p.get("updated_at") or 0),
+                )
             p["pack_cover_url"] = cover
     finally:
         fb_conn.close()
@@ -3901,30 +4022,13 @@ def v2_local_products_list(
         for p in products:
             p["created_human"] = _fmt_ts(p.get("created_at"))
             p["updated_human"] = _fmt_ts(p.get("updated_at"))
-            cover = _path_to_v2_url(p.get("pack_cover") or "")
-            if not cover:
-                row = fb_conn.execute(
-                    "SELECT local_path FROM local_product_images "
-                    "WHERE local_product_id = ? AND role = 'main' "
-                    "ORDER BY sort_order LIMIT 1",
-                    (p["id"],),
-                ).fetchone()
-                if row and row["local_path"]:
-                    cover = _path_to_v2_url(row["local_path"])
-            if not cover:
-                row = fb_conn.execute(
-                    """SELECT pp.image_path
-                         FROM packs pk
-                    LEFT JOIN pack_previews pp ON pp.series_id = pk.series_id
-                                              AND pp.generation_status = 'ok'
-                                              AND COALESCE(pp.image_path,'') != ''
-                        WHERE pk.id = ?
-                        ORDER BY pp.preview_idx LIMIT 1""",
-                    (p["pack_id"],),
-                ).fetchone()
-                if row and row["image_path"]:
-                    cover = _path_to_v2_url(row["image_path"])
-            p["pack_cover_url"] = cover
+            p["pack_cover_url"] = _resolve_local_product_cover_url(
+                fb_conn,
+                local_product_id=p["id"],
+                pack_id=p["pack_id"],
+                pack_cover_path=p.get("pack_cover") or "",
+                updated_at=int(p.get("updated_at") or 0),
+            )
     finally:
         fb_conn.close()
     return templates.TemplateResponse(
@@ -3964,21 +4068,26 @@ def v2_local_product_detail(request: Request, local_product_id: int):
         )
     lp["created_human"] = _fmt_ts(lp.get("created_at"))
     lp["updated_human"] = _fmt_ts(lp.get("updated_at"))
-    cover = _path_to_v2_url(lp.get("pack_cover") or "")
-    if not cover:
-        main_img = next(
-            (i for i in lp.get("images", []) if (i.get("role") or "") == "main"),
-            None,
+    import sqlite3 as _sql
+    _fb = _sql.connect("data/ops_workbench.db")
+    _fb.row_factory = _sql.Row
+    try:
+        lp["pack_cover_url"] = _resolve_local_product_cover_url(
+            _fb,
+            local_product_id=local_product_id,
+            pack_id=lp.get("pack_id") or 0,
+            pack_cover_path=lp.get("pack_cover") or "",
+            updated_at=int(lp.get("updated_at") or 0),
         )
-        if main_img:
-            cover = _path_to_v2_url(main_img.get("local_path") or "")
-    lp["pack_cover_url"] = cover
+    finally:
+        _fb.close()
     for img in lp.get("images", []):
         img["url"] = _versioned_local_product_image_url(img)
         img["created_human"] = _fmt_ts(img.get("created_at"))
     for ls in lp.get("listings", []):
         ls["created_human"] = _fmt_ts(ls.get("created_at"))
         ls["published_human"] = _fmt_ts(ls.get("published_at"))
+        ls["last_pushed_human"] = _fmt_ts(ls.get("last_pushed_at"))
         ls["shop_label"] = get_shop_label(ls.get("shop") or "")
     # Which shops the operator can still publish to (no LIVE listing yet).
     listed_shops = {ls.get("shop") for ls in lp.get("listings", [])
@@ -4078,11 +4187,10 @@ async def v2_local_product_auto_design_sync(request: Request, local_product_id: 
     shop = (str(payload.get("shop") or "")).strip() or None
     secondary_count = max(0, count - 1)
     task_id = f"tkshop_auto_design_local:{local_product_id}"
-    svc = get_tkshop_service()
     try:
         started = run_async(
             task_id,
-            svc.auto_design_images_for_local_product, local_product_id,
+            _run_local_auto_design_bg, local_product_id,
             shop=shop,
             secondary_count=secondary_count,
             language=language,
@@ -4156,11 +4264,8 @@ def _versioned_local_product_image_url(img: dict) -> str:
     """Build a /v2-outputs URL for a local_product_images row with a busting
     suffix so the browser doesn't show a stale cached image after a regen."""
     p = img.get("local_path") or ""
-    url = _path_to_v2_url(p)
-    if not url:
-        return ""
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}v={img.get('created_at') or img.get('id') or 0}"
+    key = _cover_cache_key(p, int(img.get("created_at") or img.get("id") or 0))
+    return _versioned_url_from_path(p, cache_key=key)
 
 
 @router.post("/products/batch-publish-from-local")
@@ -4551,36 +4656,18 @@ def v2_product_detail(request: Request, product_id: int):
         )
     p["created_human"] = _fmt_ts(p.get("created_at"))
     p["published_human"] = _fmt_ts(p.get("published_at"))
-    cover = _path_to_v2_url(p.get("cover_image_path") or "")
-    if not cover:
-        # Fallback chain: product main image → first ok pack preview
-        main_img = next(
-            (i for i in (p.get("images") or [])
-             if (i.get("role") or "") == "main" and i.get("local_path")),
-            None,
+    import sqlite3 as _sql
+    _fb = _sql.connect("data/ops_workbench.db")
+    try:
+        p["pack_cover_url"] = _resolve_listing_cover_url(
+            _fb,
+            product_id=product_id,
+            pack_id=p.get("pack_id") or 0,
+            pack_cover_path=p.get("cover_image_path") or "",
+            updated_at=int(p.get("updated_at") or 0),
         )
-        if main_img:
-            cover = _path_to_v2_url(main_img["local_path"])
-    if not cover and p.get("pack_id"):
-        import sqlite3 as _sql
-        conn = _sql.connect("data/ops_workbench.db")
-        conn.row_factory = _sql.Row
-        try:
-            row = conn.execute(
-                """SELECT pp.image_path
-                     FROM packs pk
-                LEFT JOIN pack_previews pp ON pp.series_id = pk.series_id
-                                          AND pp.generation_status = 'ok'
-                                          AND COALESCE(pp.image_path,'') != ''
-                    WHERE pk.id = ?
-                    ORDER BY pp.preview_idx LIMIT 1""",
-                (p["pack_id"],),
-            ).fetchone()
-            if row and row["image_path"]:
-                cover = _path_to_v2_url(row["image_path"])
-        finally:
-            conn.close()
-    p["pack_cover_url"] = cover
+    finally:
+        _fb.close()
     for img in p.get("images", []):
         img["url"] = _versioned_product_image_url(img)
         img["created_human"] = _fmt_ts(img.get("created_at"))
@@ -4701,10 +4788,9 @@ async def v2_product_auto_design_images_sync(request: Request, product_id: int):
     size = (str(payload.get("size") or "1024x1024")).strip() or "1024x1024"
     secondary_count = max(0, count - 1)
     task_id = f"tkshop_auto_design:{product_id}"
-    svc = get_tkshop_service()
     started = run_async(
         task_id,
-        svc.auto_design_images, product_id,
+        _run_listing_auto_design_bg, product_id,
         secondary_count=secondary_count,
         language=language,
         replace_existing_ai=True,
