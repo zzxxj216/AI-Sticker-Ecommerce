@@ -101,6 +101,90 @@ TKSHOP_IMAGE_PUBLIC_BASE = os.getenv(
 TKSHOP_SHOPS = [s.strip() for s in (os.getenv("TKSHOP_SHOPS") or "main").split(",") if s.strip()]
 TKSHOP_DEFAULT_SHOP = TKSHOP_SHOPS[0] if TKSHOP_SHOPS else "main"
 
+# Per-shop seller_sku prefix. Format: ``shopA:INK1,shopB:INK2``. When a shop
+# isn't listed, prefix derives from the shop's index in TKSHOP_SHOPS:
+# first shop → INK1, second → INK2, etc. This keeps SKUs on different shops
+# from colliding when the same pack gets cloned across shops.
+def _parse_shop_sku_prefixes(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for chunk in (raw or "").split(","):
+        chunk = chunk.strip()
+        if not chunk or ":" not in chunk:
+            continue
+        shop, pfx = chunk.split(":", 1)
+        shop = shop.strip()
+        pfx = re.sub(r"[^A-Z0-9]", "", (pfx or "").strip().upper())
+        if shop and pfx:
+            out[shop] = pfx
+    return out
+
+
+_TKSHOP_SKU_PREFIX_OVERRIDES = _parse_shop_sku_prefixes(
+    os.getenv("TKSHOP_SKU_PREFIXES", "")
+)
+
+
+def get_shop_sku_prefix(shop: str) -> str:
+    """Return the SKU prefix for ``shop`` (e.g. ``INK1`` / ``INK2``).
+
+    Resolution order: explicit override in ``TKSHOP_SKU_PREFIXES`` env →
+    index in ``TKSHOP_SHOPS`` (1-based, so the first shop → ``INK1``) →
+    fallback ``INK`` for unknown shops.
+    """
+    s = (shop or "").strip() or TKSHOP_DEFAULT_SHOP
+    if s in _TKSHOP_SKU_PREFIX_OVERRIDES:
+        return _TKSHOP_SKU_PREFIX_OVERRIDES[s]
+    try:
+        idx = TKSHOP_SHOPS.index(s) + 1
+        return f"INK{idx}"
+    except ValueError:
+        return "INK"
+
+
+# Display-name map for shop keys. The shop key (TKSHOP_SHOPS env) is the
+# canonical identifier passed to multi-channel-api; the label is what the UI
+# shows. Operators set ``TKSHOP_SHOP_LABELS=main:inkelligentsticker,…`` when
+# they want a friendlier name without renaming the underlying shop config.
+# When unset, the shop key is used verbatim, with the one exception that
+# ``main`` defaults to ``inkelligentsticker`` (the actual store name).
+def _parse_shop_labels(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for chunk in (raw or "").split(","):
+        chunk = chunk.strip()
+        if not chunk or ":" not in chunk:
+            continue
+        shop, label = chunk.split(":", 1)
+        shop = shop.strip()
+        label = label.strip()
+        if shop and label:
+            out[shop] = label
+    return out
+
+
+_TKSHOP_SHOP_LABEL_OVERRIDES = _parse_shop_labels(
+    os.getenv("TKSHOP_SHOP_LABELS", "")
+)
+
+
+def get_shop_label(shop: str) -> str:
+    """Display name for ``shop``. Falls back to the shop key itself."""
+    s = (shop or "").strip()
+    if not s:
+        return ""
+    if s in _TKSHOP_SHOP_LABEL_OVERRIDES:
+        return _TKSHOP_SHOP_LABEL_OVERRIDES[s]
+    # Sensible default for the conventional 'main' bucket — the real store is
+    # inkelligentsticker, but the env still says 'main' for historical reasons.
+    if s == "main":
+        return "inkelligentsticker"
+    return s
+
+
+def get_shop_labels_map() -> dict[str, str]:
+    """All configured shops with their display labels."""
+    return {s: get_shop_label(s) for s in TKSHOP_SHOPS}
+
+
 # Size whitelist accepted by JieKou's gpt-image-2 text-to-image / edit endpoints
 # (from its 400 VALIDATION_ERROR schema). Anything outside this set is rejected,
 # so callers must snap to a member before sending.
@@ -199,18 +283,51 @@ def _slugify_for_sku(pack_uid: str) -> str:
 
 
 def compute_default_seller_sku(
-    *, pack_uid: str, total_stickers: int = 0, pack_id: int
+    *, pack_uid: str, total_stickers: int = 0, pack_id: int,
+    shop: Optional[str] = None,
 ) -> str:
-    """Default seller_sku = ``INK-{name_slug}-{pack_id}``.
+    """Default seller_sku = ``{shop_prefix}-{name_slug}-{pack_id}``.
 
     ``pack_id`` (the DB primary key) is appended to GUARANTEE global
     uniqueness — the old ``INK-{slug10}-{total}`` form collided for packs made
     the same day (date-dominated slug) with the same sticker count.
-    ``total_stickers`` is accepted for backward compat but no longer encoded.
+    ``shop`` selects a per-shop prefix (``INK1``/``INK2``/…) so the same pack
+    cloned to multiple shops doesn't reuse a SKU. ``total_stickers`` is
+    accepted for backward compat but no longer encoded.
     """
+    prefix = get_shop_sku_prefix(shop or TKSHOP_DEFAULT_SHOP)
     slug = _slugify_for_sku(pack_uid) or f"P{pack_id}"
-    sku = f"INK-{slug}-{pack_id}"
+    sku = f"{prefix}-{slug}-{pack_id}"
     return sku[:25]
+
+
+def _ensure_unique_seller_sku(
+    conn: sqlite3.Connection, sku: str, *, exclude_product_id: Optional[int] = None,
+) -> str:
+    """Return a SKU guaranteed not to collide with any existing row.
+
+    Checks ``tkshop_products.seller_sku`` (case-insensitive) and, on
+    collision, appends ``-2``, ``-3``, … until free. Truncates to 25 chars
+    while leaving room for the disambiguator. ``exclude_product_id`` lets
+    an UPDATE keep its own existing SKU.
+    """
+    base = (sku or "").strip().upper()[:25]
+    if not base:
+        return base
+    candidate = base
+    n = 1
+    while True:
+        params: tuple = (candidate,)
+        sql = "SELECT id FROM tkshop_products WHERE UPPER(seller_sku) = ?"
+        if exclude_product_id is not None:
+            sql += " AND id != ?"
+            params = (candidate, exclude_product_id)
+        if conn.execute(sql, params).fetchone() is None:
+            return candidate
+        n += 1
+        suffix = f"-{n}"
+        head_len = 25 - len(suffix)
+        candidate = (base[:head_len] + suffix)
 
 
 def _is_valid_seller_sku(sku: str) -> bool:
@@ -306,8 +423,16 @@ class TKShopService:
         the (pack_id, shop) pair — if a product already exists for this pack
         on the chosen shop, return its id (so re-clicking "create" doesn't
         spawn duplicates). Different shops still get their own rows.
+
+        Also ensures a ``local_products`` master row exists for the pack and
+        links the new listing to it. The master is the single source of
+        truth for title/description/images; listings carry shop-specific
+        platform IDs and a snapshot of what was last pushed.
         """
         target_shop = (shop or TKSHOP_DEFAULT_SHOP).strip() or TKSHOP_DEFAULT_SHOP
+        # Master is mandatory — created first so the listing FK can point at
+        # it from row insert (avoids a second UPDATE).
+        local_product_id = self.get_or_create_local_product(pack_id)
         with _open_db(self.db_path) as conn:
             existing = conn.execute(
                 "SELECT id FROM tkshop_products WHERE pack_id = ? AND shop = ? "
@@ -316,22 +441,36 @@ class TKShopService:
             ).fetchone()
             if existing:
                 return existing["id"]
-            pack = conn.execute(
-                "SELECT id FROM packs WHERE id = ?", (pack_id,),
-            ).fetchone()
-            if not pack:
-                raise ValueError(f"pack #{pack_id} not found")
             now = int(time.time())
+            # Snapshot master fields into the listing — if master is still
+            # empty (operator hasn't run AI gen yet) the listing inherits the
+            # empties, which is the same as the old behavior.
+            master = conn.execute(
+                "SELECT title, description_html, selling_points, keywords, "
+                "       detail_main_raw_text, category_id, default_template_json "
+                "FROM local_products WHERE id = ?",
+                (local_product_id,),
+            ).fetchone()
             cur = conn.execute(
                 """
                 INSERT INTO tkshop_products
                     (pack_id, shop, tiktok_product_id, detail_main_raw_text,
                      title, description_html, selling_points, keywords,
                      category_id, default_template_json, publish_status,
-                     created_at, published_at)
-                VALUES (?, ?, '', '', '', '', '[]', '[]', '928016', '{}', 'draft', ?, NULL)
+                     created_at, published_at, local_product_id)
+                VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?)
                 """,
-                (pack_id, target_shop, now),
+                (
+                    pack_id, target_shop,
+                    master["detail_main_raw_text"] or "",
+                    master["title"] or "",
+                    master["description_html"] or "",
+                    master["selling_points"] or "[]",
+                    master["keywords"] or "[]",
+                    master["category_id"] or "928016",
+                    master["default_template_json"] or "{}",
+                    now, local_product_id,
+                ),
             )
             conn.commit()
             return cur.lastrowid
@@ -353,7 +492,7 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             row = conn.execute(
                 """
-                SELECT pr.id, pr.pack_id, pr.seller_sku AS existing_seller_sku,
+                SELECT pr.id, pr.pack_id, pr.shop, pr.seller_sku AS existing_seller_sku,
                        p.display_name, p.total_stickers, p.pack_uid,
                        s.style_anchor, s.palette, s.pack_archetype,
                        s.metadata_json
@@ -389,10 +528,13 @@ class TKShopService:
             pass
 
         # Pre-compute the default seller_sku so the AI can mirror it back.
+        # Per-shop prefix keeps cross-shop SKUs from colliding (e.g. main →
+        # INK1-…, inkelligentstudio → INK2-…).
         default_sku = compute_default_seller_sku(
             pack_uid=row["pack_uid"] or "",
             total_stickers=row["total_stickers"] or 0,
             pack_id=row["pack_id"],
+            shop=row["shop"] or TKSHOP_DEFAULT_SHOP,
         )
 
         prompt = build_detail_main_prompt(
@@ -443,6 +585,12 @@ class TKShopService:
             chosen_sku = default_sku
 
         with _open_db(self.db_path) as conn:
+            # Guarantee no other row uses this SKU — disambiguate with
+            # ``-2``/``-3``/… on collision. Cross-shop clones thus stay unique
+            # even if the AI echoes the same suggested SKU.
+            chosen_sku = _ensure_unique_seller_sku(
+                conn, chosen_sku, exclude_product_id=product_id,
+            )
             if extract_ok:
                 conn.execute(
                     """
@@ -471,6 +619,73 @@ class TKShopService:
                     """,
                     (main_text, chosen_sku, product_id),
                 )
+            # Mirror into the local_products master so the 本地产品 tab and
+            # any future listing for the same pack inherit the same content.
+            # Master seller_sku has no shop prefix (per-shop prefix is applied
+            # when a listing is created); we strip the listing's prefix here
+            # by recomputing the unprefixed slug.
+            lp_row = conn.execute(
+                "SELECT pr.local_product_id, p.pack_uid "
+                "FROM tkshop_products pr JOIN packs p ON p.id = pr.pack_id "
+                "WHERE pr.id = ?",
+                (product_id,),
+            ).fetchone()
+            lp_id = lp_row["local_product_id"] if lp_row else None
+            if lp_id is None and lp_row:
+                # Legacy row pre-migration — mint a master on the fly.
+                now = int(time.time())
+                conn.execute(
+                    "INSERT INTO local_products (pack_id, created_at, updated_at) "
+                    "SELECT pack_id, ?, ? FROM tkshop_products WHERE id = ?",
+                    (now, now, product_id),
+                )
+                lp_id = conn.execute(
+                    "SELECT id FROM local_products WHERE pack_id = "
+                    "(SELECT pack_id FROM tkshop_products WHERE id = ?)",
+                    (product_id,),
+                ).fetchone()["id"]
+                conn.execute(
+                    "UPDATE tkshop_products SET local_product_id = ? WHERE id = ?",
+                    (lp_id, product_id),
+                )
+            if lp_id is not None:
+                master_sku = _slugify_for_sku(lp_row["pack_uid"] or "")
+                master_sku = f"INK-{master_sku or 'P' + str(product_id)}"[:25]
+                # Master SKU only needs to be unique among masters (listings
+                # carry their own per-shop variant).
+                while conn.execute(
+                    "SELECT 1 FROM local_products "
+                    "WHERE UPPER(seller_sku) = ? AND id != ?",
+                    (master_sku, lp_id),
+                ).fetchone():
+                    master_sku = master_sku[:23] + "-2"
+                if extract_ok:
+                    conn.execute(
+                        """
+                        UPDATE local_products
+                           SET detail_main_raw_text = ?, title = ?,
+                               description_html = ?, selling_points = ?,
+                               keywords = ?, seller_sku = ?, updated_at = ?
+                         WHERE id = ?
+                        """,
+                        (
+                            main_text,
+                            _clamp_title(payload.get("title") or ""),
+                            payload.get("description_html") or "",
+                            json.dumps(payload.get("selling_points") or [], ensure_ascii=False),
+                            json.dumps(payload.get("keywords") or [], ensure_ascii=False),
+                            master_sku,
+                            int(time.time()),
+                            lp_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE local_products "
+                        "SET detail_main_raw_text = ?, seller_sku = ?, updated_at = ? "
+                        "WHERE id = ?",
+                        (main_text, master_sku, int(time.time()), lp_id),
+                    )
             conn.commit()
 
         # Persist all artifacts to disk via PackStore.
@@ -519,11 +734,17 @@ class TKShopService:
             sets.append("keywords = ?"); params.append(json.dumps(keywords, ensure_ascii=False))
         if category_id is not None:
             sets.append("category_id = ?"); params.append(category_id)
-        if seller_sku is not None:
-            sets.append("seller_sku = ?"); params.append(seller_sku[:25])
-        if not sets:
+        if not sets and seller_sku is None:
             return False
         with _open_db(self.db_path) as conn:
+            # Resolve SKU collision before binding it into the UPDATE so the
+            # operator's manual edit can't silently shadow another row's SKU.
+            if seller_sku is not None:
+                clean_sku = _ensure_unique_seller_sku(
+                    conn, (seller_sku or "").strip().upper()[:25],
+                    exclude_product_id=product_id,
+                )
+                sets.append("seller_sku = ?"); params.append(clean_sku)
             cur = conn.execute(
                 f"UPDATE tkshop_products SET {', '.join(sets)} WHERE id = ?",
                 tuple(params) + (product_id,),
@@ -535,6 +756,9 @@ class TKShopService:
         """Tiny helper used by self-heal to update only the SKU."""
         clean = (seller_sku or "").strip().upper()[:25]
         with _open_db(self.db_path) as conn:
+            clean = _ensure_unique_seller_sku(
+                conn, clean, exclude_product_id=product_id,
+            )
             cur = conn.execute(
                 "UPDATE tkshop_products SET seller_sku = ? WHERE id = ?",
                 (clean, product_id),
@@ -1308,6 +1532,38 @@ class TKShopService:
             except Exception:
                 pass
 
+        # Mirror the freshly-generated AI image set into local_product_images
+        # so the master catalog reflects the latest AI output. Manual images
+        # already on the master are preserved (only AI rows are replaced).
+        with _open_db(self.db_path) as conn:
+            lp_id_row = conn.execute(
+                "SELECT local_product_id FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+            lp_id = lp_id_row["local_product_id"] if lp_id_row else None
+            if lp_id is not None:
+                conn.execute(
+                    "DELETE FROM local_product_images "
+                    "WHERE local_product_id = ? AND source = 'ai'",
+                    (lp_id,),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO local_product_images
+                        (local_product_id, role, source, local_path,
+                         sort_order, ai_prompt, created_at)
+                    SELECT ?, role, source, local_path, sort_order, ai_prompt, created_at
+                      FROM tkshop_product_images
+                     WHERE product_id = ? AND source = 'ai'
+                    """,
+                    (lp_id, product_id),
+                )
+                conn.execute(
+                    "UPDATE local_products SET updated_at = ? WHERE id = ?",
+                    (int(time.time()), lp_id),
+                )
+                conn.commit()
+
         return {
             "product_id": product_id,
             "generated": sum(1 for r in results if r.get("ok")),
@@ -1321,6 +1577,140 @@ class TKShopService:
             "reference_kind": main_bundle_ref_label,
             "spec": spec,
         }
+
+    # ------------------------------------------------------------------
+    # Batch: create + AI-fill (no publish) from pack manager multi-select
+    # ------------------------------------------------------------------
+
+    def batch_create_products_from_packs(
+        self,
+        pack_ids: list[int],
+        *,
+        shop: Optional[str] = None,
+        generate_detail: bool = True,
+        generate_images: bool = True,
+        secondary_count: int = 3,
+        language: str = "en",
+        size: str = "1024x1024",
+        max_workers: int = 3,
+        skip_if_any_product_exists: bool = True,
+    ) -> dict[str, Any]:
+        """Bulk pipeline: for each pack id, create a draft tkshop_products row
+        in ``shop`` and (optionally) run ``generate_detail`` then
+        ``auto_design_images`` to fill in title/description/SKU/main image/
+        secondary images. **Does not publish** — leaves rows in
+        ``publish_status='draft'`` so the operator can review before sending
+        to TikTok.
+
+        Concurrency: up to ``max_workers`` packs are processed in parallel via a
+        ThreadPoolExecutor (default 3 to stay under OpenAI rate limits).
+        Within a single pack the steps are serial — detail → images — so a
+        single rate-limit hit only stalls that pack.
+
+        ``skip_if_any_product_exists`` matches the pack-manager UI rule: once
+        a pack has any tkshop_products row it disappears from the
+        batch-generate candidate set, so re-running this with the same input
+        is idempotent.
+
+        Returns ``{created:[{pack_id, product_id, detail_ok, images_ok,
+        error}], skipped:[{pack_id, reason}], elapsed_s}``.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        target_shop = (shop or TKSHOP_DEFAULT_SHOP).strip() or TKSHOP_DEFAULT_SHOP
+        t0 = time.time()
+        # De-dup while preserving order — operators sometimes hit submit twice.
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for pid in pack_ids:
+            try:
+                p = int(pid)
+            except (TypeError, ValueError):
+                continue
+            if p in seen:
+                continue
+            seen.add(p)
+            ordered.append(p)
+
+        # Pre-filter: skip packs that already have any product row. Doing this
+        # up-front (instead of inside each worker) lets the UI summary count
+        # be honest even if the worker pool serializes badly.
+        to_process: list[int] = []
+        skipped: list[dict] = []
+        with _open_db(self.db_path) as conn:
+            for pid in ordered:
+                pack_exists = conn.execute(
+                    "SELECT 1 FROM packs WHERE id = ?", (pid,),
+                ).fetchone()
+                if not pack_exists:
+                    skipped.append({"pack_id": pid, "reason": "pack not found"})
+                    continue
+                if skip_if_any_product_exists:
+                    has = conn.execute(
+                        "SELECT 1 FROM tkshop_products WHERE pack_id = ? LIMIT 1",
+                        (pid,),
+                    ).fetchone()
+                    if has:
+                        skipped.append({"pack_id": pid, "reason": "product already exists"})
+                        continue
+                to_process.append(pid)
+
+        created: list[dict] = []
+
+        def _one(pack_id: int) -> dict:
+            entry: dict = {"pack_id": pack_id, "product_id": None,
+                            "detail_ok": False, "images_ok": False, "error": ""}
+            try:
+                product_id = self.create_product_from_pack(pack_id, shop=target_shop)
+                entry["product_id"] = product_id
+            except Exception as e:
+                entry["error"] = f"create failed: {e}"[:300]
+                return entry
+            if generate_detail:
+                try:
+                    self.generate_detail(product_id)
+                    entry["detail_ok"] = True
+                except Exception as e:
+                    entry["error"] = f"detail failed: {e}"[:300]
+                    # Continue to images anyway — they don't depend on text.
+            if generate_images:
+                try:
+                    self.auto_design_images(
+                        product_id,
+                        secondary_count=secondary_count,
+                        language=language,
+                        size=size,
+                        replace_existing_ai=True,
+                    )
+                    entry["images_ok"] = True
+                except Exception as e:
+                    prev = entry["error"]
+                    entry["error"] = (prev + " | " if prev else "") + f"images failed: {e}"[:300]
+            return entry
+
+        if to_process:
+            workers = max(1, min(max_workers, len(to_process)))
+            with ThreadPoolExecutor(max_workers=workers,
+                                     thread_name_prefix="tkshop-batch") as ex:
+                futures = {ex.submit(_one, pid): pid for pid in to_process}
+                for fut in as_completed(futures):
+                    pack_id = futures[fut]
+                    try:
+                        created.append(fut.result())
+                    except Exception as e:
+                        created.append({
+                            "pack_id": pack_id, "product_id": None,
+                            "detail_ok": False, "images_ok": False,
+                            "error": f"worker crashed: {e}"[:300],
+                        })
+
+        elapsed = round(time.time() - t0, 1)
+        logger.info(
+            "batch_create_products_from_packs: shop=%s requested=%d processed=%d skipped=%d in %.1fs",
+            target_shop, len(ordered), len(created), len(skipped), elapsed,
+        )
+        return {"created": created, "skipped": skipped, "elapsed_s": elapsed,
+                "shop": target_shop}
 
     # ------------------------------------------------------------------
     # C.3 publish — POST to multi-channel-api sticker_publish endpoint
@@ -1689,7 +2079,7 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             pr = conn.execute(
                 """
-                SELECT pr.id, pr.title, pr.description_html, pr.category_id,
+                SELECT pr.id, pr.shop, pr.title, pr.description_html, pr.category_id,
                        pr.seller_sku, pr.tiktok_product_id, pr.tiktok_sku_id,
                        p.display_name, p.pack_uid, p.total_stickers
                   FROM tkshop_products pr
@@ -1734,12 +2124,24 @@ class TKShopService:
 
         seller_sku = pr["seller_sku"] or ""
         if not seller_sku:
-            # Fallback if AI/extract step never populated it.
-            seller_sku = compute_default_seller_sku(
-                pack_uid=pr["pack_uid"] or "",
-                total_stickers=pr["total_stickers"] or 0,
-                pack_id=product_id,
-            )
+            # Fallback if AI/extract step never populated it. Use the row's
+            # shop so the prefix (INK1/INK2/…) matches the destination store.
+            with _open_db(self.db_path) as conn:
+                seller_sku = compute_default_seller_sku(
+                    pack_uid=pr["pack_uid"] or "",
+                    total_stickers=pr["total_stickers"] or 0,
+                    pack_id=product_id,
+                    shop=pr["shop"] or TKSHOP_DEFAULT_SHOP,
+                )
+                seller_sku = _ensure_unique_seller_sku(
+                    conn, seller_sku, exclude_product_id=product_id,
+                )
+                # Persist so future retries/self-heal see the same value.
+                conn.execute(
+                    "UPDATE tkshop_products SET seller_sku = ? WHERE id = ?",
+                    (seller_sku, product_id),
+                )
+                conn.commit()
 
         # Defensive clamp: TikTok / multi-channel-api enforce 100-char title.
         return {
@@ -2060,7 +2462,10 @@ class TKShopService:
         now = int(time.time())
         with _open_db(self.db_path) as conn:
             src = conn.execute(
-                "SELECT * FROM tkshop_products WHERE id = ?",
+                "SELECT pr.*, p.pack_uid, p.total_stickers "
+                "FROM tkshop_products pr "
+                "LEFT JOIN packs p ON p.id = pr.pack_id "
+                "WHERE pr.id = ?",
                 (product_id,),
             ).fetchone()
             if not src:
@@ -2069,6 +2474,20 @@ class TKShopService:
                 raise ValueError(
                     f"product #{product_id} is already on shop {target_shop!r}"
                 )
+            # Regenerate the SKU with the target shop's prefix so e.g. main →
+            # INK1-…, inkelligentstudio → INK2-… don't share an identifier on
+            # different stores. _ensure_unique_seller_sku then disambiguates
+            # against every existing row.
+            target_sku = compute_default_seller_sku(
+                pack_uid=src["pack_uid"] or "",
+                total_stickers=src["total_stickers"] or 0,
+                pack_id=src["pack_id"],
+                shop=target_shop,
+            )
+            target_sku = _ensure_unique_seller_sku(conn, target_sku)
+            # Carry the source's local_product_id over to the clone so the new
+            # listing still points at the same master — that's what makes a
+            # multi-shop pack reuse one catalog entry instead of forking copies.
             cur = conn.execute(
                 """
                 INSERT INTO tkshop_products
@@ -2076,16 +2495,18 @@ class TKShopService:
                      detail_main_raw_text, title, description_html,
                      selling_points, keywords, seller_sku, category_id,
                      default_template_json, publish_status,
-                     created_at, published_at, auto_fix_attempts, last_fix_diff)
-                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, 0, '')
+                     created_at, published_at, auto_fix_attempts, last_fix_diff,
+                     local_product_id)
+                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, 0, '', ?)
                 """,
                 (
                     src["pack_id"], target_shop,
                     src["detail_main_raw_text"] or "",
                     src["title"] or "", src["description_html"] or "",
                     src["selling_points"] or "[]", src["keywords"] or "[]",
-                    src["seller_sku"] or "", src["category_id"] or "928016",
+                    target_sku, src["category_id"] or "928016",
                     src["default_template_json"] or "{}", now,
+                    src["local_product_id"],
                 ),
             )
             new_id = cur.lastrowid
@@ -2112,6 +2533,345 @@ class TKShopService:
             (src["shop"] or TKSHOP_DEFAULT_SHOP), target_shop,
         )
         return int(new_id)
+
+    def batch_publish_local_to_shop(
+        self,
+        local_product_ids: list[int],
+        target_shop: str,
+        *,
+        auto_activate: bool = True,
+        auto_fix: bool = True,
+        max_workers: int = 2,
+    ) -> dict[str, Any]:
+        """Master-first variant of ``batch_publish_to_shop``.
+
+        Input is local_product ids (rows from the 本地产品 tab). For each:
+          - resolve the pack
+          - find or create a tkshop_products listing for (pack, target_shop)
+            via ``create_product_from_pack`` (which seeds the listing from
+            master + carries the local_product_id FK)
+          - skip if the listing is already on TikTok
+          - else publish the listing
+
+        Same summary shape as ``batch_publish_to_shop`` so the UI consumes
+        either uniformly.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        if not target_shop or target_shop not in TKSHOP_SHOPS:
+            raise ValueError(
+                f"unknown shop {target_shop!r}; configured shops: {TKSHOP_SHOPS}"
+            )
+        t0 = time.time()
+        seen: set[int] = set()
+        clean_ids: list[int] = []
+        for lp in local_product_ids:
+            try:
+                v = int(lp)
+            except (TypeError, ValueError):
+                continue
+            if v in seen:
+                continue
+            seen.add(v)
+            clean_ids.append(v)
+        published, skipped, failed = [], [], []
+        # Resolve master → listing in target shop, building a "what to publish"
+        # plan in a single DB pass to avoid worker-pool contention.
+        plan: list[tuple[int, int]] = []  # (listing_id, local_product_id)
+        with _open_db(self.db_path) as conn:
+            for lp_id in clean_ids:
+                row = conn.execute(
+                    "SELECT id, pack_id, title, category_id FROM local_products WHERE id = ?",
+                    (lp_id,),
+                ).fetchone()
+                if not row:
+                    skipped.append({"local_product_id": lp_id, "reason": "master not found"})
+                    continue
+                if not (row["title"] or "").strip():
+                    skipped.append({"local_product_id": lp_id, "reason": "incomplete: missing title"})
+                    continue
+                if not (row["category_id"] or "").strip():
+                    skipped.append({"local_product_id": lp_id, "reason": "incomplete: missing category"})
+                    continue
+                # Need at least one master image (will be copied to listing).
+                has_img = conn.execute(
+                    "SELECT 1 FROM local_product_images "
+                    "WHERE local_product_id = ? AND role = 'main' LIMIT 1",
+                    (lp_id,),
+                ).fetchone()
+                if not has_img:
+                    skipped.append({"local_product_id": lp_id, "reason": "incomplete: no main image"})
+                    continue
+                # If a listing on target shop already has a TikTok id, this is
+                # a redundant request — surface the existing id and skip.
+                already = conn.execute(
+                    "SELECT id FROM tkshop_products "
+                    "WHERE local_product_id = ? AND shop = ? "
+                    "AND tiktok_product_id != ''",
+                    (lp_id, target_shop),
+                ).fetchone()
+                if already:
+                    skipped.append({
+                        "local_product_id": lp_id,
+                        "reason": "already listed on shop",
+                        "existing_product_id": already["id"],
+                    })
+                    continue
+                # Find or create the listing. Reuse a draft listing on the
+                # target shop if one exists; otherwise let create_product_from_pack
+                # mint a fresh one (it's idempotent for (pack, shop)).
+                listing = conn.execute(
+                    "SELECT id FROM tkshop_products "
+                    "WHERE local_product_id = ? AND shop = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (lp_id, target_shop),
+                ).fetchone()
+                if listing:
+                    plan.append((listing["id"], lp_id))
+                else:
+                    # Defer creation to the worker so DB writes don't pile up
+                    # before publish kicks off — but we need pack_id here.
+                    plan.append((-1 * row["pack_id"], lp_id))  # negative = needs-create
+        publish_fn = self.publish_with_self_heal if auto_fix else self.publish
+
+        def _one(item: tuple[int, int]) -> dict:
+            raw, lp_id = item
+            try:
+                if raw < 0:
+                    listing_id = self.create_product_from_pack(-raw, shop=target_shop)
+                    # Also snapshot master images into the listing so publish
+                    # has something to upload.
+                    self._snapshot_master_images_to_listing(lp_id, listing_id)
+                else:
+                    listing_id = raw
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE tkshop_products SET publish_status = 'publishing' "
+                        "WHERE id = ?",
+                        (listing_id,),
+                    )
+                    conn.commit()
+                kwargs: dict[str, Any] = {"auto_activate": auto_activate}
+                if not auto_fix:
+                    kwargs["dry_run"] = False
+                publish_fn(listing_id, **kwargs)
+                try:
+                    self.sync_one_status(listing_id)
+                except Exception:
+                    pass
+                return {"ok": True, "local_product_id": lp_id, "product_id": listing_id}
+            except Exception as e:
+                return {"ok": False, "local_product_id": lp_id,
+                        "error": f"{e}"[:300]}
+
+        if plan:
+            workers = max(1, min(max_workers, len(plan)))
+            with ThreadPoolExecutor(max_workers=workers,
+                                     thread_name_prefix="tkshop-publish-master") as ex:
+                futures = [ex.submit(_one, item) for item in plan]
+                for fut in as_completed(futures):
+                    res = fut.result()
+                    if res.get("ok"):
+                        published.append({k: v for k, v in res.items() if k != "ok"})
+                    else:
+                        failed.append({"local_product_id": res["local_product_id"],
+                                       "error": res.get("error", "")})
+        elapsed = round(time.time() - t0, 1)
+        logger.info(
+            "batch_publish_local_to_shop: target=%s requested=%d published=%d skipped=%d failed=%d in %.1fs",
+            target_shop, len(clean_ids), len(published), len(skipped), len(failed), elapsed,
+        )
+        return {"published": published, "skipped": skipped, "failed": failed,
+                "elapsed_s": elapsed, "target_shop": target_shop}
+
+    def _snapshot_master_images_to_listing(
+        self, local_product_id: int, listing_id: int,
+    ) -> int:
+        """Replicate master image rows into the listing's
+        ``tkshop_product_images``. Only fills if the listing has no images
+        yet (typical for a freshly-minted listing); existing listing images
+        are left alone so a published listing's tiktok_image_uri isn't lost.
+        Returns the number of rows inserted.
+        """
+        with _open_db(self.db_path) as conn:
+            has_imgs = conn.execute(
+                "SELECT 1 FROM tkshop_product_images WHERE product_id = ? LIMIT 1",
+                (listing_id,),
+            ).fetchone()
+            if has_imgs:
+                return 0
+            cur = conn.execute(
+                """
+                INSERT INTO tkshop_product_images
+                    (product_id, role, source, local_path,
+                     tiktok_image_uri, sort_order, ai_prompt, created_at)
+                SELECT ?, role, source, local_path,
+                       '', sort_order, ai_prompt, ?
+                  FROM local_product_images
+                 WHERE local_product_id = ?
+                """,
+                (listing_id, int(time.time()), local_product_id),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def batch_publish_to_shop(
+        self,
+        product_ids: list[int],
+        target_shop: str,
+        *,
+        auto_activate: bool = True,
+        auto_fix: bool = True,
+        max_workers: int = 2,
+    ) -> dict[str, Any]:
+        """Bulk-publish a list of local draft products to ``target_shop``.
+
+        For each input product:
+          - If the pack already has a tkshop_products row on ``target_shop``
+            that's been pushed to TikTok (``tiktok_product_id != ''``) → skip
+            with ``reason='pack already listed on shop'`` so re-clicking the
+            batch button doesn't double-publish.
+          - If the product is already on ``target_shop`` (same row) but still
+            a local draft → publish in place.
+          - Else clone to ``target_shop`` (which regenerates the SKU with
+            that shop's prefix and replicates images) and publish the clone.
+
+        Health-check: products missing title / main image / category are
+        skipped with reason='incomplete'; the operator sees the count in the
+        summary and can fix them in the detail page.
+
+        Returns ``{published:[{product_id, pack_id, source_id}],
+                   skipped:[{product_id, reason}],
+                   failed:[{product_id, error}],
+                   elapsed_s}``.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if not target_shop or target_shop not in TKSHOP_SHOPS:
+            raise ValueError(
+                f"unknown shop {target_shop!r}; configured shops: {TKSHOP_SHOPS}"
+            )
+        t0 = time.time()
+
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for pid in product_ids:
+            try:
+                p = int(pid)
+            except (TypeError, ValueError):
+                continue
+            if p in seen:
+                continue
+            seen.add(p)
+            ordered.append(p)
+
+        published: list[dict] = []
+        skipped: list[dict] = []
+        failed: list[dict] = []
+
+        # Pre-flight: bucket each input id into publish-in-place / clone-then-
+        # publish / skip. Doing this in one DB pass keeps the worker pool's
+        # SQL contention low.
+        plan: list[tuple[int, int, Optional[int]]] = []  # (source_id, pack_id, publish_id_or_None_means_clone_first)
+        with _open_db(self.db_path) as conn:
+            for pid in ordered:
+                src = conn.execute(
+                    "SELECT id, pack_id, shop, title, category_id, tiktok_product_id "
+                    "FROM tkshop_products WHERE id = ?",
+                    (pid,),
+                ).fetchone()
+                if not src:
+                    skipped.append({"product_id": pid, "reason": "product not found"})
+                    continue
+                pack_id = src["pack_id"]
+                # Health: title + category are mandatory to even attempt publish.
+                # Missing fields would either 400 immediately or land as broken
+                # listings — better to surface "incomplete N" up-front.
+                if not (src["title"] or "").strip():
+                    skipped.append({"product_id": pid, "reason": "incomplete: missing title"})
+                    continue
+                if not (src["category_id"] or "").strip():
+                    skipped.append({"product_id": pid, "reason": "incomplete: missing category"})
+                    continue
+                main_img = conn.execute(
+                    "SELECT 1 FROM tkshop_product_images "
+                    "WHERE product_id = ? AND role = 'main' LIMIT 1",
+                    (pid,),
+                ).fetchone()
+                if not main_img:
+                    skipped.append({"product_id": pid, "reason": "incomplete: no main image"})
+                    continue
+                # Already-listed guard: if any row for this pack on the target
+                # shop has a TikTok id, treat this as a duplicate request.
+                already = conn.execute(
+                    "SELECT id FROM tkshop_products "
+                    "WHERE pack_id = ? AND shop = ? AND tiktok_product_id != ''",
+                    (pack_id, target_shop),
+                ).fetchone()
+                if already:
+                    skipped.append({
+                        "product_id": pid, "reason": "pack already listed on shop",
+                        "existing_product_id": already["id"],
+                    })
+                    continue
+                if (src["shop"] or TKSHOP_DEFAULT_SHOP) == target_shop:
+                    plan.append((pid, pack_id, pid))  # publish in place
+                else:
+                    plan.append((pid, pack_id, None))  # clone first, publish clone
+
+        publish_fn = self.publish_with_self_heal if auto_fix else self.publish
+
+        def _one(item: tuple[int, int, Optional[int]]) -> dict:
+            source_id, pack_id, publish_id = item
+            try:
+                if publish_id is None:
+                    publish_id = self.clone_to_shop(source_id, target_shop)
+                # Mark publishing so the products list reflects in-flight state
+                # right away, mirroring the single-product publish route.
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE tkshop_products SET publish_status = 'publishing' "
+                        "WHERE id = ?",
+                        (publish_id,),
+                    )
+                    conn.commit()
+                kwargs: dict[str, Any] = {"auto_activate": auto_activate}
+                if not auto_fix:
+                    kwargs["dry_run"] = False
+                publish_fn(publish_id, **kwargs)
+                # Best-effort status reconcile in case the wrapper returned
+                # without updating publish_status (some self-heal paths).
+                try:
+                    self.sync_one_status(publish_id)
+                except Exception:
+                    pass
+                return {"ok": True, "product_id": publish_id,
+                        "pack_id": pack_id, "source_id": source_id}
+            except Exception as e:
+                return {"ok": False, "product_id": publish_id or source_id,
+                        "pack_id": pack_id, "error": f"{e}"[:300]}
+
+        if plan:
+            workers = max(1, min(max_workers, len(plan)))
+            with ThreadPoolExecutor(max_workers=workers,
+                                     thread_name_prefix="tkshop-publish") as ex:
+                futures = {ex.submit(_one, item): item for item in plan}
+                for fut in as_completed(futures):
+                    res = fut.result()
+                    if res.get("ok"):
+                        published.append({k: v for k, v in res.items() if k != "ok"})
+                    else:
+                        failed.append({"product_id": res["product_id"],
+                                       "error": res.get("error", "")})
+
+        elapsed = round(time.time() - t0, 1)
+        logger.info(
+            "batch_publish_to_shop: target=%s requested=%d published=%d skipped=%d failed=%d in %.1fs",
+            target_shop, len(ordered), len(published), len(skipped), len(failed), elapsed,
+        )
+        return {
+            "published": published, "skipped": skipped, "failed": failed,
+            "elapsed_s": elapsed, "target_shop": target_shop,
+        }
 
     @staticmethod
     def _local_status_from_tiktok(remote: str) -> str:
@@ -2284,6 +3044,8 @@ class TKShopService:
         publish_status: Optional[str] = None,
         q: Optional[str] = None,
         shop: Optional[str] = None,
+        local_only: bool = False,
+        on_platform_only: bool = False,
         limit: int = 100,
     ) -> tuple[list[dict], int]:
         clauses, params = [], []
@@ -2293,6 +3055,14 @@ class TKShopService:
             clauses.append("pr.publish_status = ?"); params.append(publish_status)
         if shop and shop != "all":
             clauses.append("pr.shop = ?"); params.append(shop)
+        # local_only: rows that never made it to TikTok (no tiktok_product_id).
+        # This powers the new top-level 「本地产品」tab — the draft pool that
+        # operators batch-publish from. on_platform_only is the inverse for
+        # the per-shop tabs.
+        if local_only:
+            clauses.append("(pr.tiktok_product_id IS NULL OR pr.tiktok_product_id = '')")
+        elif on_platform_only:
+            clauses.append("pr.tiktok_product_id IS NOT NULL AND pr.tiktok_product_id != ''")
         if q:
             kw = f"%{q.strip()}%"
             clauses.append(
@@ -2324,6 +3094,57 @@ class TKShopService:
                 tuple(params) + (limit,),
             ).fetchall()
         return [dict(r) for r in rows], total
+
+    def get_pack_shop_listings(
+        self, pack_ids: list[int],
+    ) -> dict[int, dict[str, dict[str, Any]]]:
+        """For each pack id, return a per-shop summary of its products.
+
+        Output: ``{pack_id: {shop_name: {product_id, publish_status,
+                                          tiktok_product_id}}}``.
+
+        Used by the 「本地产品」 tab to render shop-listing badges next to
+        each draft row (so the operator sees "this pack is already on shop A
+        as #123, still missing from shop B" without leaving the page).
+        Packs absent from the result have no products at all.
+        """
+        if not pack_ids:
+            return {}
+        # De-dup + coerce to ints — the caller may pass strings.
+        clean: list[int] = []
+        seen: set[int] = set()
+        for p in pack_ids:
+            try:
+                i = int(p)
+            except (TypeError, ValueError):
+                continue
+            if i in seen:
+                continue
+            seen.add(i)
+            clean.append(i)
+        if not clean:
+            return {}
+        ph = ",".join(["?"] * len(clean))
+        out: dict[int, dict[str, dict[str, Any]]] = {}
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT pack_id, shop, id, publish_status, tiktok_product_id
+                  FROM tkshop_products
+                 WHERE pack_id IN ({ph})
+                 ORDER BY id ASC
+                """,
+                tuple(clean),
+            ).fetchall()
+        for r in rows:
+            pid = r["pack_id"]
+            shop = (r["shop"] or TKSHOP_DEFAULT_SHOP)
+            out.setdefault(pid, {})[shop] = {
+                "product_id": r["id"],
+                "publish_status": r["publish_status"] or "draft",
+                "tiktok_product_id": r["tiktok_product_id"] or "",
+            }
+        return out
 
     def export_products_rows(self, product_ids: list[int]) -> list[dict]:
         """Pull export-ready dicts for the given product ids. One row per
@@ -2555,6 +3376,332 @@ class TKShopService:
             d["publish_logs"] = self.list_publish_logs(product_id)
             d["auto_fix_default"] = TKSHOP_PUBLISH_AUTO_FIX_DEFAULT
         return d
+
+    # ==================================================================
+    # Local products (master catalog) — one row per pack, shop-agnostic.
+    # tkshop_products rows are "listings" pointing back via
+    # local_product_id and carry the shop-specific platform IDs + a
+    # snapshot of what was last pushed to TikTok.
+    # ==================================================================
+
+    def get_or_create_local_product(self, pack_id: int) -> int:
+        """Idempotent: return the local_products row id for ``pack_id``,
+        creating an empty draft row if none exists. The master is created
+        with empty fields; ``generate_local_product_detail`` fills them.
+        """
+        with _open_db(self.db_path) as conn:
+            existing = conn.execute(
+                "SELECT id FROM local_products WHERE pack_id = ?",
+                (pack_id,),
+            ).fetchone()
+            if existing:
+                return existing["id"]
+            if not conn.execute(
+                "SELECT 1 FROM packs WHERE id = ?", (pack_id,),
+            ).fetchone():
+                raise ValueError(f"pack #{pack_id} not found")
+            now = int(time.time())
+            cur = conn.execute(
+                """
+                INSERT INTO local_products
+                    (pack_id, title, description_html, selling_points, keywords,
+                     detail_main_raw_text, seller_sku, category_id,
+                     default_template_json, created_at, updated_at)
+                VALUES (?, '', '', '[]', '[]', '', '', '928016', '{}', ?, ?)
+                """,
+                (pack_id, now, now),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+
+    def get_local_product(self, local_product_id: int) -> Optional[dict]:
+        """Master + pack join + parsed JSON columns + image list + listing
+        summary (which shops it's already on)."""
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT lp.*, p.pack_uid, p.display_name AS pack_name,
+                       p.total_stickers, p.cover_image_path AS pack_cover,
+                       s.style_anchor, s.palette, s.pack_archetype
+                  FROM local_products lp
+                  JOIN packs p          ON p.id = lp.pack_id
+             LEFT JOIN pack_series s    ON s.id = p.series_id
+                 WHERE lp.id = ?
+                """,
+                (local_product_id,),
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            try:
+                d["selling_points"] = json.loads(d.get("selling_points") or "[]")
+            except Exception:
+                d["selling_points"] = []
+            try:
+                d["keywords"] = json.loads(d.get("keywords") or "[]")
+            except Exception:
+                d["keywords"] = []
+            d["images"] = self.list_local_product_images(local_product_id)
+            # Listing summary: which shops have a tkshop_products row, and
+            # whether each is published.
+            listings = conn.execute(
+                """
+                SELECT id, shop, publish_status, tiktok_product_id,
+                       tiktok_sku_id, seller_sku, created_at, published_at
+                  FROM tkshop_products
+                 WHERE local_product_id = ?
+                 ORDER BY id ASC
+                """,
+                (local_product_id,),
+            ).fetchall()
+            d["listings"] = [dict(r) for r in listings]
+        return d
+
+    def list_local_products(
+        self,
+        *,
+        pack_id: Optional[int] = None,
+        q: Optional[str] = None,
+        limit: int = 100,
+    ) -> tuple[list[dict], int]:
+        """Master list. Each row carries a ``shops`` dict
+        ``{shop: {product_id, publish_status, tiktok_product_id}}`` for the
+        badges on the 本地产品 tab."""
+        clauses, params = [], []
+        if pack_id is not None:
+            clauses.append("lp.pack_id = ?"); params.append(pack_id)
+        if q:
+            kw = f"%{q.strip()}%"
+            clauses.append(
+                "(lp.title LIKE ? OR p.display_name LIKE ? "
+                "OR lp.seller_sku LIKE ?)"
+            )
+            params.extend([kw, kw, kw])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        with _open_db(self.db_path) as conn:
+            total = conn.execute(
+                f"""SELECT COUNT(*) FROM local_products lp
+                    LEFT JOIN packs p ON p.id = lp.pack_id
+                    {where}""",
+                tuple(params),
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"""
+                SELECT lp.id, lp.pack_id, lp.title, lp.seller_sku,
+                       lp.category_id, lp.created_at, lp.updated_at,
+                       p.display_name AS pack_name, p.pack_uid,
+                       p.cover_image_path AS pack_cover,
+                       (SELECT COUNT(*) FROM tkshop_products t
+                          WHERE t.local_product_id = lp.id) AS listing_count,
+                       (SELECT COUNT(*) FROM local_product_images li
+                          WHERE li.local_product_id = lp.id) AS image_count
+                  FROM local_products lp
+             LEFT JOIN packs           p ON p.id = lp.pack_id
+                  {where}
+                 ORDER BY lp.updated_at DESC, lp.id DESC
+                 LIMIT ?
+                """,
+                tuple(params) + (limit,),
+            ).fetchall()
+            out: list[dict] = []
+            ids = [r["id"] for r in rows]
+            # Bulk-fetch listing summaries so we don't N+1 the badge query.
+            listings_by_lp: dict[int, dict[str, dict[str, Any]]] = {}
+            if ids:
+                ph = ",".join(["?"] * len(ids))
+                for r in conn.execute(
+                    f"""SELECT local_product_id, shop, id, publish_status,
+                              tiktok_product_id
+                         FROM tkshop_products
+                        WHERE local_product_id IN ({ph})""",
+                    tuple(ids),
+                ):
+                    lp_id = r["local_product_id"]
+                    listings_by_lp.setdefault(lp_id, {})[r["shop"] or TKSHOP_DEFAULT_SHOP] = {
+                        "product_id": r["id"],
+                        "publish_status": r["publish_status"] or "draft",
+                        "tiktok_product_id": r["tiktok_product_id"] or "",
+                    }
+            for r in rows:
+                d = dict(r)
+                d["shops"] = listings_by_lp.get(d["id"], {})
+                out.append(d)
+        return out, total
+
+    def update_local_product_detail(
+        self,
+        local_product_id: int,
+        *,
+        title: Optional[str] = None,
+        description_html: Optional[str] = None,
+        selling_points: Optional[list[str]] = None,
+        keywords: Optional[list[str]] = None,
+        category_id: Optional[str] = None,
+        seller_sku: Optional[str] = None,
+        detail_main_raw_text: Optional[str] = None,
+    ) -> bool:
+        """Patch master fields. Bumps ``updated_at`` so listings can show
+        "master is newer than last push"."""
+        sets, params = [], []
+        if title is not None:
+            sets.append("title = ?"); params.append(_clamp_title(title))
+        if description_html is not None:
+            sets.append("description_html = ?"); params.append(description_html)
+        if selling_points is not None:
+            sets.append("selling_points = ?")
+            params.append(json.dumps(selling_points, ensure_ascii=False))
+        if keywords is not None:
+            sets.append("keywords = ?")
+            params.append(json.dumps(keywords, ensure_ascii=False))
+        if category_id is not None:
+            sets.append("category_id = ?"); params.append(category_id)
+        if detail_main_raw_text is not None:
+            sets.append("detail_main_raw_text = ?"); params.append(detail_main_raw_text)
+        if not sets and seller_sku is None:
+            return False
+        with _open_db(self.db_path) as conn:
+            if seller_sku is not None:
+                clean = (seller_sku or "").strip().upper()[:25]
+                # Unique across tkshop_products too — a master and a listing
+                # never share an SKU because per-shop prefix would diverge,
+                # but be defensive.
+                clean = _ensure_unique_seller_sku(conn, clean)
+                # Also check uniqueness inside local_products itself.
+                while conn.execute(
+                    "SELECT 1 FROM local_products "
+                    "WHERE UPPER(seller_sku) = ? AND id != ?",
+                    (clean, local_product_id),
+                ).fetchone():
+                    # Append disambiguator using the same scheme as
+                    # _ensure_unique_seller_sku.
+                    base = clean
+                    n = 2
+                    while True:
+                        suffix = f"-{n}"
+                        candidate = base[:25 - len(suffix)] + suffix
+                        if not conn.execute(
+                            "SELECT 1 FROM local_products WHERE UPPER(seller_sku) = ?",
+                            (candidate,),
+                        ).fetchone() and not conn.execute(
+                            "SELECT 1 FROM tkshop_products WHERE UPPER(seller_sku) = ?",
+                            (candidate,),
+                        ).fetchone():
+                            clean = candidate
+                            break
+                        n += 1
+                sets.append("seller_sku = ?"); params.append(clean)
+            sets.append("updated_at = ?"); params.append(int(time.time()))
+            cur = conn.execute(
+                f"UPDATE local_products SET {', '.join(sets)} WHERE id = ?",
+                tuple(params) + (local_product_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def list_local_product_images(self, local_product_id: int) -> list[dict]:
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, role, source, local_path, sort_order, ai_prompt, created_at
+                  FROM local_product_images
+                 WHERE local_product_id = ?
+                 ORDER BY role = 'main' DESC, sort_order ASC, id ASC
+                """,
+                (local_product_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_local_product_image(
+        self,
+        local_product_id: int,
+        *,
+        local_path: str,
+        role: str = "main",
+        source: str = "manual",
+        ai_prompt: str = "",
+        sort_order: Optional[int] = None,
+    ) -> int:
+        """Insert one row into local_product_images. Caller has already
+        persisted bytes via PackStore (or auto_design_images)."""
+        with _open_db(self.db_path) as conn:
+            if sort_order is None:
+                # Append at end within the role bucket.
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 AS s "
+                    "FROM local_product_images "
+                    "WHERE local_product_id = ? AND role = ?",
+                    (local_product_id, role),
+                ).fetchone()
+                sort_order = row["s"]
+            cur = conn.execute(
+                """
+                INSERT INTO local_product_images
+                    (local_product_id, role, source, local_path,
+                     sort_order, ai_prompt, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (local_product_id, role, source, local_path,
+                 sort_order, ai_prompt, int(time.time())),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+
+    def update_local_product_image(
+        self,
+        image_id: int,
+        *,
+        role: Optional[str] = None,
+        sort_order: Optional[int] = None,
+    ) -> dict[str, Any]:
+        sets, params = [], []
+        if role is not None:
+            sets.append("role = ?"); params.append(role)
+        if sort_order is not None:
+            sets.append("sort_order = ?"); params.append(int(sort_order))
+        if not sets:
+            return {"ok": False, "error": "nothing to update"}
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                f"UPDATE local_product_images SET {', '.join(sets)} WHERE id = ?",
+                tuple(params) + (image_id,),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                raise ValueError(f"local_product_image #{image_id} not found")
+            return {"ok": True, "image_id": image_id}
+
+    def delete_local_product_image(self, image_id: int) -> bool:
+        """Remove image row. On-disk file is left in place — it may still be
+        referenced by a listing's tkshop_product_images snapshot."""
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                "DELETE FROM local_product_images WHERE id = ?", (image_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_local_product(self, local_product_id: int) -> dict[str, Any]:
+        """Drop master + its images. Refuses if any listing still exists
+        (operator must delete listings first — preserves audit trail)."""
+        with _open_db(self.db_path) as conn:
+            listings = conn.execute(
+                "SELECT COUNT(*) FROM tkshop_products WHERE local_product_id = ?",
+                (local_product_id,),
+            ).fetchone()[0]
+            if listings:
+                raise ValueError(
+                    f"local product #{local_product_id} still has {listings} "
+                    "listing(s); delete those first"
+                )
+            conn.execute(
+                "DELETE FROM local_product_images WHERE local_product_id = ?",
+                (local_product_id,),
+            )
+            cur = conn.execute(
+                "DELETE FROM local_products WHERE id = ?", (local_product_id,),
+            )
+            conn.commit()
+            return {"ok": True, "deleted_rows": cur.rowcount}
 
 
 # ---------------------------------------------------------------------------

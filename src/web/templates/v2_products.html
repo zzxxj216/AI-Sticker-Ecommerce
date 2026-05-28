@@ -9,37 +9,57 @@
   .product-filter-row .v2-field { gap:6px; }
   .product-filter-row .v2-input,
   .product-filter-row .v2-select { min-height:38px; padding:8px 10px; font-size:13px; }
-  .product-tabs { display:flex; gap:6px; padding:0 0 12px; border-bottom:1px solid var(--line-soft); margin-bottom:14px; }
-  .product-tab { padding:8px 14px; border-radius:var(--radius-md) var(--radius-md) 0 0; font-size:13px; font-weight:700; color:var(--text-muted); text-decoration:none; border:1px solid transparent; border-bottom:none; }
+  /* Top tabs are now the primary shop switcher (local + each TK shop +
+     platform). The old inner shop-segmented control is gone — its job is
+     done by these tabs. */
+  .product-tabs { display:flex; gap:6px; padding:0 0 12px; border-bottom:1px solid var(--line-soft); margin-bottom:14px; flex-wrap:wrap; }
+  .product-tab { padding:8px 14px; border-radius:var(--radius-md) var(--radius-md) 0 0; font-size:13px; font-weight:700; color:var(--text-muted); text-decoration:none; border:1px solid transparent; border-bottom:none; display:inline-flex; align-items:center; gap:6px; }
   .product-tab.active { background:var(--surface); color:var(--text); border-color:var(--line-soft); }
-  /* Top tab row: left = 本地/平台，right = shop segmented control. */
-  .product-tabs { display:flex; justify-content:space-between; align-items:flex-end; }
-  .product-tabs > .left { display:flex; gap:6px; }
-  /* Shop selector — segmented pill group, sits on the right of the tab row. */
-  .shop-segmented {
-    display:inline-flex; gap:2px; padding:3px;
-    background:var(--bg-subtle); border:1px solid var(--line);
-    border-radius:var(--radius-pill);
-    margin-bottom:8px;
+  .product-tab .count { color:var(--text-muted); font-weight:600; font-variant-numeric:tabular-nums; font-size:12px; }
+  .product-tab.active .count { color:var(--accent); }
+  /* Shop-listing badges on the local-products tab — show which TK shops
+     the row's pack is already listed on. */
+  .shop-badges { display:inline-flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+  .shop-badge {
+    display:inline-flex; align-items:center; gap:3px;
+    padding:1px 7px; border-radius:var(--radius-pill);
+    font-size:10px; font-weight:700; white-space:nowrap;
+    border:1px solid var(--line);
+    background:var(--bg-subtle);
+    color:var(--text-muted);
   }
-  .shop-segmented a {
-    display:inline-flex; align-items:center; gap:4px;
-    padding:5px 12px; border-radius:var(--radius-pill);
-    font-size:12px; font-weight:700;
-    color:var(--text-secondary); text-decoration:none;
-    transition:background .12s, color .12s;
-    white-space:nowrap;
+  .shop-badge.ok       { color:var(--success);     border-color:rgba(34,197,94,.30);  background:rgba(34,197,94,.10); }
+  .shop-badge.pending  { color:#92400e;            border-color:rgba(245,158,11,.30); background:rgba(245,158,11,.10); }
+  .shop-badge.draft    { color:var(--accent-dark); border-color:var(--accent-glow);   background:var(--accent-bg); }
+  .shop-badge.missing  { opacity:.55; }
+  /* Bulk-publish toolbar — slides in when the operator picks rows. */
+  .product-bulk-bar {
+    display:none; align-items:center; gap:10px;
+    padding:10px 14px; margin:0 0 12px;
+    border-radius:var(--radius-md);
+    background:var(--accent-bg); border:1px solid var(--accent-glow);
+    color:var(--accent-dark); font-size:13px; font-weight:600;
   }
-  .shop-segmented a:hover { color:var(--text); }
-  .shop-segmented a.active {
-    background:var(--surface); color:var(--accent-dark);
-    box-shadow:0 1px 2px rgba(0,0,0,.05);
+  .product-bulk-bar.show { display:flex; }
+  .product-bulk-bar .spacer { flex:1; }
+  .product-bulk-bar select {
+    padding:6px 10px; border-radius:6px;
+    border:1px solid var(--line); background:var(--surface); color:var(--text);
+    font-size:12px; font-weight:600;
   }
-  .shop-segmented .count {
-    color:var(--text-muted); font-weight:600;
-    font-variant-numeric:tabular-nums;
+  .product-bulk-bar button[disabled] { opacity:.5; cursor:not-allowed; }
+  .product-bulk-bar .pub-btn {
+    padding:6px 14px; background:var(--accent); color:#fff;
+    border:none; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;
   }
-  .shop-segmented a.active .count { color:var(--accent); }
+  .product-bulk-toast {
+    margin:0 0 12px; padding:10px 14px;
+    border-radius:var(--radius-md);
+    background:rgba(34,197,94,.10);
+    border:1px solid rgba(34,197,94,.30);
+    color:var(--success);
+    font-size:13px;
+  }
   .product-table-wrap { max-height:calc(100vh - 320px); min-height:400px; overflow:auto; }
   .product-table th { position:sticky; top:0; z-index:2; padding:10px 12px; background:var(--surface); }
   .product-table td { padding:11px 12px; font-size:13px; vertical-align:middle; }
@@ -80,26 +100,27 @@
     </div>
   </section>
 
-  <div class="product-tabs">
-    <div class="left">
-      <a href="/v2/products" class="product-tab {% if not is_platform_view %}active{% endif %}">本地产品（{{ total }}）</a>
-      <a href="/v2/products/platform" class="product-tab {% if is_platform_view %}active{% endif %}">平台产品（TikTok Shop）</a>
-    </div>
-    {% if tkshop_shops|length > 1 and not is_platform_view %}
-    <div class="shop-segmented" role="tablist" aria-label="店铺切换">
-      <a class="{% if shop_filter == 'all' %}active{% endif %}"
-         href="/v2/products?shop=all{% if status_filter and status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}{% if q %}&q={{ q }}{% endif %}">
-        全部<span class="count">{{ shop_counts.get('all', 0) }}</span>
-      </a>
-      {% for s in tkshop_shops %}
-      <a class="{% if (shop_filter == s) or (not shop_filter and s == tkshop_default_shop) %}active{% endif %}"
-         href="/v2/products?shop={{ s }}{% if status_filter and status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}{% if q %}&q={{ q }}{% endif %}">
-        {{ s }}<span class="count">{{ shop_counts.get(s, 0) }}</span>
-      </a>
-      {% endfor %}
-    </div>
+  {# Shop switcher lives in the left sidebar now (see v2_base.html → TKShop
+     group). Keep ``_q_suffix`` because a couple of places below still
+     compose return-to URLs that need to preserve current filters. #}
+  {% set _q_suffix = '' %}
+  {% if status_filter and status_filter != 'all' %}{% set _q_suffix = _q_suffix + '&status=' + status_filter %}{% endif %}
+  {% if pack_id_filter %}{% set _q_suffix = _q_suffix + '&pack_id=' + (pack_id_filter|string) %}{% endif %}
+  {% if q %}{% set _q_suffix = _q_suffix + '&q=' + q %}{% endif %}
+  {# Subtitle: which shop is on screen + the per-tab counts (since the user
+     no longer sees the tab strip with badge counts). #}
+  <p class="muted" style="margin:-6px 0 14px;font-size:12px;">
+    {% if is_local_tab %}
+      📦 当前视图：<strong>本地草稿池</strong>（{{ tab_counts.get('local', 0) }} 条）
+    {% else %}
+      🏪 当前视图：<strong>{{ shop_label(tab) }}</strong>（{{ tab_counts.get(tab, 0) }} 条）
     {% endif %}
-  </div>
+    <span style="margin-left:10px;color:var(--text-muted);">
+      切换：本地 {{ tab_counts.get('local', 0) }}
+      {% for s in tkshop_shops %} · {{ shop_label(s) }} {{ tab_counts.get(s, 0) }}{% endfor %}
+      → 见左侧 TKShop 菜单
+    </span>
+  </p>
 
   {% if synced is not none %}
   <div style="margin:10px 0;padding:10px 14px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;color:#065f46;font-size:13px;">
@@ -134,12 +155,9 @@
           {% endfor %}
         </select>
       </div>
-      {# Shop selector moved to a sub-tab bar below the panel header — see
-         .shop-subtabs above the toolbar. Hidden field keeps the current
-         shop selection when other filters submit. #}
-      {% if tkshop_shops|length > 1 %}
-      <input type="hidden" name="shop" value="{{ shop_filter or tkshop_default_shop }}">
-      {% endif %}
+      {# Tab selection is on the top tab row; preserve it across other filter
+         submits via this hidden field. #}
+      <input type="hidden" name="tab" value="{{ tab or 'local' }}">
       <div class="v2-field" style="min-width:140px;">
         <label for="prod-pack-id">卡包 ID</label>
         <input id="prod-pack-id" class="v2-input" type="number" name="pack_id" value="{{ pack_id_filter or '' }}" min="1" inputmode="numeric" autocomplete="off" placeholder="可选…">
@@ -159,9 +177,43 @@
     </form>
   </section>
 
-  <!-- Export form is OUTSIDE the table. Checkboxes use form="export-form"
-       attribute to associate without nesting (HTML doesn't allow nested forms). -->
-  <form id="export-form" method="post" action="/v2/products/export" target="_blank" style="display:none;"></form>
+  {% if batch_summary %}
+  <div class="product-bulk-toast">✓ {{ batch_summary }} — 任务已在后台运行，可在「系统 → 后台任务」查看进度，完成后刷新本页。</div>
+  {% endif %}
+
+  <!-- Forms live OUTSIDE the table. Checkboxes use form="<id>" to associate
+       with them without nesting (HTML doesn't allow nested forms). The same
+       row checkbox feeds BOTH the export form and the batch-publish form.
+       On the local tab the checkbox value is a local_product id; the JS
+       below picks the right form to mirror into. -->
+  <form id="export-form"   method="post" action="/v2/products/export" target="_blank" style="display:none;"></form>
+  {% if is_local_tab %}
+  <form id="bulk-pub-form" method="post" action="/v2/products/batch-publish-from-local" style="display:none;">
+    <input type="hidden" name="back" value="/v2/products?tab=local{{ _q_suffix }}">
+  </form>
+  {% else %}
+  <form id="bulk-pub-form" method="post" action="/v2/products/batch-publish-to-shop" style="display:none;">
+    <input type="hidden" name="back" value="/v2/products?tab={{ tab }}{{ _q_suffix }}">
+  </form>
+  {% endif %}
+
+  {% if is_local_tab and tkshop_shops|length > 0 %}
+  <div id="product-bulk-bar" class="product-bulk-bar" role="region" aria-label="批量上架工具栏">
+    <span>已选 <strong id="bulk-count">0</strong> 个本地草稿</span>
+    <span class="spacer"></span>
+    <label style="font-size:12px;font-weight:600;">上架到：
+      <select id="bulk-target-shop" form="bulk-pub-form" name="target_shop">
+        {% for s in tkshop_shops %}
+        <option value="{{ s }}">🏪 {{ shop_label(s) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" form="bulk-pub-form" class="pub-btn" id="bulk-pub-go" disabled
+            title="若该 pack 已在目标店上架，则跳过；标题/类目/主图缺失的也跳过。">
+      🚀 批量上架（后台）
+    </button>
+  </div>
+  {% endif %}
 
   <section class="panel product-panel" style="padding:0;">
     <div class="panel-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
@@ -199,33 +251,77 @@
         </thead>
         <tbody>
           {% for p in products %}
+          {# On the local tab `p.id` is a local_products id (master) and
+             `p.shops` is its per-shop listing summary. On shop tabs `p.id`
+             is a tkshop_products id (listing) — the row template branches. #}
           <tr style="border-top:1px solid var(--line-soft);">
-            <td style="text-align:center;"><input type="checkbox" form="export-form" name="product_ids" value="{{ p.id }}" class="row-pick"></td>
+            <td style="text-align:center;">
+              {% if is_local_tab %}
+                <input type="checkbox" form="export-form" name="local_product_ids" value="{{ p.id }}" class="row-pick">
+              {% else %}
+                <input type="checkbox" form="export-form" name="product_ids" value="{{ p.id }}" class="row-pick">
+              {% endif %}
+            </td>
             <td>
               {% if p.pack_cover_url %}
               <img src="{{ p.pack_cover_url }}" class="product-cover">
               {% endif %}
             </td>
             <td class="product-title-cell">
+              {% if is_local_tab %}
+              <a href="/v2/local-products/{{ p.id }}">{{ (p.title or '（未生成 — 进入页面填写）')[:80] }}</a>
+              <div class="pack">
+                本地 #{{ p.id }} · {{ p.pack_name or '—' }}
+                · <span class="muted">{{ p.image_count or 0 }} 图 · {{ p.listing_count or 0 }} listing</span>
+              </div>
+              <div class="shop-badges" aria-label="该卡包的上架状态">
+                {% for s in tkshop_shops %}
+                  {% set _info = (p.shops or {}).get(s) %}
+                  {% set _label = shop_label(s) %}
+                  {% if _info and _info.tiktok_product_id %}
+                    <span class="shop-badge ok" title="已上架到 {{ _label }}（listing #{{ _info.product_id }}）">🏪 {{ _label }} ✓</span>
+                  {% elif _info %}
+                    <span class="shop-badge draft" title="{{ _label }} 已有本地 listing #{{ _info.product_id }}（{{ _info.publish_status }}）">🏪 {{ _label }} · {{ _info.publish_status }}</span>
+                  {% else %}
+                    <span class="shop-badge missing" title="{{ _label }} 暂未上架">🏪 {{ _label }} —</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+              {% else %}
               <a href="/v2/products/{{ p.id }}">{{ (p.title or '（未生成）')[:80] }}</a>
               <div class="pack">
-                #{{ p.id }} · {{ p.pack_name or '—' }}
-                {% if tkshop_shops|length > 1 %}
-                · <span style="display:inline-block;padding:1px 6px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-size:10px;font-weight:700;">🏪 {{ p.shop or 'main' }}</span>
-                {% endif %}
+                listing #{{ p.id }} · {{ p.pack_name or '—' }}
+                · <span style="display:inline-block;padding:1px 6px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-size:10px;font-weight:700;">🏪 {{ shop_label(p.shop or 'main') }}</span>
               </div>
+              {% endif %}
             </td>
             <td>
               <code style="font-size:11px;color:var(--text-muted);" title="{{ p.seller_sku or '' }}">{{ (p.seller_sku or '—')[:18] }}{% if p.seller_sku and p.seller_sku|length > 18 %}…{% endif %}</code>
-              {% if p.tiktok_sku_id %}<div style="color:var(--text-muted);font-size:10px;margin-top:2px;">sku: <code>{{ p.tiktok_sku_id[:14] }}</code></div>{% endif %}
+              {% if not is_local_tab and p.tiktok_sku_id %}<div style="color:var(--text-muted);font-size:10px;margin-top:2px;">sku: <code>{{ p.tiktok_sku_id[:14] }}</code></div>{% endif %}
             </td>
-            <td><code style="font-size:11px;color:var(--text-muted);">{{ p.tiktok_product_id or '—' }}</code></td>
-            <td><span class="v2-status-pill {{ status_pill_cls(p.publish_status) }}">{{ status_label_zh(p.publish_status) }}</span></td>
-            <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
-            <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human or '—' }}</td>
+            <td><code style="font-size:11px;color:var(--text-muted);">{{ (p.tiktok_product_id if not is_local_tab else '') or '—' }}</code></td>
             <td>
+              {% if is_local_tab %}
+                {# Aggregate status: count listings on platform vs draft. #}
+                {% set _total = (p.listing_count or 0) %}
+                {% set _live = (p.shops or {})|length %}
+                <span class="v2-status-pill {% if _total == 0 %}pending{% elif _live %}ok{% else %}pending{% endif %}">
+                  {% if _total == 0 %}未上架{% else %}{{ _live }} / {{ _total }} 在店{% endif %}
+                </span>
+              {% else %}
+                <span class="v2-status-pill {{ status_pill_cls(p.publish_status) }}">{{ status_label_zh(p.publish_status) }}</span>
+              {% endif %}
+            </td>
+            <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
+            <td style="color:var(--text-muted);font-size:11px;">{{ p.published_human if not is_local_tab else (p.updated_human or '—') }}</td>
+            <td>
+              {% if is_local_tab %}
               <div class="product-row-actions">
-                <a href="/v2/products/{{ p.id }}" class="row-btn" title="编辑标题/描述/卖点/关键词/SKU">✏️ 编辑</a>
+                <a href="/v2/local-products/{{ p.id }}" class="row-btn primary" title="进入主版本编辑（标题/描述/图集 + 推送到各店）">✏️ 主版本</a>
+              </div>
+              {% else %}
+              <div class="product-row-actions">
+                <a href="/v2/products/{{ p.id }}" class="row-btn" title="编辑该店 listing 的标题/描述/卖点/关键词/SKU">✏️ 编辑</a>
                 {% if p.tiktok_product_id %}
                 <form method="post" action="/v2/products/{{ p.id }}/update_on_platform"
                       onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（保留当前上架/草稿/下架状态）。继续?');">
@@ -233,11 +329,12 @@
                 </form>
                 {% endif %}
                 <form method="post" action="/v2/products/{{ p.id }}/delete"
-                      onsubmit="return confirm('删除产品 #{{ p.id }}（{{ (p.title or p.pack_name or '')[:40] }}）及其所有图片、发布日志、磁盘文件。{% if p.tiktok_product_id %}⚠ 已上架 TikTok（{{ p.tiktok_product_id }}），不会自动下架。{% endif %}\n\n确认删除?');">
-                  <input type="hidden" name="back" value="/v2/products?status={{ status_filter or 'all' }}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}{% if q %}&q={{ q }}{% endif %}">
-                  <button type="submit" class="row-btn danger" title="删除本地产品">🗑 删除</button>
+                      onsubmit="return confirm('删除 listing #{{ p.id }}（{{ (p.title or p.pack_name or '')[:40] }}）及其所有图片、发布日志、磁盘文件。{% if p.tiktok_product_id %}⚠ 已上架 TikTok（{{ p.tiktok_product_id }}），不会自动下架。{% endif %}\n\n确认删除?');">
+                  <input type="hidden" name="back" value="/v2/products?tab={{ tab }}{% if status_filter and status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if pack_id_filter %}&pack_id={{ pack_id_filter }}{% endif %}{% if q %}&q={{ q }}{% endif %}">
+                  <button type="submit" class="row-btn danger" title="删除 listing">🗑 删除</button>
                 </form>
               </div>
+              {% endif %}
             </td>
           </tr>
           {% else %}
@@ -257,9 +354,13 @@
 
 <script>
 (function(){
-  const form  = document.getElementById('export-form');
-  if (!form) return;
-  // checkboxes are associated via form="export-form" attribute (not children)
+  const exportForm = document.getElementById('export-form');
+  const bulkForm   = document.getElementById('bulk-pub-form');
+  const bulkBar    = document.getElementById('product-bulk-bar');
+  const bulkCount  = document.getElementById('bulk-count');
+  const bulkGo     = document.getElementById('bulk-pub-go');
+  const bulkShop   = document.getElementById('bulk-target-shop');
+  if (!exportForm) return;
   const rowPicks = () => Array.from(document.querySelectorAll('.row-pick'));
   const headerPick = document.getElementById('pick-header');
   const pickAll  = document.getElementById('pick-all');
@@ -268,30 +369,62 @@
   const btnX = document.getElementById('btn-export-xlsx');
   const btnZ = document.getElementById('btn-export-zip');
 
+  // Mirror picked ids into bulk-pub-form via hidden inputs — a checkbox can
+  // only declare one form= attribute, so we sync on each change. The field
+  // name follows the checkbox name on the page (product_ids vs
+  // local_product_ids) so the route receives whatever it's expecting.
+  const idFieldName = (document.querySelector('.row-pick') || {}).name || 'product_ids';
+  function syncBulkForm() {
+    if (!bulkForm) return;
+    Array.from(bulkForm.querySelectorAll('input[name="product_ids"], input[name="local_product_ids"]'))
+      .forEach(n => n.remove());
+    rowPicks().filter(c => c.checked).forEach(c => {
+      const h = document.createElement('input');
+      h.type = 'hidden'; h.name = idFieldName; h.value = c.value;
+      bulkForm.appendChild(h);
+    });
+  }
+
   function refresh() {
     const total   = rowPicks().length;
     const checked = rowPicks().filter(c => c.checked).length;
     countEl.textContent = checked;
-    headerPick.indeterminate = checked > 0 && checked < total;
-    headerPick.checked = checked > 0 && checked === total;
+    if (headerPick) {
+      headerPick.indeterminate = checked > 0 && checked < total;
+      headerPick.checked = checked > 0 && checked === total;
+    }
     [btnX, btnZ].forEach(b => {
+      if (!b) return;
       b.disabled = checked === 0;
       b.style.opacity = checked === 0 ? '.5' : '1';
     });
+    if (bulkBar) bulkBar.classList.toggle('show', checked > 0);
+    if (bulkCount) bulkCount.textContent = checked;
+    if (bulkGo) bulkGo.disabled = checked === 0;
+    syncBulkForm();
   }
   rowPicks().forEach(c => c.addEventListener('change', refresh));
-  headerPick.addEventListener('change', () => {
+  if (headerPick) headerPick.addEventListener('change', () => {
     const v = headerPick.checked;
     rowPicks().forEach(c => { c.checked = v; });
     refresh();
   });
-  pickAll.addEventListener('click', () => {
+  if (pickAll) pickAll.addEventListener('click', () => {
     rowPicks().forEach(c => { c.checked = true; });
     refresh();
   });
-  pickNone.addEventListener('click', () => {
+  if (pickNone) pickNone.addEventListener('click', () => {
     rowPicks().forEach(c => { c.checked = false; });
     refresh();
+  });
+  if (bulkForm) bulkForm.addEventListener('submit', (e) => {
+    const n = rowPicks().filter(c => c.checked).length;
+    if (n === 0) { e.preventDefault(); return; }
+    const shop = bulkShop ? bulkShop.value : '';
+    if (!confirm('将把 ' + n + ' 个本地草稿上架到「' + shop + '」店。已上架过的 pack 会被跳过，标题/类目/主图缺失的也会被跳过。继续?')) {
+      e.preventDefault(); return;
+    }
+    if (bulkGo) { bulkGo.disabled = true; bulkGo.textContent = '已派发到后台…'; }
   });
   refresh();
 })();

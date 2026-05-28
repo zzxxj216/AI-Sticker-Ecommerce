@@ -20,6 +20,51 @@
     justify-content: flex-end;
     align-items: center;
   }
+  /* Pipeline-status chips on each row — quick glance "where is this pack" */
+  .pack-pipeline-chip {
+    display:inline-flex; align-items:center; gap:3px;
+    padding:2px 7px; margin:1px 2px 1px 0;
+    border-radius:var(--radius-pill);
+    border:1px solid var(--line);
+    background:var(--bg-subtle);
+    color:var(--text-secondary);
+    font-size:11px; font-weight:700;
+    white-space:nowrap;
+  }
+  .pack-pipeline-chip.ok       { color:var(--success);     border-color:rgba(34,197,94,.30);  background:rgba(34,197,94,.10); }
+  .pack-pipeline-chip.draft    { color:var(--accent-dark); border-color:var(--accent-glow);   background:var(--accent-bg); }
+  .pack-pipeline-chip.pending  { color:#92400e;            border-color:rgba(245,158,11,.30); background:rgba(245,158,11,.10); }
+  .pack-pipeline-chip.muted    { opacity:.65; }
+  /* Bulk-action toolbar sits above the table when at least one pack is picked. */
+  .pack-bulk-bar {
+    display:flex; align-items:center; gap:10px;
+    padding:10px 14px; margin-bottom:10px;
+    border-radius:var(--radius-md);
+    background:var(--accent-bg);
+    border:1px solid var(--accent-glow);
+    color:var(--accent-dark);
+    font-size:13px; font-weight:600;
+  }
+  .pack-bulk-bar .spacer { flex:1; }
+  .pack-bulk-bar button {
+    padding:6px 14px;
+    background:var(--accent); color:#fff;
+    border:none; border-radius:6px;
+    font-size:12px; font-weight:700; cursor:pointer;
+  }
+  .pack-bulk-bar button[disabled] { opacity:.5; cursor:not-allowed; }
+  .pack-bulk-bar .ghost {
+    background:var(--surface); color:var(--text);
+    border:1px solid var(--line);
+  }
+  .pack-bulk-toast {
+    margin:0 0 12px; padding:10px 14px;
+    border-radius:var(--radius-md);
+    background:rgba(34,197,94,.10);
+    border:1px solid rgba(34,197,94,.30);
+    color:var(--success);
+    font-size:13px;
+  }
   .pack-action-form-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -127,7 +172,82 @@
   </form>
 </dialog>
 
+<dialog class="v2-dialog" id="external-pack-dialog" aria-labelledby="external-pack-dialog-title">
+  <form method="post" action="/v2/packs/import-external" enctype="multipart/form-data">
+    <div class="v2-dialog-header">
+      <div>
+        <h3 id="external-pack-dialog-title" style="margin:0;font-size:18px;">导入外部卡贴包</h3>
+        <p class="muted" style="margin-top:4px;">上传 PDF 或预览图，先创建标准卡包记录，再后台 AI 补齐信息和切图。</p>
+      </div>
+      <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭导入外部卡贴包弹窗">×</button>
+    </div>
+    <div class="v2-dialog-body">
+      <div class="pack-action-form-grid">
+        <div class="v2-field">
+          <label for="external-display-name">卡贴包名称</label>
+          <input id="external-display-name" class="v2-input" type="text" name="display_name" maxlength="200" required autocomplete="off" placeholder="例如 5.14-3 卡贴包">
+        </div>
+        <div class="v2-field">
+          <label for="external-total">预计数量</label>
+          <input id="external-total" class="v2-input" type="number" name="total_stickers" min="1" max="1000" inputmode="numeric" autocomplete="off" placeholder="可选，例如 50">
+        </div>
+        <div class="v2-field full">
+          <label for="external-source-files">PDF / 预览图</label>
+          <input id="external-source-files" class="v2-input" type="file" name="source_files" accept=".pdf,image/png,image/jpeg,image/webp" multiple required>
+        </div>
+        <div class="v2-field full">
+          <label for="external-source-zip">批量 ZIP（可选）</label>
+          <input id="external-source-zip" class="v2-input" type="file" name="source_zip" accept=".zip">
+        </div>
+        <div class="v2-field full">
+          <label for="external-style">风格说明（可选）</label>
+          <textarea id="external-style" name="style_anchor" rows="3" placeholder="例如 Y2K cartoon waterproof vinyl sticker pack, colorful bold outlines..."></textarea>
+        </div>
+        <div class="v2-field">
+          <label for="external-topic">Topic 名称（可选）</label>
+          <input id="external-topic" class="v2-input" type="text" name="topic_name" maxlength="200" autocomplete="off">
+        </div>
+        <div class="v2-field">
+          <label for="external-palette">配色（可选）</label>
+          <input id="external-palette" class="v2-input" type="text" name="palette" maxlength="200" autocomplete="off">
+        </div>
+        <input type="hidden" name="ai_enrich" value="0">
+        <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" name="ai_enrich" value="1" checked>
+          <span>导入后 AI 自动补充卡包信息和单张清单</span>
+        </label>
+        <input type="hidden" name="ai_split" value="0">
+        <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" name="ai_split" value="1" checked>
+          <span>AI 补全后自动分割单张图</span>
+        </label>
+        <div class="v2-field">
+          <label for="external-max-stickers">每张预览最多识别</label>
+          <input id="external-max-stickers" class="v2-input" type="number" name="max_stickers_per_preview" min="1" max="80" inputmode="numeric" autocomplete="off" placeholder="默认 40">
+        </div>
+        <input type="hidden" name="pack_archetype" value="external_upload">
+      </div>
+      <p class="muted" style="margin:12px 0 0;">AI 补全和切图在后台运行；完成后会出现真实 sticker 数量，可继续创建 TK 商品、生成产品信息和主图。</p>
+    </div>
+    <div class="v2-dialog-footer">
+      <button type="button" class="button ghost" data-close-dialog>取消</button>
+      <button type="submit" class="button">导入并创建卡包</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="pack-layout">
+  {# Batch-generate form lives OUTSIDE the table so row checkboxes can be
+     attached via form="pack-batch-form" without nesting forms. #}
+  <form id="pack-batch-form" method="post" action="/v2/packs/batch-generate-products" style="display:none;">
+    <input type="hidden" name="return_to" value="{{ close_url }}">
+  </form>
+
+  {% set _toast = request.query_params.get('batch_summary') if request else '' %}
+  {% if _toast %}
+  <div class="pack-bulk-toast">✓ {{ _toast }} — 任务已在后台运行，可在「系统 → 后台任务」查看进度。</div>
+  {% endif %}
+
   <section class="panel pack-panel">
     <div class="panel-header">
       <div>
@@ -136,28 +256,53 @@
       </div>
       <div class="pack-toolbar-right">
         <a class="button ghost" href="/v2/feedback">反馈收集</a>
+        <button type="button" class="button ghost" data-open-dialog="external-pack-dialog">导入外部卡包</button>
         <button type="button" class="button" data-open-dialog="manual-pack-dialog">＋ 手动添加卡包</button>
       </div>
     </div>
 
+    <div id="pack-bulk-bar" class="pack-bulk-bar" style="display:none;">
+      <span>已选 <strong id="pack-picked-count">0</strong> 个卡包</span>
+      <span class="spacer"></span>
+      <button type="button" class="ghost" id="pack-pick-none">清空</button>
+      <button type="submit" form="pack-batch-form" id="pack-batch-go"
+              title="后台自动跑：建商品 → AI 文案/SKU → AI 主图+附图（不发布）">
+        ⚙ 批量生成 TK 商品（后台）
+      </button>
+    </div>
+
     <div class="table-wrap pack-table-wrap">
-      <table class="pack-table" style="min-width:1120px;">
+      <table class="pack-table" style="min-width:1220px;">
         <thead>
           <tr>
-            <th style="width:72px;">ID</th>
-            <th style="width:82px;">封面</th>
-            <th style="min-width:260px;">名称 / Topic</th>
+            <th style="width:34px;text-align:center;"><input type="checkbox" id="pack-pick-header" title="切换本页（仅未生成的卡包）"></th>
+            <th style="width:62px;">ID</th>
+            <th style="width:78px;">封面</th>
+            <th style="min-width:240px;">名称 / Topic</th>
             <th style="min-width:120px;">时间</th>
-            <th style="width:110px;text-align:right;">全图</th>
-            <th style="width:110px;text-align:right;">单张图</th>
-            <th style="width:90px;text-align:right;">下游</th>
-            <th style="width:100px;">状态</th>
-            <th style="width:250px;text-align:right;">操作</th>
+            <th style="width:90px;text-align:right;">全图</th>
+            <th style="width:90px;text-align:right;">单张图</th>
+            <th style="width:140px;">商品状态</th>
+            <th style="width:80px;">状态</th>
+            <th style="width:230px;text-align:right;">操作</th>
           </tr>
         </thead>
         <tbody>
           {% for p in packs %}
-          <tr class="v2-pack-row">
+          {% set has_product = (p.product_count or 0) > 0 %}
+          {% set can_generate = (p.sticker_ok_count or 0) > 0 or (p.preview_ok_count or 0) > 0 %}
+          <tr class="v2-pack-row" data-has-product="{{ '1' if has_product else '0' }}">
+            <td style="text-align:center;">
+              {% if has_product %}
+                {# Already-generated packs are not pickable — the bulk button only
+                   creates products where none exists. #}
+                <span title="已有 TK 商品" style="color:var(--text-muted);font-size:14px;">✓</span>
+              {% elif can_generate %}
+                <input type="checkbox" form="pack-batch-form" name="pack_ids" value="{{ p.id }}" class="pack-pick">
+              {% else %}
+                <span title="还没有可用预览图，无法生成商品" style="color:var(--text-muted);">—</span>
+              {% endif %}
+            </td>
             <td class="mono-cell">#{{ p.id }}</td>
             <td>
               <a href="{{ p.detail_url }}" aria-label="查看卡包 {{ p.display_name }}">
@@ -184,20 +329,35 @@
               {% if p.sticker_generating_count %}<div><span class="v2-status-pill running">{{ p.sticker_generating_count }} 生成中</span></div>{% endif %}
               {% if p.sticker_error_count %}<div><span class="v2-status-pill error">{{ p.sticker_error_count }} 失败</span></div>{% endif %}
             </td>
-            <td style="text-align:right;">{{ (p.video_count or 0) + (p.product_count or 0) }}</td>
+            <td>
+              {% if has_product %}
+                <span class="pack-pipeline-chip ok" title="已有 {{ p.product_count }} 个商品行">📦 {{ p.product_count }} 商品</span>
+                {% if p.video_count %}<span class="pack-pipeline-chip muted">🎬 {{ p.video_count }}</span>{% endif %}
+              {% else %}
+                <span class="pack-pipeline-chip muted">未生成</span>
+                {% if p.video_count %}<span class="pack-pipeline-chip muted">🎬 {{ p.video_count }}</span>{% endif %}
+              {% endif %}
+            </td>
             <td><span class="v2-status-pill {% if p.status == 'active' %}ok{% else %}error{% endif %}">{{ p.status }}</span></td>
             <td style="text-align:right;">
               <div class="pack-row-actions">
                 <a class="btn-sm" href="/v2/packs/{{ p.id }}">查看</a>
                 <button type="button" class="btn-sm" data-open-dialog="video-dialog-{{ p.id }}">发布 TK 视频</button>
-                <button type="button" class="btn-sm" data-open-dialog="product-dialog-{{ p.id }}">生成 TK 商品</button>
+                {% if has_product %}
+                  {# Already-generated → send the operator to the product list filtered
+                     to this pack instead of re-opening the create dialog. #}
+                  <a class="btn-sm" style="color:var(--accent-dark);border-color:var(--accent-glow);"
+                     href="/v2/products?pack_id={{ p.id }}">查看 TKShop →</a>
+                {% else %}
+                  <button type="button" class="btn-sm" data-open-dialog="product-dialog-{{ p.id }}">生成 TK 商品</button>
+                {% endif %}
                 <button type="button" class="btn-sm" data-open-dialog="feedback-pack-dialog-{{ p.id }}">反馈</button>
                 <a class="btn-sm" href="/v2/packs/{{ p.id }}/stickers.zip">下载 ZIP</a>
               </div>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="9" style="padding:34px 0;text-align:center;color:var(--text-muted);">暂无卡包。可以从题材规划直接生成预览图并进入卡包管理。</td></tr>
+          <tr><td colspan="10" style="padding:34px 0;text-align:center;color:var(--text-muted);">暂无卡包。可以从题材规划直接生成预览图并进入卡包管理。</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -387,6 +547,53 @@
         button.addEventListener('click', function () { closeDialog(dialog); });
       });
     });
+
+    // Bulk-pick wiring for batch-generate. Row checkboxes are associated to
+    // #pack-batch-form via the form= attribute (HTML can't nest forms).
+    const bulkBar     = document.getElementById('pack-bulk-bar');
+    const pickHeader  = document.getElementById('pack-pick-header');
+    const pickNoneBtn = document.getElementById('pack-pick-none');
+    const goBtn       = document.getElementById('pack-batch-go');
+    const countEl     = document.getElementById('pack-picked-count');
+    const allPicks    = function () { return Array.from(document.querySelectorAll('.pack-pick')); };
+
+    function refreshBulk() {
+      const picks = allPicks();
+      const checked = picks.filter(c => c.checked);
+      countEl.textContent = checked.length;
+      if (bulkBar) bulkBar.style.display = checked.length ? 'flex' : 'none';
+      if (goBtn) goBtn.disabled = checked.length === 0;
+      if (pickHeader) {
+        pickHeader.checked = picks.length > 0 && checked.length === picks.length;
+        pickHeader.indeterminate = checked.length > 0 && checked.length < picks.length;
+      }
+    }
+    allPicks().forEach(c => c.addEventListener('change', refreshBulk));
+    if (pickHeader) {
+      pickHeader.addEventListener('change', function () {
+        const v = pickHeader.checked;
+        allPicks().forEach(c => { c.checked = v; });
+        refreshBulk();
+      });
+    }
+    if (pickNoneBtn) {
+      pickNoneBtn.addEventListener('click', function () {
+        allPicks().forEach(c => { c.checked = false; });
+        refreshBulk();
+      });
+    }
+    if (goBtn) {
+      goBtn.addEventListener('click', function (e) {
+        const n = allPicks().filter(c => c.checked).length;
+        if (n === 0) { e.preventDefault(); return; }
+        if (!confirm('将为 ' + n + ' 个卡包后台生成 TK 商品（AI 文案 + 主图 + 附图，不发布）。继续?')) {
+          e.preventDefault(); return;
+        }
+        goBtn.disabled = true;
+        goBtn.textContent = '已派发到后台…';
+      });
+    }
+    refreshBulk();
 
     const live = document.getElementById('pack-async-status');
     document.querySelectorAll('[data-async-form]').forEach(function (form) {

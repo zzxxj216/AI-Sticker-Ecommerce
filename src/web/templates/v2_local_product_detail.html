@@ -1,0 +1,156 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .lp-page { padding-top:14px; }
+  .lp-grid { display:grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap:18px; align-items:start; }
+  .lp-panel { padding:16px 20px; margin-bottom:16px; }
+  .lp-panel h3 { margin:0 0 10px; font-size:15px; }
+  .lp-meta-row { display:flex; gap:10px; font-size:12px; color:var(--text-muted); margin-bottom:10px; flex-wrap:wrap; }
+  .lp-cover { width:100%; aspect-ratio:1/1; border-radius:var(--radius-lg); object-fit:contain; background:var(--bg-subtle); border:1px solid var(--line-soft); display:block; }
+  .lp-empty-cover { display:flex; align-items:center; justify-content:center; color:var(--text-muted); }
+  /* Listings list */
+  .listing-row { display:grid; grid-template-columns: 1fr auto; gap:12px; padding:10px 12px; border-top:1px solid var(--line-soft); align-items:center; }
+  .listing-row:first-of-type { border-top:0; }
+  .listing-row .name { font-weight:700; }
+  .listing-row .meta { font-size:11px; color:var(--text-muted); margin-top:2px; }
+  .listing-row .actions { display:flex; gap:6px; align-items:center; }
+  .listing-row .actions .row-btn { display:inline-flex; align-items:center; height:26px; padding:0 10px; background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:6px; font-size:12px; cursor:pointer; text-decoration:none; }
+  .listing-row .actions .row-btn.primary { color:var(--accent-dark); border-color:var(--accent-glow); }
+  .listing-row.is-live { background:rgba(34,197,94,.06); }
+  /* Image grid */
+  .lp-image-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:10px; }
+  .lp-image-tile { padding:6px; background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-md); }
+  .lp-image-tile img { width:100%; aspect-ratio:1/1; object-fit:contain; border-radius:var(--radius-sm); background:var(--bg-subtle); display:block; }
+  .lp-image-tile .role-pill { display:inline-block; padding:1px 6px; border-radius:var(--radius-pill); background:var(--accent-bg); color:var(--accent-dark); font-size:10px; font-weight:700; margin-top:4px; }
+  @media (max-width: 1100px) {
+    .lp-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="lp-page">
+  <section class="page-header" style="margin-bottom:12px;">
+    <div>
+      <p class="eyebrow">C · Master Catalog</p>
+      <h1>本地产品 #{{ lp.id }}</h1>
+      <p class="page-subtitle">
+        卡包 <strong>{{ lp.pack_name }}</strong> · uid <code>{{ lp.pack_uid }}</code>
+        · 创建 {{ lp.created_human }} · 上次修改 {{ lp.updated_human }}
+      </p>
+    </div>
+    <a class="button ghost" href="/v2/products?tab=local">← 返回本地产品</a>
+  </section>
+
+  <div class="lp-grid">
+    <div>
+      <section class="panel lp-panel">
+        {% if lp.pack_cover_url %}
+        <img src="{{ lp.pack_cover_url }}" class="lp-cover" alt="封面">
+        {% else %}
+        <div class="lp-cover lp-empty-cover" style="aspect-ratio:1/1;">无封面</div>
+        {% endif %}
+      </section>
+
+      <section class="panel lp-panel">
+        <h3>店铺上架状态</h3>
+        {% for ls in lp.listings %}
+        <div class="listing-row {% if ls.tiktok_product_id %}is-live{% endif %}">
+          <div>
+            <div class="name">🏪 {{ ls.shop_label }}</div>
+            <div class="meta">
+              listing #{{ ls.id }} · {{ status_label_zh(ls.publish_status) }}
+              {% if ls.tiktok_product_id %} · TT <code>{{ ls.tiktok_product_id[:14] }}</code>{% endif %}
+              {% if ls.seller_sku %} · SKU <code>{{ ls.seller_sku }}</code>{% endif %}
+            </div>
+          </div>
+          <div class="actions">
+            <a class="row-btn" href="/v2/products/{{ ls.id }}">查看 →</a>
+            {% if ls.tiktok_product_id %}
+            <form method="post" action="/v2/products/{{ ls.id }}/update_on_platform"
+                  onsubmit="return confirm('把当前本地修改推送到 TikTok（{{ ls.shop_label }}）。继续?');" style="margin:0;">
+              <button type="submit" class="row-btn primary" title="把 master 的最新内容推到这家店">📤 推送</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="muted" style="padding:14px 0;text-align:center;font-size:12px;">这个 pack 还没有任何店铺 listing</div>
+        {% endfor %}
+        {% if missing_shops %}
+        <div style="padding:12px 0;border-top:1px solid var(--line-soft);margin-top:8px;">
+          <form method="post" action="/v2/local-products/{{ lp.id }}/publish-to-shop" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:12px;font-weight:600;">上架到新店：</label>
+            <select name="target_shop" class="v2-select" style="min-width:160px;flex:1;">
+              {% for s in missing_shops %}
+              <option value="{{ s }}">🏪 {{ shop_label(s) }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="button" style="padding:6px 14px;font-size:12px;">🚀 上架（后台）</button>
+          </form>
+          <p class="muted" style="margin:6px 0 0;font-size:11px;">将把 master 的标题/描述/主图/附图复制到新 listing 后发布。</p>
+        </div>
+        {% endif %}
+      </section>
+    </div>
+
+    <div>
+      <section class="panel lp-panel">
+        <h3>商品文案（主版本）</h3>
+        <p class="muted" style="margin:-6px 0 12px;font-size:12px;">改这里 = 改主版本。保存后**不会**自动同步到已上架的店；用上方每家店的「📤 推送」按钮逐店同步。</p>
+        <form method="post" action="/v2/local-products/{{ lp.id }}/edit-detail">
+          <div class="v2-field" style="margin-bottom:10px;">
+            <label for="lp-title">标题 (≤255 字符)</label>
+            <input id="lp-title" class="v2-input" type="text" name="title" maxlength="255" value="{{ lp.title }}">
+          </div>
+          <div class="v2-field" style="margin-bottom:10px;">
+            <label for="lp-desc">描述 HTML</label>
+            <textarea id="lp-desc" class="v2-input" name="description_html" rows="6">{{ lp.description_html }}</textarea>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="v2-field">
+              <label for="lp-sp">卖点（每行一个）</label>
+              <textarea id="lp-sp" class="v2-input" name="selling_points" rows="5">{% for s in lp.selling_points %}{{ s }}
+{% endfor %}</textarea>
+            </div>
+            <div class="v2-field">
+              <label for="lp-kw">关键词（每行一个）</label>
+              <textarea id="lp-kw" class="v2-input" name="keywords" rows="5">{% for k in lp.keywords %}{{ k }}
+{% endfor %}</textarea>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+            <div class="v2-field">
+              <label for="lp-sku">SKU 基础值（不含店铺前缀）</label>
+              <input id="lp-sku" class="v2-input" type="text" name="seller_sku" value="{{ lp.seller_sku }}" maxlength="25">
+            </div>
+            <div class="v2-field">
+              <label for="lp-cat">类目 ID</label>
+              <input id="lp-cat" class="v2-input" type="text" name="category_id" value="{{ lp.category_id }}">
+            </div>
+          </div>
+          <div style="margin-top:14px;display:flex;gap:8px;">
+            <button type="submit" class="button">保存主版本</button>
+            <a class="button ghost" href="/v2/local-products/{{ lp.id }}">取消</a>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel lp-panel">
+        <h3>主版本图集（{{ lp.images|length }} 张）</h3>
+        <p class="muted" style="margin:-6px 0 12px;font-size:12px;">主版本的主图/附图。上架到新店时会自动复制成 listing 的图。AI 图重新生成会替换 source='ai' 的项。</p>
+        <div class="lp-image-grid">
+          {% for img in lp.images %}
+          <div class="lp-image-tile">
+            <img src="{{ img.url }}" alt="图 #{{ img.id }}">
+            <div class="role-pill">{{ img.role }} · {{ img.source }}</div>
+          </div>
+          {% else %}
+          <div class="muted">还没有主版本图。从某个 listing 跑一次「AI 主图设计」就会同步过来。</div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

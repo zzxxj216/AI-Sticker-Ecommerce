@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import io
 import re
+import time
 import zipfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -49,6 +50,8 @@ from src.services.tkshop import get_tkshop_service
 from src.services.tkshop.service import (
     TKSHOP_DEFAULT_SHOP,
     TKSHOP_SHOPS,
+    get_shop_label,
+    get_shop_labels_map,
     status_label_zh,
     status_pill_cls,
 )
@@ -73,6 +76,10 @@ templates.env.globals["video_status_label_zh"] = video_status_label_zh
 templates.env.globals["video_status_pill_cls"] = video_status_pill_cls
 templates.env.globals["tkshop_shops"] = TKSHOP_SHOPS
 templates.env.globals["tkshop_default_shop"] = TKSHOP_DEFAULT_SHOP
+# Sidebar nav + every page that surfaces a shop name uses this label.
+# Keeps "main" in env (multi-channel-api key) but renders "inkelligentsticker".
+templates.env.globals["shop_label"] = get_shop_label
+templates.env.globals["tkshop_shop_labels"] = get_shop_labels_map()
 
 router = APIRouter(prefix="/v2", tags=["v2"])
 
@@ -183,7 +190,19 @@ def _safe_filename(text: str, fallback: str = "pack") -> str:
     return (name[:80] or fallback)
 
 
+def _form_bool(form: Any, name: str, *, default: bool = False) -> bool:
+    if hasattr(form, "getlist"):
+        values = [str(v).strip().lower() for v in form.getlist(name)]
+    else:
+        raw = form.get(name)
+        values = [] if raw is None else [str(raw).strip().lower()]
+    if not values:
+        return default
+    return any(v in ("1", "on", "true", "yes") for v in values)
+
+
 _UPLOAD_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+_UPLOAD_EXTERNAL_PACK_SUFFIXES = _UPLOAD_IMAGE_SUFFIXES | {".pdf"}
 
 
 def _upload_filename(upload: Any) -> str:
@@ -207,6 +226,65 @@ async def _read_upload_asset(upload: Any) -> dict[str, Any] | None:
     if not data:
         return None
     return {"filename": Path(filename).name, "data": data}
+
+
+async def _read_external_pack_asset(upload: Any) -> dict[str, Any] | None:
+    filename = _upload_filename(upload)
+    if not filename:
+        return None
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _UPLOAD_EXTERNAL_PACK_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported external pack file type: {filename}",
+        )
+    data = await upload.read()
+    if not data:
+        return None
+    return {"filename": Path(filename).name, "data": data}
+
+
+async def _external_pack_assets_from_form(form: Any) -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+    for upload in form.getlist("source_files"):
+        asset = await _read_external_pack_asset(upload)
+        if asset:
+            assets.append(asset)
+
+    zip_upload = form.get("source_zip")
+    if zip_upload is not None and _upload_filename(zip_upload):
+        raw = await zip_upload.read()
+        if raw:
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    for info in sorted(zf.infolist(), key=lambda x: x.filename):
+                        if info.is_dir():
+                            continue
+                        name = Path(info.filename).name
+                        if not name or name.startswith(".") or "__MACOSX" in info.filename:
+                            continue
+                        suffix = Path(name).suffix.lower()
+                        if suffix not in _UPLOAD_EXTERNAL_PACK_SUFFIXES:
+                            continue
+                        data = zf.read(info)
+                        if data:
+                            assets.append({"filename": name, "data": data})
+            except zipfile.BadZipFile:
+                raise HTTPException(status_code=400, detail="source_zip is not a valid zip file")
+
+    seen: dict[str, int] = {}
+    deduped: list[dict[str, Any]] = []
+    for asset in assets:
+        name = asset["filename"]
+        key = name.lower()
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] > 1:
+            stem = Path(name).stem
+            suffix = Path(name).suffix
+            asset = dict(asset)
+            asset["filename"] = f"{stem}_{seen[key]}{suffix}"
+        deduped.append(asset)
+    return deduped
 
 
 async def _manual_pack_assets_from_form(form: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -284,9 +362,13 @@ def _decorate_pack_for_ui(pack: dict[str, Any] | None) -> dict[str, Any] | None:
     sticker_summary = pack.get("sticker_summary") or {}
     pack["preview_task_running"] = bool(series_id and is_running(f"gen_previews:{series_id}"))
     pack["split_task_running"] = bool(series_id and is_running(f"split_series:{series_id}"))
+    pack["external_ai_task_running"] = bool(
+        pack.get("id") and is_running(f"external_pack_ai:{int(pack['id'])}")
+    )
     pack["has_inflight_generation"] = bool(
         pack["preview_task_running"]
         or pack["split_task_running"]
+        or pack["external_ai_task_running"]
         or preview_summary.get("generating")
         or sticker_summary.get("generating")
     )
@@ -2041,6 +2123,50 @@ def v2_gallery(request: Request):
     )
 
 
+@router.post("/packs/batch-generate-products")
+async def v2_packs_batch_generate_products(request: Request):
+    """Multi-select 'batch-generate TK products' from the pack-manager.
+
+    Form: ``pack_ids`` (repeated int), ``return_to`` (optional). Kicks off
+    a single background daemon task that processes the selected packs with
+    a 3-pack concurrency cap inside ``TKShopService.batch_create_products_from_packs``.
+    Packs that already have any product row are filtered out by the service.
+
+    The route returns immediately (303 back to /v2/packs) so the operator can
+    keep working — task progress is visible on the system-health page and
+    the affected packs gain a "查看 TKShop →" link once their first product
+    row lands.
+    """
+    form = await request.form()
+    raw_ids = form.getlist("pack_ids") if hasattr(form, "getlist") else []
+    pack_ids: list[int] = []
+    for v in raw_ids:
+        try:
+            pack_ids.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    if not pack_ids:
+        raise HTTPException(status_code=400, detail="no pack_ids selected")
+    svc = get_tkshop_service()
+    task_id = f"tkshop_batch_gen:{int(time.time())}"
+    # The service does its own concurrency cap, so we just fire-and-forget one
+    # daemon thread for the whole batch.
+    run_async(
+        task_id,
+        svc.batch_create_products_from_packs,
+        pack_ids,
+        label=f"批量生成 TK 商品 ({len(pack_ids)} 选)",
+    )
+    logger.info("batch-generate dispatched: %d packs (task=%s)", len(pack_ids), task_id)
+    back = _safe_v2_redirect((form.get("return_to") or "").strip(), "/v2/packs")
+    sep = "&" if "?" in back else "?"
+    msg = f"已派发 {len(pack_ids)} 个卡包到后台生成"
+    return RedirectResponse(
+        url=f"{back}{sep}batch_summary={msg}",
+        status_code=303,
+    )
+
+
 @router.post("/packs/from-series/{series_id:int}")
 async def v2_pack_create(request: Request, series_id: int):
     """Promote a pack_series into a packs row. Idempotent."""
@@ -2085,6 +2211,66 @@ async def v2_pack_manual_create(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     logger.info("manual pack create from series #%s → %s", series_id_str, result)
+    return RedirectResponse(
+        url=f"/v2/packs/{result['pack_id']}",
+        status_code=303,
+    )
+
+
+@router.post("/packs/import-external")
+async def v2_pack_import_external(request: Request):
+    """Import operator-made pack files, then optionally AI-enrich/split."""
+    form = await request.form()
+    assets = await _external_pack_assets_from_form(form)
+    if not assets:
+        raise HTTPException(status_code=400, detail="upload at least one PDF or image file")
+    display_name = (form.get("display_name") or "").strip()
+    if not display_name:
+        display_name = Path(assets[0]["filename"]).stem
+    total_raw = (form.get("total_stickers") or "").strip()
+    total_stickers = 0
+    if total_raw:
+        try:
+            total_stickers = max(0, int(total_raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="total_stickers must be a number")
+    try:
+        svc = get_pack_service()
+        result = svc.import_external_pack(
+            display_name=display_name,
+            source_assets=assets,
+            total_stickers=total_stickers,
+            style_anchor=(form.get("style_anchor") or "").strip(),
+            palette=(form.get("palette") or "").strip(),
+            pack_archetype=(form.get("pack_archetype") or "external_upload").strip(),
+            topic_name=(form.get("topic_name") or "").strip(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ai_enrich = _form_bool(form, "ai_enrich", default=True)
+    ai_split = _form_bool(form, "ai_split", default=True)
+    max_raw = (form.get("max_stickers_per_preview") or "").strip()
+    max_stickers = 0
+    if max_raw:
+        try:
+            max_stickers = int(max_raw)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="max_stickers_per_preview must be a number",
+            )
+    if ai_enrich:
+        kwargs: dict[str, Any] = {"split": ai_split}
+        if max_stickers > 0:
+            kwargs["max_stickers_per_preview"] = max_stickers
+        run_async(
+            f"external_pack_ai:{result['pack_id']}",
+            svc.enrich_external_pack_with_ai,
+            int(result["pack_id"]),
+            label=f"AI 补全外部卡包 #{result['pack_id']}",
+            **kwargs,
+        )
+    logger.info("external pack import -> %s", result)
     return RedirectResponse(
         url=f"/v2/packs/{result['pack_id']}",
         status_code=303,
@@ -2334,6 +2520,39 @@ async def v2_pack_split_stickers(request: Request, pack_id: int):
         _split_stickers_for_series,
         series_id,
         label=f"切/补齐 sticker pack #{pack_id}",
+    )
+    return RedirectResponse(
+        url=_safe_v2_redirect(form.get("return_to"), f"/v2/packs/{pack_id}"),
+        status_code=303,
+    )
+
+
+@router.post("/packs/{pack_id:int}/ai-enrich-and-split")
+async def v2_pack_ai_enrich_and_split(request: Request, pack_id: int):
+    form = await request.form()
+    svc = get_pack_service()
+    pack = svc.get_pack(pack_id)
+    if not pack:
+        raise HTTPException(status_code=404, detail="pack not found")
+    split = (form.get("split") or "1").strip().lower() not in (
+        "0", "off", "false", "no",
+    )
+    max_raw = (form.get("max_stickers_per_preview") or "").strip()
+    kwargs: dict[str, Any] = {"split": split}
+    if max_raw:
+        try:
+            kwargs["max_stickers_per_preview"] = int(max_raw)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="max_stickers_per_preview must be a number",
+            )
+    run_async(
+        f"external_pack_ai:{pack_id}",
+        svc.enrich_external_pack_with_ai,
+        pack_id,
+        label=f"AI 补全外部卡包 #{pack_id}",
+        **kwargs,
     )
     return RedirectResponse(
         url=_safe_v2_redirect(form.get("return_to"), f"/v2/packs/{pack_id}"),
@@ -3401,48 +3620,73 @@ def v2_analytics_video_detail(request: Request, tiktok_video_id: str):
 def v2_products_list(
     request: Request,
     q: str = "",
-    pack_id: int | None = None,
+    pack_id: str = "",
     status: str = "all",
     shop: str = "",
+    tab: str = "",
     limit: int = 50,
     synced: int | None = None,
     checked: int | None = None,
+    batch_summary: str = "",
 ):
-    # Multi-shop default: if the operator hasn't explicitly chosen a shop in
-    # the URL, land on the first configured shop instead of 'all' so each
-    # store's products show separately.
-    if not shop:
-        shop = TKSHOP_DEFAULT_SHOP if len(TKSHOP_SHOPS) > 1 else "all"
+    # ``pack_id`` arrives as a string because the filter form posts an empty
+    # value when blank — coercing to ``int | None`` directly in the signature
+    # makes FastAPI return 422 on every search submission. Parse defensively.
+    pack_id_int: Optional[int] = None
+    if pack_id and pack_id.strip().isdigit():
+        pack_id_int = int(pack_id.strip())
+    # Tabs (top-level):
+    #   'local'  → local draft pool, no TikTok ID yet (default landing)
+    #   '<shop>' → that shop's listed products (tiktok_product_id set)
+    # Back-compat: a bare ?shop=X URL still works and is mapped to tab=X.
+    if not tab:
+        tab = "local"
+        if shop and shop in TKSHOP_SHOPS:
+            # Old links land on a per-shop view; treat them as that shop's tab.
+            tab = shop
+    is_local_tab = tab == "local"
+    shop_filter: Optional[str] = None if is_local_tab else tab
     svc = get_tkshop_service()
-    products, total = svc.list_products(
-        pack_id=pack_id,
-        publish_status=status if status != "all" else None,
-        q=q.strip() or None,
-        shop=shop if shop != "all" else None,
-        limit=limit,
-    )
-    # Per-shop counts for the sub-tabs (uses the same filters except shop).
-    shop_counts: dict[str, int] = {}
-    if len(TKSHOP_SHOPS) > 1:
-        all_total = svc.list_products(
-            pack_id=pack_id,
+    # Local tab now reads from the master catalog (local_products); each
+    # row is one pack with shop-listing badges built from the joined
+    # tkshop_products rows. The shop tabs keep reading tkshop_products
+    # because they show per-shop platform IDs/SKUs.
+    if is_local_tab:
+        products, total = svc.list_local_products(
+            pack_id=pack_id_int,
+            q=q.strip() or None,
+            limit=limit,
+        )
+    else:
+        products, total = svc.list_products(
+            pack_id=pack_id_int,
             publish_status=status if status != "all" else None,
             q=q.strip() or None,
-            shop=None,
+            shop=shop_filter,
+            on_platform_only=True,
+            limit=limit,
+        )
+    # Tab counts — drives the sidebar sub-link labels (本地产品 (12) /
+    # 🏪 inkelligentsticker (8) / 🏪 inkelligentstudio (3)).
+    tab_counts: dict[str, int] = {}
+    _, tab_counts["local"] = svc.list_local_products(
+        pack_id=pack_id_int,
+        q=q.strip() or None,
+        limit=1,
+    )
+    for s in TKSHOP_SHOPS:
+        _, c = svc.list_products(
+            pack_id=pack_id_int,
+            publish_status=status if status != "all" else None,
+            q=q.strip() or None,
+            shop=s,
+            on_platform_only=True,
             limit=1,
-        )[1]
-        shop_counts["all"] = all_total
-        for s in TKSHOP_SHOPS:
-            _, c = svc.list_products(
-                pack_id=pack_id,
-                publish_status=status if status != "all" else None,
-                q=q.strip() or None,
-                shop=s,
-                limit=1,
-            )
-            shop_counts[s] = c
-    # Enrichment: when pack_cover is missing, fall back to (a) product's
-    # main product image, then (b) first ok preview from the series.
+        )
+        tab_counts[s] = c
+    # Enrichment: when pack_cover is missing, fall back to a stored image.
+    # Master rows: try local_product_images; listing rows: try
+    # tkshop_product_images; fallback for both is the first ok preview.
     import sqlite3 as _sql
     fb_conn = _sql.connect("data/ops_workbench.db")
     fb_conn.row_factory = _sql.Row
@@ -3452,13 +3696,22 @@ def v2_products_list(
             p["published_human"] = _fmt_ts(p.get("published_at"))
             cover = _path_to_v2_url(p.get("pack_cover") or "")
             if not cover:
-                # Fallback 1: product's main upload
-                row = fb_conn.execute(
-                    "SELECT local_path FROM tkshop_product_images "
-                    "WHERE product_id = ? AND role = 'main' "
-                    "ORDER BY sort_order LIMIT 1",
-                    (p["id"],),
-                ).fetchone()
+                # Fallback 1: master's main image (local tab) or listing's
+                # main image (shop tabs).
+                if is_local_tab:
+                    row = fb_conn.execute(
+                        "SELECT local_path FROM local_product_images "
+                        "WHERE local_product_id = ? AND role = 'main' "
+                        "ORDER BY sort_order LIMIT 1",
+                        (p["id"],),
+                    ).fetchone()
+                else:
+                    row = fb_conn.execute(
+                        "SELECT local_path FROM tkshop_product_images "
+                        "WHERE product_id = ? AND role = 'main' "
+                        "ORDER BY sort_order LIMIT 1",
+                        (p["id"],),
+                    ).fetchone()
                 if row and row["local_path"]:
                     cover = _path_to_v2_url(row["local_path"])
             if not cover:
@@ -3486,15 +3739,237 @@ def v2_products_list(
             "products": products,
             "total": total,
             "q": q,
-            "pack_id_filter": pack_id,
+            "pack_id_filter": pack_id_int,
             "status_filter": status,
-            "shop_filter": shop,
-            "shop_counts": shop_counts,
+            "shop_filter": shop_filter or "",
+            "tab": tab,
+            "is_local_tab": is_local_tab,
+            "tab_counts": tab_counts,
             "limit": limit,
             "is_platform_view": False,
             "synced": synced,
             "checked": checked,
+            "batch_summary": batch_summary,
         },
+    )
+
+
+# ----------------------------------------------------------------------
+# Local products (master catalog) — split out from /v2/products listings
+# ----------------------------------------------------------------------
+
+@router.get("/local-products/{local_product_id:int}", response_class=HTMLResponse)
+def v2_local_product_detail(request: Request, local_product_id: int):
+    """Master editor: title/description/keywords/SKU/category + image set +
+    each shop's listing status with per-listing 'push to TikTok' actions.
+    """
+    svc = get_tkshop_service()
+    lp = svc.get_local_product(local_product_id)
+    if not lp:
+        raise HTTPException(status_code=404, detail="local product not found")
+    lp["created_human"] = _fmt_ts(lp.get("created_at"))
+    lp["updated_human"] = _fmt_ts(lp.get("updated_at"))
+    cover = _path_to_v2_url(lp.get("pack_cover") or "")
+    if not cover:
+        main_img = next(
+            (i for i in lp.get("images", []) if (i.get("role") or "") == "main"),
+            None,
+        )
+        if main_img:
+            cover = _path_to_v2_url(main_img.get("local_path") or "")
+    lp["pack_cover_url"] = cover
+    for img in lp.get("images", []):
+        img["url"] = _versioned_local_product_image_url(img)
+        img["created_human"] = _fmt_ts(img.get("created_at"))
+    for ls in lp.get("listings", []):
+        ls["created_human"] = _fmt_ts(ls.get("created_at"))
+        ls["published_human"] = _fmt_ts(ls.get("published_at"))
+        ls["shop_label"] = get_shop_label(ls.get("shop") or "")
+    # Which shops the operator can still publish to (no LIVE listing yet).
+    listed_shops = {ls.get("shop") for ls in lp.get("listings", [])
+                    if ls.get("tiktok_product_id")}
+    missing_shops = [s for s in TKSHOP_SHOPS if s not in listed_shops]
+    return templates.TemplateResponse(
+        "v2_local_product_detail.html",
+        {
+            "request": request,
+            "page_title": f"本地产品 #{local_product_id}",
+            "lp": lp,
+            "missing_shops": missing_shops,
+        },
+    )
+
+
+@router.post("/local-products/{local_product_id:int}/edit-detail")
+async def v2_local_product_edit_detail(request: Request, local_product_id: int):
+    """Save master text edits. Does NOT auto-sync to listings — the operator
+    uses each listing's '推送本地修改到 TikTok' button to push."""
+    form = await request.form()
+    title = (form.get("title") or "").strip()
+    desc = form.get("description_html") or ""
+    raw_sp = (form.get("selling_points") or "").strip()
+    raw_kw = (form.get("keywords") or "").strip()
+    cat = (form.get("category_id") or "").strip()
+    seller_sku = (form.get("seller_sku") or "").strip().upper()
+    sps = [l.strip().lstrip("-*•").strip() for l in raw_sp.splitlines() if l.strip()]
+    kws = [l.strip().lstrip("#").strip() for l in raw_kw.splitlines() if l.strip()]
+    svc = get_tkshop_service()
+    if not svc.update_local_product_detail(
+        local_product_id,
+        title=title, description_html=desc,
+        selling_points=sps, keywords=kws,
+        category_id=cat or None,
+        seller_sku=seller_sku or None,
+    ):
+        raise HTTPException(status_code=404, detail="local product not found")
+    return RedirectResponse(
+        url=f"/v2/local-products/{local_product_id}", status_code=303,
+    )
+
+
+@router.post("/local-products/{local_product_id:int}/publish-to-shop")
+async def v2_local_product_publish_to_shop(request: Request, local_product_id: int):
+    """One-click 'publish this master to shop X' from the detail page.
+
+    Wraps ``batch_publish_local_to_shop`` with a single id, fire-and-forget
+    so the operator sees a redirect right away. Use this when only one
+    shop is left to publish to — the table's batch button handles multi.
+    """
+    form = await request.form()
+    target_shop = (form.get("target_shop") or "").strip()
+    if not target_shop:
+        raise HTTPException(status_code=400, detail="target_shop is required")
+    if target_shop not in TKSHOP_SHOPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown shop {target_shop!r}; configured: {TKSHOP_SHOPS}",
+        )
+    svc = get_tkshop_service()
+    task_id = f"tkshop_publish_local:{local_product_id}:{target_shop}"
+    run_async(
+        task_id,
+        svc.batch_publish_local_to_shop,
+        [local_product_id], target_shop,
+        label=f"上架本地 #{local_product_id} → {target_shop}",
+    )
+    return RedirectResponse(
+        url=f"/v2/local-products/{local_product_id}", status_code=303,
+    )
+
+
+def _versioned_local_product_image_url(img: dict) -> str:
+    """Build a /v2-outputs URL for a local_product_images row with a busting
+    suffix so the browser doesn't show a stale cached image after a regen."""
+    p = img.get("local_path") or ""
+    url = _path_to_v2_url(p)
+    if not url:
+        return ""
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}v={img.get('created_at') or img.get('id') or 0}"
+
+
+@router.post("/products/batch-publish-from-local")
+async def v2_products_batch_publish_from_local(request: Request):
+    """Multi-select batch-publish driven by local_product ids.
+
+    The 本地产品 tab's rows are masters now, so the checkbox values are
+    local_product ids. This endpoint dispatches a master-aware publish
+    pipeline (creates listings as needed, snapshots master images, then
+    publishes).
+    """
+    form = await request.form()
+    target_shop = (form.get("target_shop") or "").strip()
+    if not target_shop:
+        raise HTTPException(status_code=400, detail="target_shop is required")
+    if target_shop not in TKSHOP_SHOPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown shop {target_shop!r}; configured: {TKSHOP_SHOPS}",
+        )
+    raw_ids = form.getlist("local_product_ids") if hasattr(form, "getlist") else []
+    ids: list[int] = []
+    for v in raw_ids:
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        raise HTTPException(status_code=400, detail="no local_product_ids selected")
+    auto_activate = (form.get("auto_activate") or "1").strip() not in ("0", "off", "false", "no")
+    auto_fix = (form.get("auto_fix") or "1").strip() not in ("0", "off", "false", "no")
+    svc = get_tkshop_service()
+    task_id = f"tkshop_batch_publish_local:{int(time.time())}"
+    run_async(
+        task_id,
+        svc.batch_publish_local_to_shop,
+        ids, target_shop,
+        auto_activate=auto_activate, auto_fix=auto_fix,
+        label=f"批量上架本地 → {target_shop} ({len(ids)} 选)",
+    )
+    logger.info(
+        "batch-publish-from-local dispatched: %d masters → %s (task=%s)",
+        len(ids), target_shop, task_id,
+    )
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/products?tab=local")
+    sep = "&" if "?" in back else "?"
+    msg = f"已派发 {len(ids)} 个本地产品上架到 {target_shop}"
+    return RedirectResponse(
+        url=f"{back}{sep}batch_summary={msg}",
+        status_code=303,
+    )
+
+
+@router.post("/products/batch-publish-to-shop")
+async def v2_products_batch_publish_to_shop(request: Request):
+    """Multi-select 'batch-publish to shop X' from the local-products tab.
+
+    Form: ``product_ids`` (repeated int), ``target_shop`` (one of TKSHOP_SHOPS),
+    optional ``auto_activate``/``auto_fix`` toggles, optional ``back`` URL.
+
+    The work is fire-and-forget (a single daemon thread with internal
+    concurrency cap of 2 to avoid hammering multi-channel-api / TikTok rate
+    limits). Operator gets a summary toast on redirect.
+    """
+    form = await request.form()
+    target_shop = (form.get("target_shop") or "").strip()
+    if not target_shop:
+        raise HTTPException(status_code=400, detail="target_shop is required")
+    if target_shop not in TKSHOP_SHOPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown shop {target_shop!r}; configured: {TKSHOP_SHOPS}",
+        )
+    raw_ids = form.getlist("product_ids") if hasattr(form, "getlist") else []
+    product_ids: list[int] = []
+    for v in raw_ids:
+        try:
+            product_ids.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    if not product_ids:
+        raise HTTPException(status_code=400, detail="no product_ids selected")
+    auto_activate = (form.get("auto_activate") or "1").strip() not in ("0", "off", "false", "no")
+    auto_fix = (form.get("auto_fix") or "1").strip() not in ("0", "off", "false", "no")
+
+    svc = get_tkshop_service()
+    task_id = f"tkshop_batch_publish:{int(time.time())}"
+    run_async(
+        task_id,
+        svc.batch_publish_to_shop,
+        product_ids, target_shop,
+        auto_activate=auto_activate, auto_fix=auto_fix,
+        label=f"批量上架到 {target_shop} ({len(product_ids)} 选)",
+    )
+    logger.info(
+        "batch-publish dispatched: %d products → %s (task=%s)",
+        len(product_ids), target_shop, task_id,
+    )
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/products")
+    sep = "&" if "?" in back else "?"
+    msg = f"已派发 {len(product_ids)} 个商品上架到 {target_shop}"
+    return RedirectResponse(
+        url=f"{back}{sep}batch_summary={msg}",
+        status_code=303,
     )
 
 
