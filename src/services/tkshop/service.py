@@ -1124,6 +1124,11 @@ class TKShopService:
             for pb in md.get("preview_briefs", [])[:3]:
                 briefs.extend(pb.get("stickers", [])[:6])
             for source in md.get("source_files") or []:
+                for key in ("original_preview_paths", "source_preview_paths"):
+                    for p in source.get(key) or []:
+                        p = str(p or "").strip()
+                        if p:
+                            source_image_paths.append(p)
                 for key in ("source_path", "source_image_path"):
                     p = str(source.get(key) or "").strip()
                     if p:

@@ -547,6 +547,23 @@ class PackService:
         tmp.write_bytes(data)
         tmp.replace(target)
 
+    def _write_external_source_preview(
+        self,
+        *,
+        pack_uid: str,
+        series_idx: int,
+        source_idx: int,
+        page_idx: int,
+        label: str,
+        image_bytes: bytes,
+    ) -> Path:
+        series_dir = get_pack_store().series_dir(pack_uid, series_idx)
+        source_preview_dir = series_dir / "source_previews"
+        safe_label = self._safe_asset_stem(label, f"source_{source_idx}_page_{page_idx}")
+        out_path = source_preview_dir / f"{source_idx:02d}_{page_idx:02d}_{safe_label}.png"
+        self._write_bytes_atomic(out_path, image_bytes)
+        return out_path
+
     @staticmethod
     def _image_to_png_bytes(data: bytes) -> bytes:
         from PIL import Image
@@ -1176,9 +1193,21 @@ Rules:
             saved_source = {
                 "filename": filename,
                 "source_path": source_path.as_posix(),
+                "original_preview_paths": [],
                 "preview_paths": [],
             }
-            for page_label, preview_png in self._preview_pngs_from_source(asset):
+            for page_no, (page_label, preview_png) in enumerate(
+                self._preview_pngs_from_source(asset),
+                1,
+            ):
+                original_preview_path = self._write_external_source_preview(
+                    pack_uid=pack_uid,
+                    series_idx=series_idx,
+                    source_idx=source_idx,
+                    page_idx=page_no,
+                    label=page_label,
+                    image_bytes=preview_png,
+                )
                 preview_idx += 1
                 prompt_text = f"external imported preview from {filename}"
                 if source_suffix == ".pdf":
@@ -1190,6 +1219,7 @@ Rules:
                     preview_png,
                     prompt_text=prompt_text,
                 )
+                saved_source["original_preview_paths"].append(original_preview_path.as_posix())
                 saved_source["preview_paths"].append(preview_path.as_posix())
                 preview_rows.append({
                     "preview_idx": preview_idx,
