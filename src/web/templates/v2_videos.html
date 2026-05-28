@@ -739,13 +739,11 @@
         if (note) {
           const parts = [];
           let isError = false;
-          if (params.get('caption_error')) {
-            parts.push('AI 文案生成失败：' + params.get('caption_error'));
-            isError = true;
-          } else if (params.get('caption_pending')) {
+          if (params.get('processing')) {
+            parts.push('正在后台处理（保存文件 / AI 文案 / 配音），完成后状态会自动更新，可刷新查看');
+          }
+          if (params.get('caption_pending')) {
             parts.push('AI 文案已提交后台生成');
-          } else if (params.get('caption_ready')) {
-            parts.push('AI Caption + Hashtag 已生成');
           }
           if (params.get('dispatch_error')) {
             parts.push('立即发布失败：' + params.get('dispatch_error'));

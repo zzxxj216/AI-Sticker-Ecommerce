@@ -1,0 +1,159 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .cat-page { padding-top:14px; }
+  .cat-banner { padding:10px 16px;background:linear-gradient(90deg,rgba(139,92,246,.10),rgba(236,72,153,.06));border:1px dashed rgba(139,92,246,.4);border-radius:8px;margin-bottom:16px;font-size:12px;color:var(--text-secondary); }
+  .cat-banner b { color:#8b5cf6; }
+  .cat-major { border:1px solid var(--line); border-radius:10px; margin-bottom:14px; background:var(--surface); overflow:hidden; }
+  .cat-major > summary { padding:12px 16px; cursor:pointer; font-size:15px; font-weight:700; list-style:none; display:flex; gap:10px; align-items:center; }
+  .cat-major > summary::-webkit-details-marker { display:none; }
+  .cat-major > summary:hover { background:var(--bg-subtle); }
+  .cat-kw { font-size:11px; color:var(--text-muted); font-weight:400; }
+  .cat-count { margin-left:auto; font-size:11px; color:var(--text-muted); font-weight:600; }
+  .cat-sub { padding:6px 16px 14px 28px; }
+  .cat-sub h4 { margin:12px 0 8px; font-size:13px; color:var(--text-secondary); }
+  .cat-prod { display:flex; gap:10px; align-items:center; padding:8px 10px; border:1px solid var(--line-soft); border-radius:8px; margin-bottom:6px; background:var(--bg-subtle); }
+  .cat-prod .t { flex:1; font-size:12px; }
+  .cat-prod .t b { font-size:12px; }
+  .cat-prod .sub-line { color:var(--text-muted); font-size:11px; margin-top:2px; }
+  .pill { padding:2px 7px; border-radius:9px; font-size:10px; font-weight:700; white-space:nowrap; }
+  .pill.kind-lab { background:#ede9fe; color:#6d28d9; }
+  .pill.kind-tk  { background:#e0f2fe; color:#075985; }
+  .pill.live { background:#d1fae5; color:#065f46; }
+  .pill.shop { background:#f1f5f9; color:#334155; }
+  .cat-btn { padding:5px 12px; border:1px solid var(--line); border-radius:6px; background:var(--surface); cursor:pointer; font-size:11px; white-space:nowrap; }
+  .cat-btn:hover { border-color:#8b5cf6; color:#8b5cf6; }
+  .cat-match { margin:4px 0 10px 0; padding:10px 12px; border:1px dashed rgba(139,92,246,.4); border-radius:8px; background:rgba(139,92,246,.04); font-size:12px; display:none; }
+  .cat-match.open { display:block; }
+  .cand-row { display:flex; gap:8px; align-items:center; padding:5px 6px; border-bottom:1px solid var(--line-soft); }
+  .cand-row label { display:flex; gap:8px; align-items:center; cursor:pointer; flex:1; margin:0; }
+  .cat-status { margin-top:8px; font-size:12px; }
+  .cat-status .ok { color:#059669; } .cat-status .err { color:#dc2626; }
+  .gradient-btn { padding:7px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:12px; }
+  .gradient-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .shop-head { font-size:16px; margin:22px 0 10px; padding-bottom:6px; border-bottom:2px solid rgba(139,92,246,.3); }
+  .shop-block { margin-bottom:8px; }
+</style>
+
+<div class="cat-page">
+  <section class="page-header" style="margin-bottom:14px;">
+    <div>
+      <p class="eyebrow">🗂️ LAB · Product Catalog</p>
+      <h1>产品目录 · 分层合并</h1>
+      <p class="page-subtitle">按主题分好的产品目录(大类 → 小类 → 产品)。对任一产品点「找可合并」,模型会分层定位它的主题,列出同主题、可合并成一个多 SKU 链接的候选 —— 即使它们来自不同热点话题。</p>
+    </div>
+  </section>
+
+  <div class="cat-banner">
+    🗂️ <b>分层渐进匹配</b> · 目录文件在 <code>data/product_catalog/</code>。匹配只逐层加载小索引,产品再多上下文也不胀。
+    合并后目录会过时 → 点
+    <button class="cat-btn" onclick="rebuildCatalog(this)">🔄 重建分类</button>
+    重新归类。
+  </div>
+
+  {% if empty %}
+  <section class="panel" style="padding:24px;text-align:center;color:var(--text-muted);">
+    目录还是空的。点上方「🔄 重建分类」对现有产品做一次分类。
+  </section>
+  {% endif %}
+
+  {% for st in shops_tree %}
+  <div class="shop-block">
+    <h2 class="shop-head">🏪 {{ st.shop }} <span class="cat-kw">({{ st.tree|length }} 大类)</span></h2>
+    {% if not st.tree %}<p style="color:var(--text-muted);font-size:12px;">该店铺目录为空 — 点上方「🔄 重建分类」。</p>{% endif %}
+  {% for m in st.tree %}
+  <details class="cat-major" open>
+    <summary>
+      <span>{{ m.name }}</span>
+      <span class="cat-kw">{{ m.keywords | join(' · ') }}</span>
+      <span class="cat-count">{{ m.sub_count }} 小类</span>
+    </summary>
+    {% for s in m.subs %}
+    <div class="cat-sub">
+      <h4>{{ s.name }} <span class="cat-kw">· {{ s.keywords | join(' · ') }}</span> <span class="cat-count">{{ s.products|length }} 个产品</span></h4>
+      {% for p in s.products %}
+      <div class="cat-prod">
+        <div class="t">
+          <b>{{ p.title or '(未命名)' }}</b>
+          <div class="sub-line">
+            <span class="pill {{ 'kind-lab' if p.kind == 'lab_msku' else 'kind-tk' }}">{{ '多SKU' if p.kind == 'lab_msku' else '单SKU' }}</span>
+            {% if p.shop %}<span class="pill shop">🏪 {{ p.shop }}</span>{% endif %}
+            {% if p.tiktok_product_id %}<span class="pill live">live</span>{% endif %}
+            <span style="color:var(--text-muted);">{{ p.ref }} · {{ p.packs|length }} 包</span>
+          </div>
+        </div>
+        <button class="cat-btn" onclick="findMerge('{{ p.ref }}', this)">🔗 找可合并</button>
+      </div>
+      <div class="cat-match" id="match-{{ p.ref | replace(':','-') }}"></div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </details>
+  {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+function _mid(ref){ return 'match-' + ref.replace(':','-'); }
+
+async function findMerge(ref, btn){
+  const box = document.getElementById(_mid(ref));
+  if (box.classList.contains('open')){ box.classList.remove('open'); return; }
+  box.classList.add('open');
+  box.innerHTML = '⏳ 分层定位主题中…(约 3-6 秒)';
+  try {
+    const r = await fetch('/v2/lab/product-catalog/match?ref=' + encodeURIComponent(ref));
+    const d = await r.json();
+    if (!d.ok){ box.innerHTML = '<span class="err">✗ ' + (d.error||'失败') + '</span>'; return; }
+    const path = d.path || {};
+    let html = '<div style="margin-bottom:6px;">归类: <b>' + (path.major_name||'?') + ' / ' + (path.sub_name||'?') +
+               '</b> <span class="cat-kw">(置信 ' + (path.confidence||0) + ')</span></div>';
+    if (!d.candidates || !d.candidates.length){
+      html += '<div style="color:var(--text-muted);">' + (d.note || '没有可合并的同主题产品') + '</div>';
+      box.innerHTML = html; return;
+    }
+    html += '<div style="color:var(--text-muted);margin-bottom:4px;">勾选要合并到一起的产品(标题/描述将采用 <b>' + ref + '</b> 这个新产品的):</div>';
+    d.candidates.forEach(c => {
+      const live = c.tiktok_product_id ? ' <span class="pill live">live</span>' : '';
+      const shop = c.shop ? ' <span class="pill shop">🏪'+c.shop+'</span>' : '';
+      const kind = '<span class="pill ' + (c.kind==='lab_msku'?'kind-lab':'kind-tk') + '">' + (c.kind==='lab_msku'?'多SKU':'单SKU') + '</span>';
+      html += '<div class="cand-row"><label><input type="checkbox" value="'+c.ref+'"> ' +
+              kind + ' <b>' + (c.title||c.ref) + '</b>' + shop + live + '</label></div>';
+    });
+    html += '<div style="margin-top:8px;"><button class="gradient-btn" onclick="doMerge(\''+ref+'\', this)">合并选中 → 一个多 SKU 产品</button>' +
+            '<span class="cat-status" id="st-'+ref.replace(':','-')+'"></span></div>';
+    box.innerHTML = html;
+  } catch(e){ box.innerHTML = '<span class="err">✗ ' + e + '</span>'; }
+}
+
+async function doMerge(newRef, btn){
+  const box = btn.closest('.cat-match');
+  const targets = [...box.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  const st = document.getElementById('st-' + newRef.replace(':','-'));
+  if (!targets.length){ st.innerHTML = ' <span class="err">请先勾选至少一个</span>'; return; }
+  btn.disabled = true; st.innerHTML = ' ⏳ 合并中…';
+  const fd = new FormData();
+  fd.append('new_ref', newRef);
+  targets.forEach(t => fd.append('target_refs', t));
+  try {
+    const r = await fetch('/v2/lab/product-catalog/merge-local', { method:'POST', body: fd });
+    const d = await r.json();
+    if (!d.ok){ st.innerHTML = ' <span class="err">✗ ' + (d.error||'失败') + '</span>'; btn.disabled = false; return; }
+    st.innerHTML = ' <span class="ok">✓ 已合并为多SKU产品 #' + d.canonical_product_id +
+                   ' (+' + (d.added_skus||[]).length + ' SKU)</span> ' +
+                   '<a href="' + d.detail_url + '" target="_blank">打开 →</a> · <span class="cat-kw">源产品未删除,合并后建议「🔄 重建分类」</span>';
+  } catch(e){ st.innerHTML = ' <span class="err">✗ ' + e + '</span>'; btn.disabled = false; }
+}
+
+async function rebuildCatalog(btn){
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '⏳ 重建中…';
+  try {
+    const r = await fetch('/v2/lab/product-catalog/rebuild', { method:'POST' });
+    const d = await r.json();
+    if (d.ok){ btn.textContent = '✓ ' + d.majors + '大类/' + d.products + '产品'; setTimeout(()=>location.reload(), 700); }
+    else { btn.textContent = '✗ ' + (d.error||'失败'); btn.disabled = false; }
+  } catch(e){ btn.textContent = '✗ ' + e; btn.disabled = false; }
+}
+</script>
+{% endblock %}

@@ -91,12 +91,134 @@
       <h4 style="margin:18px 0 10px;font-size:13px;color:var(--text-secondary);">下游动作</h4>
       <div class="v2-action-grid">
         <a class="button ghost v2-button-full" href="/v2/videos?pack_id={{ pack.id }}">新建 TK 视频</a>
-        <form method="post" action="/v2/products/from-pack/{{ pack.id }}">
-          <button type="submit" class="button ghost v2-button-full">生成 TKShop 产品</button>
-        </form>
+        <button type="button" class="button ghost v2-button-full"
+                onclick="var c=document.getElementById('newProductChooser');c.style.display=c.style.display==='block'?'none':'block';">
+          ＋ 新建产品 ▾
+        </button>
         <a class="button ghost v2-button-full" href="/v2/videos?pack_id={{ pack.id }}">查看已有视频</a>
         <a class="button ghost v2-button-full" href="/v2/products?pack_id={{ pack.id }}">查看已有产品</a>
       </div>
+
+      <!-- 新建产品三选一(单SKU / 多SKU新建 / 多SKU加到已有) -->
+      <div id="newProductChooser" style="display:none;margin-top:12px;padding:14px;border:1px dashed rgba(139,92,246,.45);border-radius:9px;background:rgba(139,92,246,.05);">
+        <div style="font-weight:700;margin-bottom:10px;font-size:13px;">新建产品 —— 选择方式</div>
+
+        <form method="post" action="/v2/products/from-pack/{{ pack.id }}" style="margin-bottom:12px;">
+          <button type="submit" class="button ghost v2-button-full">① 生成单独产品(单 SKU)</button>
+        </form>
+
+        <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">店铺(多 SKU 用)</label>
+        <select id="npShop" class="v2-input" style="width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;margin-bottom:12px;">
+          {% for s in tkshop_shops %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+
+        <form method="post" action="/v2/lab/multi-sku/from-pack/{{ pack.id }}" style="margin-bottom:12px;"
+              onsubmit="this.shop.value=document.getElementById('npShop').value;">
+          <input type="hidden" name="shop">
+          <button type="submit" class="button ghost v2-button-full">② 多 SKU · 新建独立产品链接</button>
+        </form>
+
+        <button type="button" class="button ghost v2-button-full" onclick="npFindExisting()">
+          ② 多 SKU · 加到已有产品(+1 SKU)
+        </button>
+        <div id="npCandidates" style="margin-top:8px;font-size:12px;line-height:1.5;"></div>
+        <div id="npResult" style="margin-top:8px;font-size:12px;line-height:1.6;"></div>
+      </div>
+
+      <script>
+      var npCands = [];
+      function npEsc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+      async function npFindExisting(){
+        var shop=document.getElementById('npShop').value;
+        var box=document.getElementById('npCandidates');
+        document.getElementById('npResult').innerHTML='';
+        box.innerHTML='⏳ 在「'+shop+'」里找同主题产品…(约 3-6 秒)';
+        try{
+          var r=await fetch('/v2/lab/multi-sku/pack-match?pack_id={{ pack.id }}&shop='+encodeURIComponent(shop));
+          var d=await r.json();
+          if(!d.ok){box.innerHTML='<span style="color:#dc2626;">✗ '+(d.error||'失败')+'</span>';return;}
+          var p=d.path||{};
+          var h='<div>归类: <b>'+npEsc(p.major_name)+' / '+npEsc(p.sub_name)+'</b> <span style="color:#888;">(置信 '+(p.confidence||0)+')</span></div>';
+          if(!d.candidates||!d.candidates.length){ h+='<div style="color:#888;">'+(d.note||'该店铺没有同主题产品')+'</div>'; box.innerHTML=h; return; }
+          npCands=d.candidates;
+          h+='<div style="color:#888;margin:4px 0;">选一个,把本卡包加为它的新 SKU:</div>';
+          npCands.forEach(function(c,i){
+            var live=!!c.tiktok_product_id;
+            var km=c.kind==='lab_msku'?'多SKU':(c.kind==='tkshop'?'单SKU':'平台');
+            var tag=live?' <span style="color:#065f46;font-weight:700;">live</span>':'';
+            var btn=live? '<button class="button" style="font-size:11px;padding:3px 10px;" onclick="npPreview('+i+')">预览合并</button>'
+                        : '<button class="button" style="font-size:11px;padding:3px 10px;" onclick="npAddLocal('+i+',this)">加为SKU(本地)</button>';
+            h+='<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line-soft);">'+
+               '<span style="flex:1;">['+km+'] '+npEsc(c.title||c.ref)+tag+'</span>'+btn+'</div>';
+          });
+          box.innerHTML=h;
+        }catch(e){ box.innerHTML='<span style="color:#dc2626;">✗ '+e+'</span>'; }
+      }
+
+      async function npPreview(i){
+        var c=npCands[i]; if(!c) return;
+        var shop=document.getElementById('npShop').value;
+        var box=document.getElementById('npResult');
+        box.innerHTML='⏳ 拉取「'+npEsc(c.title||c.ref)+'」的线上现状…';
+        try{
+          var r=await fetch('/v2/lab/multi-sku/merge-preview?pack_id={{ pack.id }}&shop='+encodeURIComponent(shop)+'&target_ref='+encodeURIComponent(c.ref));
+          var d=await r.json();
+          if(d.stale){ box.innerHTML='<div style="color:#b45309;">⚠ 该产品已在平台删除,已从目录移除'+(d.pruned?'('+d.pruned+'条)':'')+'。请重新「查找」。</div>'; return; }
+          if(!d.ok){ box.innerHTML='<div style="color:#dc2626;">✗ '+(d.error||'失败')+'</div>'; return; }
+          if(d.already_present){ box.innerHTML='<div style="color:#888;">该卡包已经是这个产品的 SKU,无需再加。</div>'; return; }
+          var t=d.target||{}, nv=d.new_variant||{};
+          var cur=''; (t.skus||[]).forEach(function(s){ cur+='<li>'+npEsc(s.attribute_value||s.seller_sku)+' <span style="color:#888;">('+npEsc(s.seller_sku)+')</span></li>'; });
+          var img = nv.image_url ? '<img src="'+nv.image_url+'" style="width:46px;height:46px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;">' : '';
+          box.innerHTML =
+            '<div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--surface);">'+
+            '<div style="font-weight:700;margin-bottom:6px;">预览合并到:'+npEsc(t.title)+'</div>'+
+            '<div style="color:#888;">现有 '+(t.skus||[]).length+' 个变体:</div><ul style="margin:4px 0 10px 18px;">'+cur+'</ul>'+
+            '<div style="margin-bottom:8px;">➕ 新增变体:'+img+
+              '<input id="npNewVal" value="'+npEsc(nv.attribute_value)+'" maxlength="100" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;width:200px;"> '+
+              '<span style="color:#888;font-size:11px;">'+npEsc(nv.seller_sku)+'</span></div>'+
+            '<label style="display:block;margin:8px 0;font-size:12px;cursor:pointer;"><input type="checkbox" id="npRefresh"> AI 刷新描述以包含新变体(默认保持原描述)</label>'+
+            '<button style="padding:7px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;" onclick="npSubmitMerge('+i+',this)">确认提交到平台 →</button>'+
+            '<div style="color:#b45309;font-size:11px;margin-top:6px;">⚠ 提交后触发 TikTok 审核;变体加入后 API 无法删除(不可撤销)。</div>'+
+            '<div id="npSubmitState" style="margin-top:6px;font-size:12px;"></div>'+
+            '</div>';
+        }catch(e){ box.innerHTML='<div style="color:#dc2626;">✗ '+e+'</div>'; }
+      }
+
+      async function npSubmitMerge(i,btn){
+        var c=npCands[i]; if(!c) return;
+        if(!confirm('确认把本卡包并入 live 产品「'+(c.title||c.ref)+'」?不可撤销。')) return;
+        var st=document.getElementById('npSubmitState');
+        btn.disabled=true; btn.textContent='提交中…';
+        st.innerHTML='⏳ 抓取现状 → 上传图 → 提交 TikTok,约 10-30 秒…';
+        var fd=new FormData();
+        fd.append('target_ref',c.ref); fd.append('pack_id','{{ pack.id }}');
+        fd.append('shop',document.getElementById('npShop').value);
+        fd.append('new_variant_value',document.getElementById('npNewVal').value);
+        fd.append('refresh_desc',document.getElementById('npRefresh').checked?'1':'');
+        try{
+          var r=await fetch('/v2/lab/multi-sku/add-pack-sku',{method:'POST',body:fd});
+          var d=await r.json();
+          if(d.ok){ btn.textContent='✓ 已提交'; st.innerHTML='<span style="color:#059669;">✓ 已并入(现 '+(d.sku_count||'?')+' 个 SKU,新增 '+(d.added_seller_sku||'')+')。<b>TikTok 审核通过后生效</b>。</span>'; }
+          else{ btn.disabled=false; btn.textContent='确认提交到平台 →'; st.innerHTML='<span style="color:#dc2626;">✗ '+(d.error||d.error_code||'失败')+'</span>'; }
+        }catch(e){ btn.disabled=false; btn.textContent='确认提交到平台 →'; st.innerHTML='<span style="color:#dc2626;">✗ '+e+'</span>'; }
+      }
+
+      async function npAddLocal(i,btn){
+        var c=npCands[i]; if(!c) return;
+        var box=document.getElementById('npResult');
+        btn.disabled=true; btn.textContent='…';
+        var fd=new FormData();
+        fd.append('target_ref',c.ref); fd.append('pack_id','{{ pack.id }}');
+        fd.append('shop',document.getElementById('npShop').value);
+        try{
+          var r=await fetch('/v2/lab/multi-sku/add-pack-sku',{method:'POST',body:fd});
+          var d=await r.json();
+          if(d.ok){ btn.textContent='✓ 已加'; box.innerHTML='<div style="color:#059669;">✓ 已作为本地草稿 SKU 加入。<a href="'+d.detail_url+'" target="_blank">打开产品详情 →</a> 确认后再推送平台。</div>'; }
+          else{ btn.disabled=false; btn.textContent='加为SKU(本地)'; box.innerHTML='<div style="color:#dc2626;">✗ '+(d.error||'失败')+'</div>'; }
+        }catch(e){ btn.disabled=false; btn.textContent='加为SKU(本地)'; box.innerHTML='<div style="color:#dc2626;">✗ '+e+'</div>'; }
+      }
+      </script>
     </div>
 
     <div>

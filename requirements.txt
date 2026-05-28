@@ -1,3 +1,10 @@
+# =============================================================================
+# requirements.txt — complete dependency set for AI-Sticker-Ecommerce.
+# Derived from a full static scan of every imported third-party package
+# (181 .py files). Versions are minimum floors; the comment after each shows
+# where it's used when not obvious.
+# =============================================================================
+
 # Core Dependencies
 python-dotenv>=1.0.0
 pydantic>=2.0.0
@@ -6,11 +13,14 @@ pyyaml>=6.0
 # AI Services
 anthropic>=0.18.0
 openai>=1.0.0
-google-genai>=1.67.0
+google-genai>=1.67.0        # imported as `google.genai`
 
 # Web Framework
+# fastapi[all] bundles starlette, jinja2, python-multipart, httpx, etc. that
+# the app relies on (Jinja2 templates + form parsing) without importing by name.
 fastapi[all]>=0.115.0
 uvicorn[standard]>=0.34.0
+starlette>=0.40.0           # imported directly (src/web middleware/responses)
 apscheduler>=3.10.0
 
 # CLI Tools
@@ -18,10 +28,14 @@ click>=8.1.0
 rich>=13.0.0
 
 # Image Processing
-Pillow>=10.0.0
+Pillow>=10.0.0              # imported as `PIL`
 
 # Markdown Processing
 Markdown>=3.5.0
+
+# Document / Spreadsheet Export
+python-docx>=1.1.0          # video script .docx export (imported as `docx`)
+openpyxl>=3.1.0             # TKShop / product-review .xlsx export
 
 # RSS / Trend Fetching
 feedparser>=6.0.0
@@ -30,4 +44,26 @@ feedparser>=6.0.0
 playwright>=1.40.0
 
 # Utilities
-requests>=2.31.0
+requests>=2.32.4            # 2.32.4 fixes CVE-2024-47081 (.netrc credential leak)
+httpx>=0.27.0               # direct HTTP client (AI media fetch / API calls)
+urllib3>=2.0.0              # retry helper in trend fetcher; also bundled by requests
+
+# Testing (dev)
+pytest>=8.0.0
+
+# Optional: trend enrichment (code falls back gracefully if these are absent)
+# praw>=7.7.0               # authenticated Reddit fetcher (trend_fetcher/fetchers/reddit.py)
+# pytrends>=4.9.0           # extra Google Trends detail (trend_fetcher/fetchers/google_trends.py)
+
+# -----------------------------------------------------------------------------
+# System dependencies (NOT pip-installable — install via your OS package
+# manager and make sure they're on PATH):
+#
+#   ffmpeg + ffprobe   Required by the video-narration feature, which shells
+#                      out to them (see src/services/video_narration/media.py)
+#                      for ffprobe duration/stream probing, audio atempo fit,
+#                      and the final subtitle burn + audio mux.
+#     Windows : winget install Gyan.FFmpeg   (or  choco install ffmpeg)
+#     macOS   : brew install ffmpeg
+#     Debian  : sudo apt-get install ffmpeg
+# -----------------------------------------------------------------------------

@@ -39,43 +39,16 @@
     🧪 <b>实验性功能</b> · 数据存于独立表 <code>lab_msku_products</code> / <code>lab_msku_product_skus</code>。发布走 multi-channel-api 新端点 <code>/products/sticker_multi_sku_publish</code>。不影响现有 TKShop 产品。
   </div>
 
-  <!-- 创建表单 -->
-  <section class="panel" style="padding:18px;margin-bottom:18px;">
-    <h3 style="margin:0 0 8px;font-size:15px;">＋ 新建多 SKU 产品</h3>
-    <form method="post" action="/v2/lab/multi-sku/create" class="lab-form" id="lab-create-form">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        <div>
-          <label for="lab-topic">热点（topic）</label>
-          <select id="lab-topic" name="topic_id" required>
-            <option value="">— 选择 —</option>
-            {% for t in topics %}
-            <option value="{{ t.id }}">#{{ t.id }} {{ t.topic_name }} · {{ t.pack_count }} 个 pack</option>
-            {% endfor %}
-          </select>
-          <p class="help">只显示已经有 ≥ 1 个 pack 的 topic。</p>
-        </div>
-        <div>
-          <label for="lab-attr-name">变体维度名（sales_attribute_name）</label>
-          <input type="text" id="lab-attr-name" name="sales_attribute_name" value="Theme" maxlength="50">
-          <p class="help">TikTok 上买家看到的下拉菜单标题，如 <code>Theme</code> / <code>Style</code> / <code>Pack Type</code>。</p>
-        </div>
-      </div>
-      <label>选择要变成 SKU 的 packs（这个 topic 下的）</label>
-      <div id="lab-pack-list">
-        <p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">先选 topic，pack 列表会自动加载</p>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px;">
-        <div>
-          <label for="lab-title">标题（可选，留空 AI 后自动用 topic 名）</label>
-          <input type="text" id="lab-title" name="title" maxlength="255" placeholder="例如：Father's Day Sticker Bundle - 3 Pack Themes">
-        </div>
-        <div>
-          <label for="lab-desc">商品描述 HTML（可选，可后续在详情页编辑）</label>
-          <textarea id="lab-desc" name="description_html" rows="4" placeholder="<p>...</p>"></textarea>
-        </div>
-      </div>
-      <button type="submit" style="margin-top:14px;padding:9px 22px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">＋ 创建</button>
-    </form>
+  <!-- 新建入口（可视化单页） -->
+  <section class="panel" style="padding:18px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+    <div>
+      <h3 style="margin:0 0 4px;font-size:15px;">＋ 新建多 SKU 产品</h3>
+      <p class="help" style="margin:0;">选热点 → 点封面挑卡包 → AI 生成标题/描述 → 一个 listing 多个 SKU 变体。</p>
+    </div>
+    <a href="/v2/lab/multi-sku/new"
+       style="padding:10px 22px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:700;text-decoration:none;font-size:14px;white-space:nowrap;">
+      🎨 可视化创建 →
+    </a>
   </section>
 
   <!-- 已有产品 -->
@@ -100,44 +73,9 @@
       </form>
     </div>
     {% else %}
-    <p class="muted" style="text-align:center;padding:40px 0;">尚无 Lab 多 SKU 产品。用上面的表单创建第一个。</p>
+    <p class="muted" style="text-align:center;padding:40px 0;">尚无 Lab 多 SKU 产品。点上方「可视化创建」做第一个。</p>
     {% endfor %}
   </section>
 </div>
-
-<script>
-(function(){
-  const topicSel = document.getElementById('lab-topic');
-  const list = document.getElementById('lab-pack-list');
-  topicSel.addEventListener('change', async () => {
-    const tid = topicSel.value;
-    if (!tid) {
-      list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">先选 topic，pack 列表会自动加载</p>';
-      return;
-    }
-    list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">⏳ 加载中…</p>';
-    try {
-      const r = await fetch(`/v2/lab/multi-sku/topics/${tid}/packs`);
-      const d = await r.json();
-      if (!d.ok || !d.packs.length) {
-        list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;text-align:center;padding:14px;margin:0;">该 topic 下没有 pack。</p>';
-        return;
-      }
-      list.innerHTML = '';
-      d.packs.forEach(p => {
-        const lbl = document.createElement('label');
-        lbl.innerHTML = `
-          <input type="checkbox" name="pack_ids" value="${p.id}">
-          <span><b>#${p.id}</b> ${p.display_name || p.pack_uid || '(unnamed)'}
-            <span style="color:var(--text-muted);">· ${p.total_stickers || 0} 张 · ${p.pack_archetype || ''} · ${p.palette || ''}</span>
-          </span>`;
-        list.appendChild(lbl);
-      });
-    } catch (e) {
-      list.innerHTML = `<p style="color:var(--danger);font-size:12px;text-align:center;padding:14px;margin:0;">加载失败: ${e.message}</p>`;
-    }
-  });
-})();
-</script>
 
 {% endblock %}

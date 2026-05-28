@@ -144,6 +144,20 @@ def _path_to_v2_url(disk_path: str) -> str:
     return "/v2-outputs/" + p[idx + len(marker):]
 
 
+def _versioned_product_image_url(img: dict[str, Any]) -> str:
+    url = _path_to_v2_url(img.get("local_path") or "")
+    if not url:
+        return ""
+    cache_key = int(img.get("created_at") or 0)
+    try:
+        lp = Path(img.get("local_path") or "")
+        if lp.exists():
+            cache_key = max(cache_key, int(lp.stat().st_mtime))
+    except Exception:
+        pass
+    return f"{url}?v={cache_key}" if cache_key else url
+
+
 def _safe_v2_redirect(back: Any, fallback: str) -> str:
     """Use caller-provided return path only inside the V2 namespace."""
     path = str(back or "").strip()
@@ -2437,9 +2451,107 @@ def _kickoff_post_upload(video_id: int, *, include_caption: bool = True) -> None
         )
 
 
+def _cleanup_upload_tmp(tmp_path: str) -> None:
+    """Remove the temp file (and its dedicated dir) we staged the upload into."""
+    try:
+        p = Path(tmp_path)
+        if p.exists():
+            p.unlink()
+        # We mkdtemp() a dedicated dir per upload, so it should now be empty.
+        try:
+            p.parent.rmdir()
+        except OSError:
+            pass
+    except Exception:
+        logger.warning("upload tmp cleanup failed for %s", tmp_path)
+
+
+def _process_new_video(
+    video_id: int,
+    *,
+    tmp_path: str,
+    original_filename: str,
+    scheduled_at: int,
+    dispatch_now: bool,
+    generate_caption: bool,
+) -> None:
+    """Heavy half of video creation, run off the request thread.
+
+    Creating a video touches a lot of slow business logic (copying the file
+    into the pack tree, AI caption, Gemini narration + voiceover, optional
+    Blotato dispatch). We persist the upload bytes + create the row inline so
+    the operator gets an instant redirect, then this runs everything else in
+    one background task. The video row already exists, so the list page shows
+    it immediately with live status pills as each step completes.
+    """
+    svc = get_tk_video_service()
+
+    file_saved = False
+    if tmp_path:
+        try:
+            svc.save_video_file(
+                video_id, Path(tmp_path),
+                original_filename=original_filename or "local.mp4",
+            )
+            file_saved = True
+        except Exception:
+            logger.exception("video #%d: background save_video_file failed", video_id)
+        finally:
+            _cleanup_upload_tmp(tmp_path)
+
+    if scheduled_at and not dispatch_now:
+        svc.schedule_video(video_id, scheduled_at)
+
+    # Caption is generated whenever the form asked for it OR a file landed
+    # (every uploaded video gets a caption auto-generated). It doesn't need
+    # the file — it reads pack metadata + the one-liner.
+    want_caption = generate_caption or file_saved
+
+    if dispatch_now:
+        # The published post must carry the caption, so generate it *before*
+        # dispatching (inline in this thread). Narration is independent of
+        # publishing the raw file, so fire it in parallel.
+        if want_caption:
+            try:
+                svc.generate_caption(video_id)
+            except Exception:
+                logger.exception("video #%d: background caption gen failed", video_id)
+        if file_saved:
+            from src.services.video_narration import get_video_narration_service
+            run_async(
+                f"narration:{video_id}",
+                get_video_narration_service().generate, video_id,
+                label=f"配音独白 video #{video_id}",
+            )
+        v = svc.get_video(video_id)
+        if v and v.get("local_video_path") and (v.get("blotato_account_id") or "").strip():
+            try:
+                svc.dispatch_video(video_id)
+            except Exception:
+                logger.exception("video #%d: background dispatch failed", video_id)
+        else:
+            logger.warning(
+                "video #%d: dispatch skipped — missing video file or Blotato account",
+                video_id,
+            )
+    else:
+        # No immediate publish: fire caption + narration as their own parallel
+        # tasks so the list page's "AI 分析中" / narration indicators light up.
+        if file_saved:
+            _kickoff_post_upload(video_id, include_caption=want_caption)
+        elif generate_caption:
+            run_async(
+                f"caption_gen:{video_id}",
+                svc.generate_caption, video_id,
+                label=f"AI 文案 video #{video_id}",
+            )
+
+
 @router.post("/videos")
 async def v2_video_create(request: Request):
-    """Create video row, then save uploaded file (multipart/form-data)."""
+    """Create the video row + persist the upload inline, then run all the slow
+    work (file copy, AI caption, narration, dispatch) in one background task so
+    the request returns immediately."""
     form = await request.form()
     try:
         pack_id = int(form.get("pack_id") or 0)
@@ -2452,7 +2564,6 @@ async def v2_video_create(request: Request):
     one_liner = (form.get("video_one_liner") or "").strip()
     scheduled_at = _parse_local_datetime(form.get("scheduled_at"))
     generate_caption = (form.get("generate_caption") or "").strip() == "1"
-    caption_mode = (form.get("caption_mode") or "sync").strip()
     dispatch_now = (form.get("dispatch_now") or "").strip() == "1"
     upload = form.get("video_file")
 
@@ -2466,64 +2577,40 @@ async def v2_video_create(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # If a file was uploaded, save it via PackStore.
-    file_saved = False
-    if upload is not None and getattr(upload, "filename", ""):
+    # Read the multipart upload into a stable temp file NOW — the stream can't
+    # be read after we respond. Kept until the background task moves it into
+    # the pack tree (which then cleans it up).
+    has_file = upload is not None and bool(getattr(upload, "filename", ""))
+    tmp_path = ""
+    if has_file:
         import tempfile
-        tmp = Path(tempfile.mkdtemp()) / upload.filename
-        with open(tmp, "wb") as fh:
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"vidup_{video_id}_"))
+        dest = tmp_dir / upload.filename
+        with open(dest, "wb") as fh:
             shutil.copyfileobj(upload.file, fh)
-        try:
-            svc.save_video_file(video_id, tmp, original_filename=upload.filename)
-            file_saved = True
-        finally:
-            try:
-                tmp.unlink()
-                tmp.parent.rmdir()
-            except Exception:
-                pass
+        tmp_path = str(dest)
 
-    # If "立即发布" is checked, ignore the scheduled_at field — dispatch happens
-    # below after caption generation is kicked off.
-    if scheduled_at and not dispatch_now:
-        svc.schedule_video(video_id, scheduled_at)
-    caption_ready = False
-    caption_error = ""
-    if generate_caption:
-        if caption_mode == "async":
-            run_async(
-                f"caption_gen:{video_id}",
-                svc.generate_caption, video_id,
-                label=f"AI 文案 video #{video_id}",
-            )
-        else:
-            try:
-                svc.generate_caption(video_id)
-                caption_ready = True
-            except Exception as e:
-                logger.exception("sync caption generation failed for video #%d", video_id)
-                caption_error = str(e)[:180]
-
-    # Auto-process every upload: full narration (voiceover + subtitles) always;
-    # caption too unless the form already triggered it above.
-    if file_saved:
-        _kickoff_post_upload(video_id, include_caption=not generate_caption)
-
-    dispatch_pending = False
+    # Cheap preconditions we can check without the saved file, so obvious
+    # mistakes surface instantly instead of failing silently in the worker.
     dispatch_error = ""
     if dispatch_now:
-        v = svc.get_video(video_id)
-        if not v or not v.get("local_video_path"):
+        if not has_file:
             dispatch_error = "尚未上传视频文件，无法立即发布"
-        elif not (v.get("blotato_account_id") or "").strip():
+        elif not blotato_account_id:
             dispatch_error = "未指定 Blotato 账号，无法立即发布"
-        else:
-            run_async(
-                f"dispatch_now:{video_id}",
-                svc.dispatch_video, video_id,
-                label=f"立即发布 video #{video_id}",
-            )
-            dispatch_pending = True
+    do_dispatch = dispatch_now and not dispatch_error
+
+    run_async(
+        f"video_create:{video_id}",
+        _process_new_video,
+        video_id,
+        tmp_path=tmp_path,
+        original_filename=getattr(upload, "filename", "") if has_file else "",
+        scheduled_at=scheduled_at,
+        dispatch_now=do_dispatch,
+        generate_caption=generate_caption,
+        label=f"创建视频 #{video_id}（文件 / AI 文案 / 配音）",
+    )
 
     target = _safe_v2_redirect(form.get("return_to"), "/v2/videos")
     return RedirectResponse(
@@ -2532,10 +2619,9 @@ async def v2_video_create(request: Request):
             {
                 "open_video": video_id,
                 "video_created": 1,
-                "caption_ready": 1 if caption_ready else None,
-                "caption_pending": 1 if (generate_caption and caption_mode == "async") else None,
-                "caption_error": caption_error or None,
-                "dispatch_pending": 1 if dispatch_pending else None,
+                "processing": 1,
+                "caption_pending": 1 if (generate_caption or has_file) else None,
+                "dispatch_pending": 1 if do_dispatch else None,
                 "dispatch_error": dispatch_error or None,
             },
         ),
@@ -3711,7 +3797,7 @@ def v2_product_detail(request: Request, product_id: int):
             conn.close()
     p["pack_cover_url"] = cover
     for img in p.get("images", []):
-        img["url"] = _path_to_v2_url(img.get("local_path") or "")
+        img["url"] = _versioned_product_image_url(img)
         img["created_human"] = _fmt_ts(img.get("created_at"))
     for log in p.get("publish_logs", []):
         log["created_human"] = _fmt_ts(log.get("created_at"))
@@ -3860,7 +3946,7 @@ def v2_product_auto_design_status(product_id: int):
     svc = get_tkshop_service()
     images = svc.list_product_images(product_id)
     images_with_url = [
-        {**i, "url": _path_to_v2_url(i.get("local_path") or "")}
+        {**i, "url": _versioned_product_image_url(i)}
         for i in images if i.get("source") == "ai"
     ]
     return JSONResponse({
@@ -4163,6 +4249,12 @@ async def v2_lab_multi_sku_create(request: Request):
     sales_attribute_name = (form.get("sales_attribute_name") or "Theme").strip() or "Theme"
     title = (form.get("title") or "").strip()
     description_html = (form.get("description_html") or "").strip()
+    raw_sp = (form.get("selling_points") or "").strip()
+    raw_kw = (form.get("keywords") or "").strip()
+    selling_points = [l.strip().lstrip("-*•").strip() for l in raw_sp.splitlines() if l.strip()]
+    keywords = [l.strip().lstrip("#").strip() for l in raw_kw.splitlines() if l.strip()]
+    detail_main_raw_text = (form.get("detail_main_raw_text") or "").strip()
+    shop = (form.get("shop") or "").strip()
 
     from src.services.lab_multi_sku import get_lab_multi_sku_service
     svc = get_lab_multi_sku_service()
@@ -4171,10 +4263,95 @@ async def v2_lab_multi_sku_create(request: Request):
             topic_id=topic_id, pack_ids=pack_ids,
             sales_attribute_name=sales_attribute_name,
             title=title, description_html=description_html,
+            selling_points=selling_points, keywords=keywords,
+            detail_main_raw_text=detail_main_raw_text,
+            shop=shop,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RedirectResponse(url=f"/v2/lab/multi-sku/{pid}", status_code=303)
+
+
+@router.get("/lab/multi-sku/new", response_class=HTMLResponse)
+def v2_lab_multi_sku_new(request: Request):
+    """Single-page visual builder for scenario ①: pick topic + shop, select
+    packs by cover, AI-generate title/description, create."""
+    import sqlite3 as _sql
+    conn = _sql.connect("data/ops_workbench.db")
+    conn.row_factory = _sql.Row
+    try:
+        topics = conn.execute(
+            """SELECT ht.id, ht.topic_name,
+                      (SELECT COUNT(DISTINCT pk.id)
+                         FROM topic_plans tp
+                    LEFT JOIN pack_series ps ON ps.plan_id = tp.id
+                    LEFT JOIN packs pk       ON pk.series_id = ps.id
+                        WHERE tp.topic_id = ht.id) AS pack_count
+                 FROM hot_topics ht ORDER BY ht.id DESC LIMIT 200"""
+        ).fetchall()
+        topics = [dict(t) for t in topics if (t["pack_count"] or 0) >= 1]
+    finally:
+        conn.close()
+    return templates.TemplateResponse(
+        "v2_lab_multi_sku_new.html",
+        {
+            "request": request,
+            "page_title": "新建多 SKU 产品",
+            "topics": topics,
+            "tkshop_shops": TKSHOP_SHOPS,
+            "tkshop_default_shop": TKSHOP_DEFAULT_SHOP,
+        },
+    )
+
+
+@router.post("/lab/multi-sku/ai-listing")
+async def v2_lab_multi_sku_ai_listing(request: Request):
+    """JSON: AI-generate {title, description_html} for the selected topic+packs."""
+    form = await request.form()
+    try:
+        topic_id = int(form.get("topic_id") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad topic_id"}, status_code=400)
+    pack_ids = []
+    for v in (form.getlist("pack_ids") if hasattr(form, "getlist") else []):
+        try:
+            pack_ids.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    sales_attribute_name = (form.get("sales_attribute_name") or "Theme").strip() or "Theme"
+    from src.services.lab_multi_sku import get_lab_multi_sku_service
+    try:
+        out = get_lab_multi_sku_service().ai_generate_listing(
+            topic_id, pack_ids, sales_attribute_name=sales_attribute_name,
+        )
+    except Exception as e:
+        logger.exception("msku ai-listing failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse({"ok": True, **out})
+
+
+@router.post("/lab/multi-sku/{product_id:int}/ai-listing")
+async def v2_lab_multi_sku_product_ai_listing(product_id: int):
+    """JSON: AI-generate {title, description_html} for an EXISTING product,
+    deriving topic + packs from its own SKUs (used by the detail page)."""
+    from src.services.lab_multi_sku import get_lab_multi_sku_service
+    svc = get_lab_multi_sku_service()
+    p = svc.get_product(product_id)
+    if not p:
+        return JSONResponse({"ok": False, "error": "product not found"}, status_code=404)
+    pack_ids = [s["pack_id"] for s in (p.get("skus") or []) if s.get("pack_id")]
+    variant_values = [s["sales_attribute_value"] for s in (p.get("skus") or []) if s.get("pack_id")]
+    try:
+        out = svc.ai_generate_listing(
+            p.get("topic_id") or 0,
+            pack_ids,
+            sales_attribute_name=p.get("sales_attribute_name") or "Theme",
+            variant_values=variant_values,
+        )
+    except Exception as e:
+        logger.exception("msku product ai-listing failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse({"ok": True, **out})
 
 
 @router.get("/lab/multi-sku/topics/{topic_id:int}/packs")
@@ -4185,6 +4362,7 @@ def v2_lab_multi_sku_topic_packs(topic_id: int):
     try:
         rows = conn.execute(
             """SELECT pk.id, pk.display_name, pk.pack_uid, pk.total_stickers,
+                      pk.cover_image_path,
                       ps.series_name, ps.pack_archetype, ps.palette
                  FROM topic_plans tp
             LEFT JOIN pack_series ps ON ps.plan_id = tp.id
@@ -4195,7 +4373,226 @@ def v2_lab_multi_sku_topic_packs(topic_id: int):
         ).fetchall()
     finally:
         conn.close()
-    return JSONResponse({"ok": True, "packs": [dict(r) for r in rows]})
+    packs = []
+    for r in rows:
+        d = dict(r)
+        d["cover_url"] = _path_to_v2_url(d.get("cover_image_path") or "")
+        packs.append(d)
+    return JSONResponse({"ok": True, "packs": packs})
+
+
+# ---------------------------------------------------------------------------
+# Product catalog (scenario ②): hierarchical, progressive-loading merge finder
+# ---------------------------------------------------------------------------
+
+@router.get("/lab/product-catalog", response_class=HTMLResponse)
+def v2_product_catalog(request: Request):
+    """Standalone catalog page: browse the major→sub→product tree; per product,
+    run matching (on demand, AJAX) and do a local merge."""
+    from src.services.product_catalog import get_product_catalog
+    cat = get_product_catalog()
+    shops_tree = []
+    for shop in (cat.list_shops() or TKSHOP_SHOPS):
+        tree = []
+        for m in cat.load_majors(shop):
+            subs = [
+                {**s, "products": cat.load_products(shop, m["slug"], s["slug"])}
+                for s in cat.load_subs(shop, m["slug"])
+            ]
+            tree.append({**m, "subs": subs})
+        shops_tree.append({"shop": shop, "tree": tree})
+    return templates.TemplateResponse(
+        "v2_product_catalog.html",
+        {
+            "request": request,
+            "page_title": "🗂️ 产品目录 · 分层合并",
+            "shops_tree": shops_tree,
+            "empty": all(not st["tree"] for st in shops_tree),
+            "tkshop_shops": TKSHOP_SHOPS,
+        },
+    )
+
+
+@router.get("/lab/product-catalog/match")
+def v2_product_catalog_match(ref: str, shop: str = ""):
+    """JSON: classify a product down the tree and return its merge candidates
+    (the same-theme products in its sub-category, ranked)."""
+    from src.services.product_catalog.matcher import get_catalog_matcher
+    try:
+        out = get_catalog_matcher().find_candidates_for_ref(ref, shop=shop.strip())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    except Exception as e:
+        logger.exception("catalog match failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse({"ok": True, **out})
+
+
+@router.post("/lab/product-catalog/merge-local")
+async def v2_product_catalog_merge_local(request: Request):
+    """Sub-case 1: fold new_ref + target_refs into one multi-SKU product
+    (title/description from the new product)."""
+    form = await request.form()
+    new_ref = (form.get("new_ref") or "").strip()
+    target_refs = [
+        t.strip() for t in (form.getlist("target_refs") if hasattr(form, "getlist") else [])
+        if t.strip()
+    ]
+    if not new_ref or not target_refs:
+        return JSONResponse({"ok": False, "error": "new_ref and target_refs required"}, status_code=400)
+    from src.services.product_catalog.merge import get_merge_service
+    try:
+        res = get_merge_service().merge_local(new_ref, target_refs)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("catalog merge-local failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse(res)
+
+
+@router.post("/lab/product-catalog/rebuild")
+def v2_product_catalog_rebuild():
+    """Re-cluster every shop's library (local + platform live) into fresh trees
+    (one LLM clustering call per shop)."""
+    from src.services.product_catalog.classifier import get_catalog_classifier
+    try:
+        res = get_catalog_classifier().rebuild_all(list(TKSHOP_SHOPS))
+    except Exception as e:
+        logger.exception("catalog rebuild failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse(res)
+
+
+@router.post("/lab/multi-sku/from-pack/{pack_id:int}")
+async def v2_lab_multi_sku_from_pack(request: Request, pack_id: int):
+    """②a multi-SKU NEW: start a new multi-SKU product seeded with this pack as
+    its first SKU, then open it so the user can add more SKUs / AI-fill."""
+    form = await request.form()
+    shop = (form.get("shop") or "").strip()
+    from src.services.lab_multi_sku import get_lab_multi_sku_service
+    try:
+        pid = get_lab_multi_sku_service().create_from_pack(pack_id, shop=shop)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return RedirectResponse(url=f"/v2/lab/multi-sku/{pid}", status_code=303)
+
+
+@router.get("/lab/multi-sku/pack-match")
+def v2_lab_multi_sku_pack_match(pack_id: int, shop: str = ""):
+    """②b: classify a pack down a shop's catalog tree and return same-theme
+    existing products it could be added to as a new SKU."""
+    from src.services.product_catalog.matcher import get_catalog_matcher
+    try:
+        out = get_catalog_matcher().find_candidates_for_pack(pack_id, shop.strip())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    except Exception as e:
+        logger.exception("pack-match failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse({"ok": True, **out})
+
+
+def _resolve_target_tiktok(target_ref: str, shop: str) -> tuple[str, str, Optional[JSONResponse]]:
+    """target_ref → (tiktok_id, shop, error_response). Platform refs carry the
+    id; published single-SKU (tkshop) refs are looked up."""
+    kind, _, rid = target_ref.partition(":")
+    if kind == "platform":
+        return rid, shop, None
+    if kind == "tkshop":
+        import sqlite3 as _sql
+        conn = _sql.connect("data/ops_workbench.db"); conn.row_factory = _sql.Row
+        try:
+            r = conn.execute("SELECT tiktok_product_id, shop FROM tkshop_products WHERE id=?",
+                             (int(rid),)).fetchone()
+        finally:
+            conn.close()
+        if not r or not (r["tiktok_product_id"] or "").strip():
+            return "", shop, JSONResponse(
+                {"ok": False, "error": "该单SKU产品未发布到平台,无法并入;请改用「多SKU新建」"},
+                status_code=400)
+        return r["tiktok_product_id"].strip(), shop or (r["shop"] or ""), None
+    return "", shop, JSONResponse(
+        {"ok": False, "error": f"目标类型 {kind} 不支持平台合并"}, status_code=400)
+
+
+@router.get("/lab/multi-sku/merge-preview")
+def v2_lab_multi_sku_merge_preview(pack_id: int, target_ref: str, shop: str = ""):
+    """②b preview: fetch the live target + project the post-merge result for
+    review BEFORE the irreversible write. Self-heals: stale (deleted) products
+    come back flagged so the UI can drop them."""
+    tiktok_id, shop, err = _resolve_target_tiktok(target_ref, shop.strip())
+    if err:
+        return err
+    from src.services.product_catalog.merge import get_merge_service
+    try:
+        out = get_merge_service().preview_platform_merge(pack_id, tiktok_id, shop)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    except Exception as e:
+        logger.exception("merge-preview failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    if out.get("stale") and tiktok_id:
+        # self-heal: the product is gone on the platform → drop it from the catalog
+        from src.services.product_catalog import get_product_catalog
+        out["pruned"] = get_product_catalog().prune_product(tiktok_id)
+    if out.get("ok") and out.get("new_variant"):
+        ip = out["new_variant"].get("image_path") or ""
+        out["new_variant"]["image_url"] = _path_to_v2_url(ip) if ip else ""
+    return JSONResponse(out)
+
+
+@router.post("/lab/multi-sku/add-pack-sku")
+async def v2_lab_multi_sku_add_pack_sku(request: Request):
+    """②b: add a pack as a new SKU to a chosen existing product.
+
+    Local multi-SKU target (lab_msku) → safe local add (push from the detail
+    page when ready). Platform/single-SKU targets need the live-merge path
+    (情况2), not yet wired — returned with a clear flag."""
+    form = await request.form()
+    target_ref = (form.get("target_ref") or "").strip()
+    try:
+        pack_id = int(form.get("pack_id") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "bad pack_id"}, status_code=400)
+    kind, _, rid = target_ref.partition(":")
+
+    if kind == "lab_msku":
+        from src.services.lab_multi_sku import get_lab_multi_sku_service
+        svc = get_lab_multi_sku_service()
+        try:
+            sku_id = svc.add_sku_from_pack(int(rid), pack_id)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        except Exception as e:
+            logger.exception("add-pack-sku failed")
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+        return JSONResponse({
+            "ok": True, "added": sku_id is not None,
+            "already_present": sku_id is None,
+            "product_id": int(rid),
+            "detail_url": f"/v2/lab/multi-sku/{rid}",
+            "note": "已加为本地草稿 SKU;在详情页确认后推送到平台",
+        })
+
+    # platform live / published single-SKU → 情况2: add SKU into the live link.
+    shop = (form.get("shop") or "").strip()
+    tiktok_id, shop, err = _resolve_target_tiktok(target_ref, shop)
+    if err:
+        return err
+    new_variant_value = (form.get("new_variant_value") or "").strip()
+    refresh_desc = (form.get("refresh_desc") or "").strip().lower() in ("1", "true", "on", "yes")
+    from src.services.product_catalog.merge import get_merge_service
+    try:
+        res = get_merge_service().merge_into_platform(
+            pack_id, tiktok_id, shop,
+            new_variant_value=new_variant_value, refresh_desc=refresh_desc)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("merge_into_platform failed")
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}, status_code=500)
+    return JSONResponse(res, status_code=200 if res.get("ok") else 502)
 
 
 @router.get("/lab/multi-sku/{product_id:int}", response_class=HTMLResponse)
@@ -4266,6 +4663,7 @@ async def v2_lab_multi_sku_edit_meta(request: Request, product_id: int):
         title=form.get("title") or "",
         description_html=form.get("description_html") or "",
         selling_points=sps, keywords=kws,
+        detail_main_raw_text=(form.get("detail_main_raw_text") or "").strip() or None,
         category_id=(form.get("category_id") or "").strip() or None,
         sales_attribute_name=(form.get("sales_attribute_name") or "").strip() or None,
         primary_pack_id=primary_pack_id,

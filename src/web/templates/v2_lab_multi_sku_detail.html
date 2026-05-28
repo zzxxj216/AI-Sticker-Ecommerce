@@ -127,12 +127,21 @@
 
   <!-- Listing 元信息 -->
   <section class="panel" style="padding:18px;margin-bottom:16px;">
-    <h3 style="margin:0 0 8px;font-size:15px;">📝 Listing 元信息</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+      <h3 style="margin:0;font-size:15px;">📝 Listing 元信息</h3>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="meta-ai-status" style="font-size:12px;color:var(--text-muted);"></span>
+        <button type="button" id="meta-ai"
+                style="padding:7px 14px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:12px;">
+          🤖 AI 生成标题 + 描述
+        </button>
+      </div>
+    </div>
     <form method="post" action="/v2/lab/multi-sku/{{ product.id }}/edit-meta" class="lab-meta-form">
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
         <div>
           <label>title (≤255)</label>
-          <input type="text" name="title" value="{{ product.title }}" maxlength="255">
+          <input type="text" id="meta-title" name="title" value="{{ product.title }}" maxlength="255">
         </div>
         <div>
           <label>category_id</label>
@@ -154,19 +163,20 @@
         </div>
       </div>
       <label>description_html</label>
-      <textarea name="description_html" rows="6">{{ product.description_html }}</textarea>
+      <textarea id="meta-desc" name="description_html" rows="6">{{ product.description_html }}</textarea>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;">
         <div>
           <label>selling_points（每行一条）</label>
-          <textarea name="selling_points" rows="5">{% for s in product.selling_points %}{{ s }}
+          <textarea id="meta-selling-points" name="selling_points" rows="5">{% for s in product.selling_points %}{{ s }}
 {% endfor %}</textarea>
         </div>
         <div>
           <label>keywords（每行一条）</label>
-          <textarea name="keywords" rows="5">{% for k in product.keywords %}{{ k }}
+          <textarea id="meta-keywords" name="keywords" rows="5">{% for k in product.keywords %}{{ k }}
 {% endfor %}</textarea>
         </div>
       </div>
+      <textarea id="meta-raw" name="detail_main_raw_text" hidden>{{ product.detail_main_raw_text }}</textarea>
       <button type="submit" style="margin-top:14px;padding:9px 22px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;">💾 保存元信息</button>
     </form>
   </section>
@@ -255,5 +265,35 @@
     </details>
   </section>
 </div>
+
+<script>
+(function(){
+  const btn = document.getElementById('meta-ai');
+  const status = document.getElementById('meta-ai-status');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const old = btn.textContent;
+    btn.textContent = '⏳ 生成中…'; btn.disabled = true;
+    status.style.color = 'var(--text-muted)'; status.textContent = '';
+    try {
+      const r = await fetch('/v2/lab/multi-sku/{{ product.id }}/ai-listing', {method:'POST'});
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      if (d.title) document.getElementById('meta-title').value = d.title;
+      if (d.description_html) document.getElementById('meta-desc').value = d.description_html;
+      if (Array.isArray(d.selling_points)) document.getElementById('meta-selling-points').value = d.selling_points.join('\n');
+      if (Array.isArray(d.keywords)) document.getElementById('meta-keywords').value = d.keywords.join('\n');
+      if (d.detail_main_raw_text) document.getElementById('meta-raw').value = d.detail_main_raw_text;
+      if (!d.title && !d.description_html && !d.selling_points && !d.keywords){
+        status.style.color = 'var(--danger)'; status.textContent = 'AI 返回为空，请重试';
+      } else {
+        status.style.color = '#16a34a'; status.textContent = '✓ 已填充标题、描述、卖点和关键词，记得保存';
+      }
+    } catch(e){
+      status.style.color = 'var(--danger)'; status.textContent = 'AI 失败: ' + e.message;
+    } finally { btn.textContent = old; btn.disabled = false; }
+  });
+})();
+</script>
 
 {% endblock %}
