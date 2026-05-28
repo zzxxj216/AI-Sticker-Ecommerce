@@ -153,15 +153,29 @@
       <section class="panel lp-panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
           <h3 style="margin:0;">主版本图集（{{ lp.images|length }} 张）</h3>
-          <button type="button" id="ai-modal-open"
-                  style="padding:6px 12px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">🎨 AI 生成主图+附图…</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            {% if lp.images %}
+            <form method="post" action="/v2/local-products/{{ lp.id }}/clear-images" style="margin:0;"
+                  onsubmit="return confirm('清空主版本图集的全部 {{ lp.images|length }} 张图记录？磁盘文件保留（仍可能被店铺 listing 引用）。\n\n确认清空？');">
+              <button type="submit"
+                      style="padding:6px 12px;background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">🧹 清空全部</button>
+            </form>
+            {% endif %}
+            <button type="button" id="ai-modal-open"
+                    style="padding:6px 12px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">🎨 AI 生成主图+附图…</button>
+          </div>
         </div>
-        <p class="muted" style="margin:-2px 0 12px;font-size:12px;">主版本的主图/附图。上架到新店时会自动复制成 listing 的图。「AI 生成」会替换现有 source='ai' 的项（手动上传的图保留）。</p>
+        <p class="muted" style="margin:-2px 0 12px;font-size:12px;">主版本的主图/附图。上架到新店时会自动复制成 listing 的图。「AI 生成」只会替换 source='ai' 的项；如需连同 source='manual' 的旧图一起清理，先点上面「🧹 清空全部」。</p>
         <div class="lp-image-grid">
           {% for img in lp.images %}
-          <div class="lp-image-tile">
+          <div class="lp-image-tile" data-img-id="{{ img.id }}">
             <img src="{{ img.url }}" alt="图 #{{ img.id }}">
-            <div class="role-pill">{{ img.role }} · {{ img.source }}</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:4px;">
+              <div class="role-pill">{{ img.role }} · {{ img.source }}</div>
+              <button type="button" class="lp-img-delete" title="删除这张"
+                      data-img-id="{{ img.id }}"
+                      style="background:none;border:1px solid var(--line);color:var(--danger);padding:2px 6px;border-radius:4px;font-size:11px;cursor:pointer;line-height:1;">🗑</button>
+            </div>
           </div>
           {% else %}
           <div class="muted">还没有主版本图。点击右上角「🎨 AI 生成主图+附图」一键生成。</div>
@@ -206,16 +220,8 @@
           <option value="1536x1024">1536×1024 (3:2 横)</option>
         </select>
       </div>
-      <div>
-        <label for="ai-shop">基于哪家店的 draft listing</label>
-        <select id="ai-shop">
-          {% for s in tkshop_shops %}
-          <option value="{{ s }}">🏪 {{ shop_label(s) }}</option>
-          {% endfor %}
-        </select>
-      </div>
     </div>
-    <p style="margin:0 0 10px;font-size:11px;color:var(--text-muted);">⚠ 会替换已有 AI 生成的图（手动上传的图保留）。若该店还没 listing，将自动创建一个 draft（不会上架）。</p>
+    <p style="margin:0 0 10px;font-size:11px;color:var(--text-muted);">⚠ 会替换已有 AI 生成的图（手动上传的图保留）。生成结果直接进入主版本图集；上架时会自动复制到各家店。</p>
     <div style="display:flex;justify-content:flex-end;">
       <button type="button" id="ai-gen-go"
               style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 开始生成</button>
@@ -295,7 +301,6 @@
         count:    parseInt(document.getElementById('ai-count').value, 10) || 4,
         language: document.getElementById('ai-language').value,
         size:     document.getElementById('ai-size').value,
-        shop:     document.getElementById('ai-shop').value,
       };
       const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_images_sync`, {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -317,6 +322,23 @@
       document.getElementById('ai-gen-status').textContent = '❌ 网络错误：' + err.message;
       btn.disabled = false; btn.textContent = '🚀 开始生成';
     }
+  });
+
+  // Per-image delete: AJAX so the tile vanishes without a full reload.
+  document.querySelectorAll('.lp-img-delete').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const imgId = btn.dataset.imgId;
+      if (!confirm('删除这张主版本图？磁盘文件保留。')) return;
+      try {
+        const r = await fetch(`/v2/local-product-images/${imgId}/delete-json`, {method:'POST'});
+        if (r.ok) {
+          const tile = btn.closest('.lp-image-tile');
+          if (tile) { tile.style.opacity = '0'; setTimeout(() => tile.remove(), 200); }
+        } else {
+          alert('删除失败');
+        }
+      } catch (e) { alert('网络错误：' + e.message); }
+    });
   });
 
   // Page-load resume: if a task is already running on the server (e.g.

@@ -2208,7 +2208,7 @@ async def v2_packs_batch_generate_products(request: Request):
     logger.info("batch-generate dispatched: %d packs (task=%s)", len(pack_ids), task_id)
     back = _safe_v2_redirect((form.get("return_to") or "").strip(), "/v2/packs")
     sep = "&" if "?" in back else "?"
-    msg = f"已派发 {len(pack_ids)} 个卡包到后台生成"
+    msg = f"已派发 {len(pack_ids)} 个卡包到后台生成（结果在「本地产品库」可见）"
     return RedirectResponse(
         url=f"{back}{sep}batch_summary={msg}",
         status_code=303,
@@ -4022,6 +4022,43 @@ async def v2_local_product_edit_detail(request: Request, local_product_id: int):
     )
 
 
+@router.post("/local-product-images/{image_id:int}/delete-json")
+async def v2_local_product_image_delete_json(image_id: int):
+    """Delete a single master image row. Mirrors the per-listing
+    /v2/products/images/{id}/delete-json so the master gallery can offer
+    the same trash icon. On-disk file is left in place — it may still be
+    referenced by a listing snapshot. Returns JSON.
+    """
+    svc = get_tkshop_service()
+    ok = svc.delete_local_product_image(image_id)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "image not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/local-products/{local_product_id:int}/clear-images")
+async def v2_local_product_clear_images(request: Request, local_product_id: int):
+    """Wipe every image row from the master gallery (both AI- and manual-
+    tagged). On-disk files stay; only the DB rows go. Useful when the
+    operator wants to start fresh before re-running AI gen.
+    """
+    import sqlite3 as _sql
+    conn = _sql.connect("data/ops_workbench.db")
+    try:
+        cur = conn.execute(
+            "DELETE FROM local_product_images WHERE local_product_id = ?",
+            (local_product_id,),
+        )
+        conn.commit()
+        deleted = cur.rowcount
+    finally:
+        conn.close()
+    logger.info("cleared %d master images for local_product #%d", deleted, local_product_id)
+    return RedirectResponse(
+        url=f"/v2/local-products/{local_product_id}", status_code=303,
+    )
+
+
 @router.post("/local-products/{local_product_id:int}/auto_design_images_sync")
 async def v2_local_product_auto_design_sync(request: Request, local_product_id: int):
     """Kick off master-level AI image generation. Returns immediately;
@@ -4485,8 +4522,12 @@ async def v2_product_create(request: Request, pack_id: int):
             pid,
             label=f"AI 详情 product #{pid}",
         )
+    # Land on the master page: that's the canonical editor in the master-
+    # first model. The underlying tkshop_products row still exists as a
+    # publish target but is invisible in the operator's normal flow.
+    lp_id = svc.get_or_create_local_product(pack_id)
     return RedirectResponse(
-        url=_safe_v2_redirect(form.get("return_to"), f"/v2/products/{pid}"),
+        url=_safe_v2_redirect(form.get("return_to"), f"/v2/local-products/{lp_id}"),
         status_code=303,
     )
 

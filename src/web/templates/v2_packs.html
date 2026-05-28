@@ -368,11 +368,13 @@
               <div class="pack-row-actions">
                 <a class="btn-sm" href="/v2/packs/{{ p.id }}">查看</a>
                 <button type="button" class="btn-sm" data-open-dialog="video-dialog-{{ p.id }}">发布 TK 视频</button>
-                {% if has_product %}
-                  {# Already-generated → send the operator to the product list filtered
-                     to this pack instead of re-opening the create dialog. #}
+                {% if has_local_product or has_product %}
+                  {# Already-generated → send the operator to the master catalog
+                     filtered to this pack. Master is the canonical editor;
+                     per-shop listings (tkshop_products) are publish targets
+                     and live behind 上架到 store X on the master detail page. #}
                   <a class="btn-sm" style="color:var(--accent-dark);border-color:var(--accent-glow);"
-                     href="/v2/products?pack_id={{ p.id }}">查看 TKShop →</a>
+                     href="/v2/local-products/?pack_id={{ p.id }}">→ 本地产品</a>
                 {% else %}
                   <button type="button" class="btn-sm" data-open-dialog="product-dialog-{{ p.id }}">生成 TK 商品</button>
                 {% endif %}
