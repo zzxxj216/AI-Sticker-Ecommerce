@@ -987,11 +987,12 @@ class TKShopService:
         → save as tkshop_product_images rows (source='ai').
 
         Reference selection is per-role: "variety" angles (hero / flat_lay /
-        full_set) edit a single MERGED grid of all the pack's preview sheets so
-        the bundle shows every design (and single-image input avoids the
-        edit-endpoint's multi-image timeout); single-subject angles (lifestyle /
-        in_use / scene / packaging) prefer a high-fidelity split sticker. The
-        main/hero uses a fixed white-bg "bundle" prompt over that merged grid.
+        full_set) edit a single MERGED grid. If the pack has enough preview
+        sheets (default: at least 3), those previews are the preferred main
+        reference; otherwise split sticker assets are used. Single-subject
+        angles (lifestyle / in_use / scene / packaging) prefer one split
+        sticker when available. The main/hero uses a fixed white-bg "bundle"
+        prompt over that merged grid.
         The main (hero) image renders at ``main_quality`` /
         ``main_size`` (defaults: high quality, falls back to ``size``);
         secondary images use ``secondary_quality`` / ``size``.
@@ -1037,12 +1038,15 @@ class TKShopService:
         size = _safe_size(size)
         main_size = _safe_size(main_size)
 
-        # One MERGED reference: a clean white-bg grid of every split sticker
-        # when available. This fixes the old failure mode where large packs
-        # with one preview sheet generated a "bundle" from that one sheet only.
-        # Preview sheets are now only a fallback for packs that have not been
-        # split into sticker rows yet.
-        if sticker_paths:
+        # One MERGED reference: when enough preview sheets exist they better
+        # represent the whole product family. If previews are sparse (for
+        # example one manually-uploaded sheet), prefer split sticker/sheet
+        # assets so a single preview cannot dominate the main image.
+        preview_threshold = max(1, int(os.getenv("TKSHOP_MAIN_PREVIEW_MIN_COUNT", "3")))
+        if len(sheet_paths) >= preview_threshold:
+            main_bundle_paths = sheet_paths
+            main_bundle_ref_label = "preview_sheets_merged_grid"
+        elif sticker_paths:
             main_bundle_paths = sticker_paths
             main_bundle_ref_label = "split_stickers_merged_grid"
         else:
@@ -1055,6 +1059,13 @@ class TKShopService:
             max_side=2048,
         )
         merged_ref_hash = average_hash(merged_ref_bytes)
+        single_source_hashes: list[tuple[str, int]] = []
+        if len(main_bundle_paths) > 1:
+            for p in main_bundle_paths[:12]:
+                try:
+                    single_source_hashes.append((p.as_posix(), average_hash(p.read_bytes())))
+                except Exception:
+                    continue
 
         reference_grid_path: Optional[Path] = None
         try:
@@ -1136,8 +1147,13 @@ class TKShopService:
         from concurrent.futures import ThreadPoolExecutor
         tmpdir = Path(tempfile.mkdtemp())
 
-        def _qa_ok(out_bytes: bytes, ref_hash: int, want: Optional[tuple[int, int]],
-                   check_noop: bool) -> Optional[str]:
+        def _qa_ok(
+            out_bytes: bytes,
+            ref_hash: int,
+            want: Optional[tuple[int, int]],
+            check_noop: bool,
+            single_source_guard: bool = False,
+        ) -> Optional[str]:
             """Return None if the output passes QA, else a short reason.
 
             ``check_noop`` is skipped for merged-grid (bundle) references: there
@@ -1150,8 +1166,23 @@ class TKShopService:
                 return f"undecodable ({type(e).__name__})"
             if min(w, h) < 512:
                 return f"too small ({w}x{h})"
-            if check_noop and hash_distance(average_hash(out_bytes), ref_hash) <= noop_threshold:
+            out_hash = average_hash(out_bytes)
+            if check_noop and hash_distance(out_hash, ref_hash) <= noop_threshold:
                 return "near-identical to reference (no-op edit)"
+            if single_source_guard and single_source_hashes:
+                closest_label = ""
+                closest_dist = 999
+                for label, src_hash in single_source_hashes:
+                    dist = hash_distance(out_hash, src_hash)
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_label = label
+                single_threshold = int(os.getenv("TKSHOP_IMAGE_SINGLE_SOURCE_AHASH_DIST", "10"))
+                if closest_dist <= single_threshold:
+                    return (
+                        "too close to one source image only "
+                        f"({closest_dist}, {Path(closest_label).name})"
+                    )
             return None
 
         def _gen_one(idx_role_concept: tuple[int, str, dict[str, str]]) -> dict[str, Any]:
@@ -1177,16 +1208,23 @@ class TKShopService:
                 prompt = base_prompt
                 # On retry, nudge single-subject angles to re-stage in a new
                 # scene (their failure mode is a no-op echo of the sticker). For
-                # merged bundles we keep the same prompt — we want it to stay a
-                # faithful bundle, and its only retry trigger is a transient
-                # decode/size glitch.
-                if attempt > 1 and not is_merged:
-                    prompt = (
-                        base_prompt
-                        + " IMPORTANT: fully re-stage this in a NEW scene — the "
-                        "output must look clearly different from the flat reference "
-                        "(new background, real-world surface, perspective and lighting)."
-                    )
+                # merged bundles, retry by emphasizing multi-source coverage.
+                if attempt > 1:
+                    if is_merged:
+                        prompt = (
+                            base_prompt
+                            + " IMPORTANT: the previous attempt used too little of "
+                            "the source. Use visible designs from EVERY panel/source "
+                            "in the reference grid. Do not output one sheet, one "
+                            "panel, or one enlarged sticker."
+                        )
+                    else:
+                        prompt = (
+                            base_prompt
+                            + " IMPORTANT: fully re-stage this in a NEW scene — the "
+                            "output must look clearly different from the flat reference "
+                            "(new background, real-world surface, perspective and lighting)."
+                        )
                 try:
                     out_bytes = self.router.image_edit(
                         ref_bytes,
@@ -1210,7 +1248,11 @@ class TKShopService:
                             "error": f"{type(e).__name__}: {e}"[:300],
                             "concept": concept_label,
                             "image_prompt": base_prompt}
-                reason = _qa_ok(out_bytes, ref_hash, want, check_noop=not is_merged)
+                reason = _qa_ok(
+                    out_bytes, ref_hash, want,
+                    check_noop=not is_merged,
+                    single_source_guard=(role == "main" and is_merged),
+                )
                 if reason is None:
                     tmp = tmpdir / f"ai_{role}_{idx}_{int(time.time()*1000)}.png"
                     tmp.write_bytes(out_bytes)

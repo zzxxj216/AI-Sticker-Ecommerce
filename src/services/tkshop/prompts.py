@@ -284,14 +284,16 @@ IMAGE_DESIGN_ROLE_TYPES = [
 MAIN_BUNDLE_PROMPT = (
     "Studio e-commerce main image for a large sticker/card pack on a pure plain "
     "white background. Use the reference image as the complete visual source "
-    "for the pack, then recompose the visible sticker/card designs into one "
+    "for the pack. If the reference contains multiple panels, sheets, or source "
+    "images, sample visible sticker/card designs from EVERY panel/source, not "
+    "just the first or most prominent one. Recompose those designs into one "
     "dense overlapping round or oval product collage, similar to marketplace "
     "bundle photos where dozens of cards fan and stack into a clean circular "
     "pile. Fill most of the frame, varied sizes and rotations, layered edges, "
     "subtle studio shadows, no props, no surface, no text overlay. Do not copy "
-    "the reference grid layout or panel boundaries. Preserve the source artwork "
-    "style, colors, text, and quantity impression; do not invent unrelated new "
-    "designs."
+    "the reference grid layout or panel boundaries, and do not output a single "
+    "sheet or one enlarged sticker. Preserve the source artwork style, colors, "
+    "text, and quantity impression; do not invent unrelated new designs."
 )
 
 IMAGE_DESIGN_EXTRACT_SCHEMA = {
