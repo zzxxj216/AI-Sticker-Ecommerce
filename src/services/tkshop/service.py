@@ -3785,6 +3785,49 @@ class TKShopService:
             conn.commit()
             return cur.rowcount > 0
 
+    def auto_design_images_for_local_product(
+        self,
+        local_product_id: int,
+        *,
+        shop: Optional[str] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Master-level AI image generation.
+
+        Resolves a tkshop_products listing for this master (reuses an
+        existing draft on ``shop`` if available, else mints a fresh draft
+        via ``create_product_from_pack``) and delegates to
+        ``auto_design_images``. The existing mirror step inside that
+        method copies AI outputs back into ``local_product_images``, so
+        the master's image gallery sees the new images automatically.
+
+        The draft listing is left in 'draft' status — never auto-published.
+        It represents the operator's intent to eventually list on this
+        shop; once they're happy with the AI output they can publish from
+        the listing page or the master detail page.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT pack_id FROM local_products WHERE id = ?",
+                (local_product_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"local_product #{local_product_id} not found")
+            pack_id = row["pack_id"]
+        target_shop = (shop or TKSHOP_DEFAULT_SHOP).strip() or TKSHOP_DEFAULT_SHOP
+        if target_shop not in TKSHOP_SHOPS:
+            raise ValueError(
+                f"unknown shop {target_shop!r}; configured: {TKSHOP_SHOPS}"
+            )
+        # create_product_from_pack is idempotent: returns existing draft if
+        # any, else creates one. Keeps draft status untouched.
+        listing_id = self.create_product_from_pack(pack_id, target_shop)
+        result = self.auto_design_images(listing_id, **kwargs)
+        result["local_product_id"] = local_product_id
+        result["listing_id"] = listing_id
+        result["shop"] = target_shop
+        return result
+
     def delete_local_product(self, local_product_id: int) -> dict[str, Any]:
         """Drop master + its images. Refuses if any listing still exists
         (operator must delete listings first — preserves audit trail)."""

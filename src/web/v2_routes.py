@@ -3946,6 +3946,69 @@ async def v2_local_product_edit_detail(request: Request, local_product_id: int):
     )
 
 
+@router.post("/local-products/{local_product_id:int}/auto_design_images_sync")
+async def v2_local_product_auto_design_sync(request: Request, local_product_id: int):
+    """Kick off master-level AI image generation. Returns immediately;
+    operator can poll ``auto_design_status`` or just refresh the page.
+
+    Internally resolves a draft tkshop_products listing (creates one if
+    needed) and runs the standard pipeline; AI images are mirrored back
+    to ``local_product_images`` so the master gallery picks them up.
+    """
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else dict(await request.form())
+    try:
+        count = max(1, min(int(payload.get("count", 4)), 8))
+    except (TypeError, ValueError):
+        count = 4
+    language = (str(payload.get("language") or "en")).lower().strip() or "en"
+    size = (str(payload.get("size") or "1024x1024")).strip() or "1024x1024"
+    shop = (str(payload.get("shop") or "")).strip() or None
+    secondary_count = max(0, count - 1)
+    task_id = f"tkshop_auto_design_local:{local_product_id}"
+    svc = get_tkshop_service()
+    try:
+        started = run_async(
+            task_id,
+            svc.auto_design_images_for_local_product, local_product_id,
+            shop=shop,
+            secondary_count=secondary_count,
+            language=language,
+            replace_existing_ai=True,
+            size=size,
+            label=f"AI 主图设计 (master #{local_product_id}, {count} 张, {language}, {size})",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    if not started:
+        return JSONResponse({
+            "ok": True, "task_id": task_id, "started": False,
+            "message": "任务已在后台运行中（同一本地产品不会并行启动）",
+        })
+    return JSONResponse({
+        "ok": True, "task_id": task_id, "started": True,
+        "message": "已在后台启动 — 关弹窗或离开页面都不会中断。完成后刷新详情页即可看到。",
+    })
+
+
+@router.get("/local-products/{local_product_id:int}/auto_design_status")
+def v2_local_product_auto_design_status(local_product_id: int):
+    """Poll endpoint for the modal: returns {running, images} so the modal
+    can show progress and the final result grid without a full reload.
+    """
+    task_id = f"tkshop_auto_design_local:{local_product_id}"
+    svc = get_tkshop_service()
+    images = svc.list_local_product_images(local_product_id)
+    images_with_url = [
+        {**i, "url": _versioned_local_product_image_url(i)}
+        for i in images if i.get("source") == "ai"
+    ]
+    return JSONResponse({
+        "ok": True,
+        "running": is_running(task_id),
+        "images": images_with_url,
+    })
+
+
 @router.post("/local-products/{local_product_id:int}/publish-to-shop")
 async def v2_local_product_publish_to_shop(request: Request, local_product_id: int):
     """One-click 'publish this master to shop X' from the detail page.

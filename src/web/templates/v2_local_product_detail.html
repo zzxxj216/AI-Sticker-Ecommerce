@@ -26,6 +26,21 @@
   @media (max-width: 1100px) {
     .lp-grid { grid-template-columns: 1fr; }
   }
+  /* AI 生成弹窗 — copied from v2_product_detail.html */
+  .ai-modal { width:min(900px, 96vw); max-height:90vh; overflow:auto; padding:0; border-radius:12px; border:1px solid var(--line); background:var(--surface); position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); margin:0; }
+  .ai-modal::backdrop { background:rgba(0,0,0,.55); }
+  .ai-modal-h { padding:16px 22px; border-bottom:1px solid var(--line-soft); display:flex; justify-content:space-between; align-items:center; }
+  .ai-modal-body { padding:18px 22px; }
+  .ai-modal-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:14px; }
+  .ai-modal-form label { display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px; }
+  .ai-modal-form input, .ai-modal-form select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; }
+  .ai-result-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-top:14px; }
+  .ai-result-card { padding:8px; border-radius:8px; border:2px solid var(--line); background:var(--surface); position:relative; }
+  .ai-result-card img { width:100%; border-radius:6px; aspect-ratio:1/1; object-fit:contain; background:#f5f5f5; }
+  .ai-result-card .lbl { margin-top:6px; font-size:11px; color:var(--text-secondary); }
+  .ai-modal-footer { padding:14px 22px; border-top:1px solid var(--line-soft); display:flex; justify-content:flex-end; gap:8px; }
+  .v2-button-spinner { display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle; margin-right:6px; }
+  @keyframes spin { to { transform:rotate(360deg) } }
 </style>
 
 <div class="lp-page">
@@ -136,8 +151,12 @@
       </section>
 
       <section class="panel lp-panel">
-        <h3>主版本图集（{{ lp.images|length }} 张）</h3>
-        <p class="muted" style="margin:-6px 0 12px;font-size:12px;">主版本的主图/附图。上架到新店时会自动复制成 listing 的图。AI 图重新生成会替换 source='ai' 的项。</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <h3 style="margin:0;">主版本图集（{{ lp.images|length }} 张）</h3>
+          <button type="button" id="ai-modal-open"
+                  style="padding:6px 12px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">🎨 AI 生成主图+附图…</button>
+        </div>
+        <p class="muted" style="margin:-2px 0 12px;font-size:12px;">主版本的主图/附图。上架到新店时会自动复制成 listing 的图。「AI 生成」会替换现有 source='ai' 的项（手动上传的图保留）。</p>
         <div class="lp-image-grid">
           {% for img in lp.images %}
           <div class="lp-image-tile">
@@ -145,12 +164,155 @@
             <div class="role-pill">{{ img.role }} · {{ img.source }}</div>
           </div>
           {% else %}
-          <div class="muted">还没有主版本图。从某个 listing 跑一次「AI 主图设计」就会同步过来。</div>
+          <div class="muted">还没有主版本图。点击右上角「🎨 AI 生成主图+附图」一键生成。</div>
           {% endfor %}
         </div>
       </section>
     </div>
   </div>
 </div>
+
+<!-- AI 生成弹窗 — master-level. Runs against a draft listing under the
+     hood (auto-created on the chosen shop if none exists), with AI output
+     mirrored back into local_product_images so this gallery picks it up. -->
+<dialog id="ai-modal" class="ai-modal">
+  <div class="ai-modal-h">
+    <div>
+      <h3 style="margin:0;font-size:16px;">🎨 AI 生成主图 + 附图（主版本）</h3>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--text-muted);">gpt-5.4 设计 → image-2.0 图生图。<strong style="color:var(--success);">在后台运行</strong>：关闭弹窗、跳页都不会中断。结果保存到主版本图集。</p>
+    </div>
+    <button type="button" id="ai-modal-close" title="关闭弹窗（后台任务继续）"
+            style="background:none;border:1px solid var(--line);padding:4px 10px;font-size:12px;cursor:pointer;color:var(--text-secondary);border-radius:6px;">关闭（任务继续）</button>
+  </div>
+  <div class="ai-modal-body">
+    <div class="ai-modal-form">
+      <div>
+        <label for="ai-count">总数量（含 1 张主图）</label>
+        <input id="ai-count" type="number" min="1" max="8" value="4" step="1">
+      </div>
+      <div>
+        <label for="ai-language">目标市场风格</label>
+        <select id="ai-language">
+          <option value="en" selected>英语市场（US/UK/AU/CA）</option>
+          <option value="zh">中文市场（CN）</option>
+          <option value="ja">日本市场（JP kawaii）</option>
+        </select>
+      </div>
+      <div>
+        <label for="ai-size">尺寸</label>
+        <select id="ai-size">
+          <option value="1024x1024" selected>1024×1024 (1:1 方)</option>
+          <option value="1024x1536">1024×1536 (2:3 立)</option>
+          <option value="1536x1024">1536×1024 (3:2 横)</option>
+        </select>
+      </div>
+      <div>
+        <label for="ai-shop">基于哪家店的 draft listing</label>
+        <select id="ai-shop">
+          {% for s in tkshop_shops %}
+          <option value="{{ s }}">🏪 {{ shop_label(s) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <p style="margin:0 0 10px;font-size:11px;color:var(--text-muted);">⚠ 会替换已有 AI 生成的图（手动上传的图保留）。若该店还没 listing，将自动创建一个 draft（不会上架）。</p>
+    <div style="display:flex;justify-content:flex-end;">
+      <button type="button" id="ai-gen-go"
+              style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 开始生成</button>
+    </div>
+    <div id="ai-gen-status" style="margin-top:12px;font-size:12px;color:var(--text-muted);"></div>
+    <div id="ai-result-grid" class="ai-result-grid" style="display:none;"></div>
+  </div>
+  <div class="ai-modal-footer">
+    <button type="button" id="ai-modal-done" style="padding:8px 16px;background:#111827;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-size:13px;">✓ 完成</button>
+  </div>
+</dialog>
+
+<script>
+(function() {
+  const LOCAL_PRODUCT_ID = {{ lp.id }};
+  const modal = document.getElementById('ai-modal');
+  if (!modal) return;
+  document.getElementById('ai-modal-open').addEventListener('click', () => modal.showModal());
+  document.getElementById('ai-modal-close').addEventListener('click', () => modal.close());
+  document.getElementById('ai-modal-done').addEventListener('click', () => {
+    modal.close();
+    // Reload so the new master images show in the gallery.
+    location.reload();
+  });
+
+  let pollTimer = null;
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function renderResultGrid(images) {
+    const grid = document.getElementById('ai-result-grid');
+    grid.innerHTML = '';
+    (images || []).forEach(img => {
+      const card = document.createElement('div');
+      card.className = 'ai-result-card';
+      card.innerHTML = `<img src="${img.url}"><div class="lbl"><strong>${img.role}</strong> · ${img.source}</div>`;
+      grid.appendChild(card);
+    });
+    grid.style.display = (images && images.length) ? 'grid' : 'none';
+  }
+
+  async function pollStatus() {
+    try {
+      const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_status`);
+      const data = await r.json();
+      if (!data.ok) return;
+      const status = document.getElementById('ai-gen-status');
+      if (data.running) {
+        status.textContent = `⏳ 后台生成中…（已完成 ${data.images.length} 张，每张约 30s）你可以关闭弹窗、切到其它页继续工作。`;
+        renderResultGrid(data.images);
+      } else {
+        stopPolling();
+        renderResultGrid(data.images);
+        status.textContent = `✓ 完成 — 共 ${data.images.length} 张 AI 生成图已保存到主版本图集。点击「完成」刷新看效果。`;
+        const goBtn = document.getElementById('ai-gen-go');
+        goBtn.disabled = false;
+        goBtn.textContent = '🚀 重新生成';
+      }
+    } catch (e) { /* keep polling */ }
+  }
+
+  document.getElementById('ai-gen-go').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="v2-button-spinner"></span>启动中…';
+    document.getElementById('ai-gen-status').textContent = '⏳ 正在启动后台任务…';
+    document.getElementById('ai-result-grid').style.display = 'none';
+    try {
+      const body = {
+        count:    parseInt(document.getElementById('ai-count').value, 10) || 4,
+        language: document.getElementById('ai-language').value,
+        size:     document.getElementById('ai-size').value,
+        shop:     document.getElementById('ai-shop').value,
+      };
+      const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_images_sync`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!data.ok) {
+        document.getElementById('ai-gen-status').textContent = '❌ ' + (data.error || '启动失败');
+        btn.disabled = false; btn.textContent = '🚀 开始生成';
+        return;
+      }
+      btn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+      document.getElementById('ai-gen-status').innerHTML =
+        `🟢 ${data.message}<br><small style="color:var(--text-muted)">task_id: <code>${data.task_id}</code></small>`;
+      stopPolling();
+      pollTimer = setInterval(pollStatus, 4000);
+      setTimeout(pollStatus, 1500);
+    } catch (err) {
+      document.getElementById('ai-gen-status').textContent = '❌ 网络错误：' + err.message;
+      btn.disabled = false; btn.textContent = '🚀 开始生成';
+    }
+  });
+})();
+</script>
 
 {% endblock %}
