@@ -8,10 +8,13 @@ pack_id and treat the pack as the unit of work.
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import sqlite3
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,6 +27,17 @@ DEFAULT_DB_PATH = Path("data/ops_workbench.db")
 
 VALID_STATUSES = ("active", "archived")
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+_SOURCE_SUFFIXES = _IMAGE_SUFFIXES | {".pdf"}
+DEFAULT_EXTERNAL_AI_MAX_STICKERS_PER_PREVIEW = int(
+    os.getenv("TKSHOP_EXTERNAL_IMPORT_MAX_STICKERS_PER_PREVIEW", "40")
+)
+EXTERNAL_AI_HARD_MAX_STICKERS_PER_PREVIEW = int(
+    os.getenv("TKSHOP_EXTERNAL_IMPORT_HARD_MAX_STICKERS_PER_PREVIEW", "80")
+)
+EXTERNAL_AI_ANALYSIS_MAX_SIDE = int(
+    os.getenv("TKSHOP_EXTERNAL_IMPORT_AI_MAX_SIDE", "1600")
+)
 
 
 def _open_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -495,11 +509,190 @@ class PackService:
         return suffix if suffix in {".png", ".jpg", ".jpeg", ".webp"} else ".png"
 
     @staticmethod
+    def _source_suffix(filename: str) -> str:
+        suffix = Path(filename or "").suffix.lower()
+        return suffix if suffix in _SOURCE_SUFFIXES else ""
+
+    @staticmethod
     def _write_bytes_atomic(target: Path, data: bytes) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_bytes(data)
         tmp.replace(target)
+
+    @staticmethod
+    def _image_to_png_bytes(data: bytes) -> bytes:
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as im:
+            if im.mode in ("RGBA", "LA") or "transparency" in im.info:
+                bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+                bg.alpha_composite(im.convert("RGBA"))
+                im = bg
+            out = BytesIO()
+            im.convert("RGB").save(out, "PNG")
+            return out.getvalue()
+
+    @staticmethod
+    def _image_to_analysis_png_bytes(data: bytes, *, max_side: int = EXTERNAL_AI_ANALYSIS_MAX_SIDE) -> bytes:
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as im:
+            if im.mode in ("RGBA", "LA") or "transparency" in im.info:
+                bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+                bg.alpha_composite(im.convert("RGBA"))
+                im = bg
+            im = im.convert("RGB")
+            if max_side > 0:
+                im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            im.save(out, "PNG", optimize=True)
+            return out.getvalue()
+
+    @staticmethod
+    def _clean_ai_text(value: Any, *, limit: int = 500) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text[:limit]
+
+    @staticmethod
+    def _normalize_ai_sticker_list(items: Any, *, max_items: int) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        if not isinstance(items, list):
+            return out
+        for item in items:
+            if isinstance(item, dict):
+                text = (
+                    item.get("brief")
+                    or item.get("name")
+                    or item.get("title")
+                    or item.get("description")
+                    or item.get("text")
+                    or ""
+                )
+                if item.get("visible_text") and item.get("description"):
+                    text = f"{item.get('visible_text')} / {item.get('description')}"
+            else:
+                text = item
+            clean = PackService._clean_ai_text(text, limit=240)
+            if not clean:
+                continue
+            key = clean.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(clean)
+            if len(out) >= max_items:
+                break
+        return out
+
+    @staticmethod
+    def _build_external_preview_analysis_prompt(
+        *,
+        pack_name: str,
+        preview_idx: int,
+        file_name: str,
+        max_stickers: int,
+    ) -> str:
+        return f"""
+You are analyzing an uploaded sticker/card pack preview image for an ecommerce workflow.
+
+The image is preview #{preview_idx} from pack "{pack_name}" (source file: {file_name}).
+Return ONLY valid JSON, no markdown, matching this schema:
+{{
+  "pack_name": "short sellable pack name if visible/inferable",
+  "preview_theme": "specific theme for this preview",
+  "style_anchor": "one concise English style guide for future product copy and image editing",
+  "palette": "comma-separated dominant colors, include hex codes when confident",
+  "pack_archetype": "external_upload | sticker_pack | card_sticker_pack | decal_pack | label_pack",
+  "stickers": [
+    "Sticker/card 1: visible text if any / concise visual description",
+    "Sticker/card 2: visible text if any / concise visual description"
+  ],
+  "quality_notes": "short notes about layout, crop, duplicated items, unclear items"
+}}
+
+Rules:
+- Identify the distinct visible sticker/card designs in reading order, left-to-right and top-to-bottom.
+- Include up to {max_stickers} designs. Do not invent hidden designs outside the image.
+- If the image is a single sheet containing many designs, list every distinct visible design you can identify.
+- If a design has readable text, preserve that text exactly as visible.
+- Keep each sticker list item short but specific enough for an image-edit split prompt.
+- Use English for style_anchor and sticker descriptions, except keep visible non-English text exactly.
+""".strip()
+
+    @staticmethod
+    def _fallback_brief_from_preview(preview: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+        idx = int(preview["preview_idx"])
+        filename = str(preview["prompt_text"] or f"preview_{idx}")
+        return {
+            "preview_idx": idx,
+            "theme": f"Imported preview {idx}",
+            "stickers": [f"Visible sticker/card artwork from imported preview {idx}"],
+            "external_import": True,
+            "ai_enriched": False,
+            "fallback": True,
+            "source_prompt": filename[:200],
+        }
+
+    @staticmethod
+    def _pdf_pages_to_png_bytes(data: bytes, *, max_side: int = 2048) -> list[bytes]:
+        """Render every PDF page to PNG bytes.
+
+        PyMuPDF is preferred because it is already available in the runtime;
+        pypdfium2 is a fallback. Keeping this local avoids adding a hard
+        import at module load time for deployments that only import images.
+        """
+        try:
+            import fitz  # type: ignore
+
+            with fitz.open(stream=data, filetype="pdf") as doc:
+                if len(doc) == 0:
+                    raise ValueError("PDF has no pages")
+                rendered: list[bytes] = []
+                for page in doc:
+                    rect = page.rect
+                    scale = min(3.0, max(1.0, max_side / max(rect.width, rect.height)))
+                    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                    rendered.append(pix.tobytes("png"))
+                return rendered
+        except Exception as first_error:
+            try:
+                import pypdfium2 as pdfium  # type: ignore
+                from PIL import Image
+
+                pdf = pdfium.PdfDocument(BytesIO(data))
+                try:
+                    if len(pdf) == 0:
+                        raise ValueError("PDF has no pages")
+                    rendered: list[bytes] = []
+                    for page in pdf:
+                        bitmap = page.render(scale=2.0)
+                        pil = bitmap.to_pil().convert("RGB")
+                        pil.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                        out = BytesIO()
+                        pil.save(out, "PNG")
+                        rendered.append(out.getvalue())
+                    return rendered
+                finally:
+                    pdf.close()
+            except Exception as second_error:
+                raise ValueError(
+                    "failed to render PDF pages "
+                    f"({type(first_error).__name__}: {first_error}; "
+                    f"{type(second_error).__name__}: {second_error})"
+                ) from second_error
+
+    def _preview_pngs_from_source(self, asset: dict[str, Any]) -> list[tuple[str, bytes]]:
+        filename = asset.get("filename") or "preview.png"
+        suffix = Path(filename).suffix.lower()
+        data = asset.get("data") or b""
+        if suffix == ".pdf":
+            pages = self._pdf_pages_to_png_bytes(data)
+            return [(f"{Path(filename).stem}_page_{i}", raw) for i, raw in enumerate(pages, 1)]
+        if suffix in _IMAGE_SUFFIXES:
+            return [(Path(filename).stem or "preview", self._image_to_png_bytes(data))]
+        raise ValueError(f"unsupported source file type: {filename}")
 
     def upload_manual_pack(
         self,
@@ -732,6 +925,599 @@ class PackService:
             "created": created,
             "uploaded_stickers": len(saved_stickers),
             "total_stickers": int(total),
+        }
+
+    def import_external_pack(
+        self,
+        *,
+        display_name: str,
+        source_assets: list[dict[str, Any]],
+        total_stickers: int = 0,
+        style_anchor: str = "",
+        palette: str = "",
+        pack_archetype: str = "external_upload",
+        topic_name: str = "",
+    ) -> dict[str, Any]:
+        """Create a complete preview-only pack from operator-supplied files.
+
+        This is the lightweight import path for sticker/card packs designed
+        outside the system. It creates the normal hot_topic -> topic_plan ->
+        pack_series -> pack_previews -> packs chain, but deliberately does
+        not create ``pack_stickers`` rows. Downstream product copy and main
+        image generation can continue from the imported preview images.
+        """
+        assets = [a for a in (source_assets or []) if a.get("data")]
+        if not assets:
+            raise ValueError("at least one PDF or image file is required")
+
+        final_name = (display_name or "").strip()[:200]
+        if not final_name:
+            final_name = Path(assets[0].get("filename") or "external_pack").stem
+        if not final_name:
+            final_name = "External Sticker Pack"
+        topic = (topic_name or final_name).strip()[:200]
+        now = int(time.time())
+        pack_uid = make_pack_uid(final_name)
+        store = get_pack_store()
+        store.init_pack_dir(pack_uid)
+        series_idx = 1
+        series_dir = store.series_dir(pack_uid, series_idx)
+        source_dir = series_dir / "source_files"
+        source_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_sources: list[dict[str, Any]] = []
+        preview_rows: list[dict[str, Any]] = []
+        preview_idx = 0
+        for source_idx, asset in enumerate(assets, 1):
+            filename = Path(asset.get("filename") or f"source_{source_idx}").name
+            source_suffix = self._source_suffix(filename)
+            if not source_suffix:
+                raise ValueError(f"unsupported source file type: {filename}")
+            stem = self._safe_asset_stem(filename, f"source_{source_idx}")
+            source_path = source_dir / f"{source_idx:02d}_{stem}{source_suffix}"
+            self._write_bytes_atomic(source_path, asset["data"])
+
+            saved_source = {
+                "filename": filename,
+                "source_path": source_path.as_posix(),
+                "preview_paths": [],
+            }
+            for page_label, preview_png in self._preview_pngs_from_source(asset):
+                preview_idx += 1
+                prompt_text = f"external imported preview from {filename}"
+                if source_suffix == ".pdf":
+                    prompt_text += f" ({page_label})"
+                preview_path = store.write_preview(
+                    pack_uid,
+                    series_idx,
+                    preview_idx,
+                    preview_png,
+                    prompt_text=prompt_text,
+                )
+                saved_source["preview_paths"].append(preview_path.as_posix())
+                preview_rows.append({
+                    "preview_idx": preview_idx,
+                    "filename": filename,
+                    "page_label": page_label,
+                    "image_path": preview_path.as_posix(),
+                    "prompt_text": prompt_text,
+                })
+            saved_sources.append(saved_source)
+
+        if not preview_rows:
+            raise ValueError("no preview images could be extracted from uploaded files")
+
+        expected_total = int(total_stickers or 0)
+        if expected_total <= 0:
+            expected_total = max(1, len(preview_rows) * 10)
+
+        source_names = [r["filename"] for r in saved_sources]
+        metadata = {
+            "external_import": True,
+            "external_imported_at": now,
+            "source_files": saved_sources,
+            "preview_briefs": [
+                {
+                    "preview_idx": r["preview_idx"],
+                    "theme": Path(r["filename"]).stem or f"Preview {r['preview_idx']}",
+                    "stickers": [
+                        f"External uploaded sticker/card artwork from {r['filename']}"
+                    ],
+                    "external_import": True,
+                }
+                for r in preview_rows
+            ],
+            "recommended_total_stickers": expected_total,
+        }
+        style_text = (style_anchor or "").strip()
+        if not style_text:
+            style_text = (
+                f"External uploaded sticker/card pack named {final_name}. "
+                "Use the imported preview artwork as the authoritative visual "
+                "source for product copy and product-image generation."
+            )
+        plan_payload = {
+            "external_import": True,
+            "pack_uid": pack_uid,
+            "display_name": final_name,
+            "source_files": source_names,
+            "total_stickers": expected_total,
+        }
+
+        with _open_db(self.db_path) as conn:
+            cur_topic = conn.execute(
+                """
+                INSERT INTO hot_topics
+                    (source, query, topic_name, raw_payload, evidence_urls,
+                     hot_score, region, fetched_at, status, theme_summary,
+                     parent_topic_ids)
+                VALUES ('external_upload', '', ?, ?, '[]', 0, '', ?,
+                        'selected', ?, '[]')
+                """,
+                (
+                    topic,
+                    json.dumps(plan_payload, ensure_ascii=False),
+                    now,
+                    style_text,
+                ),
+            )
+            topic_id = int(cur_topic.lastrowid)
+
+            cur_plan = conn.execute(
+                """
+                INSERT INTO topic_plans
+                    (topic_id, config, main_raw_text, series_payload,
+                     status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'approved', ?, ?)
+                """,
+                (
+                    topic_id,
+                    json.dumps(
+                        {
+                            "external_import": True,
+                            "previews_per_series": len(preview_rows),
+                            "stickers_per_preview": 0,
+                            "total_stickers": expected_total,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    f"External upload import for {final_name}.",
+                    json.dumps(plan_payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            plan_id = int(cur_plan.lastrowid)
+
+            cur_series = conn.execute(
+                """
+                INSERT INTO pack_series
+                    (plan_id, series_idx, series_name, style_anchor, palette,
+                     pack_archetype, priority, metadata_json, is_selected,
+                     pack_uid)
+                VALUES (?, 1, ?, ?, ?, ?, 'medium', ?, 1, ?)
+                """,
+                (
+                    plan_id,
+                    final_name,
+                    style_text,
+                    (palette or "").strip(),
+                    (pack_archetype or "external_upload").strip(),
+                    json.dumps(metadata, ensure_ascii=False),
+                    pack_uid,
+                ),
+            )
+            series_id = int(cur_series.lastrowid)
+
+            for r in preview_rows:
+                conn.execute(
+                    """
+                    INSERT INTO pack_previews
+                        (series_id, preview_idx, prompt_text, image_path,
+                         model_used, generation_status, generated_at)
+                    VALUES (?, ?, ?, ?, 'external_upload', 'ok', ?)
+                    """,
+                    (
+                        series_id,
+                        int(r["preview_idx"]),
+                        r["prompt_text"],
+                        r["image_path"],
+                        now,
+                    ),
+                )
+
+            cover_path = preview_rows[0]["image_path"]
+            cur_pack = conn.execute(
+                """
+                INSERT INTO packs
+                    (pack_uid, series_id, display_name, cover_image_path,
+                     total_stickers, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'active', ?)
+                """,
+                (
+                    pack_uid,
+                    series_id,
+                    final_name,
+                    cover_path,
+                    expected_total,
+                    now,
+                ),
+            )
+            pack_id = int(cur_pack.lastrowid)
+            conn.commit()
+
+        store.write_plan(pack_uid, plan_payload)
+        store.write_plan_main_raw(pack_uid, f"External upload import for {final_name}.")
+        store.write_style_anchor(pack_uid, series_idx, style_text)
+        logger.info(
+            "external pack import -> pack #%d (%d previews, total=%d)",
+            pack_id, len(preview_rows), expected_total,
+        )
+        return {
+            "pack_id": pack_id,
+            "pack_uid": pack_uid,
+            "topic_id": topic_id,
+            "plan_id": plan_id,
+            "series_id": series_id,
+            "preview_count": len(preview_rows),
+            "total_stickers": expected_total,
+            "cover_image_path": cover_path,
+        }
+
+    def _analyze_external_preview_with_ai(
+        self,
+        *,
+        pack_name: str,
+        preview: sqlite3.Row,
+        max_stickers: int,
+    ) -> dict[str, Any]:
+        image_path = Path(preview["image_path"] or "")
+        if not image_path.is_file():
+            raise ValueError(f"preview file missing: {image_path}")
+
+        from src.core.config import config
+        from src.services.ai.base import try_parse_json
+        from src.services.ai.call_logger import AICallLog
+        from src.services.ai.gemini_service import GeminiService
+
+        image_bytes = self._image_to_analysis_png_bytes(image_path.read_bytes())
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        model = config.gemini_text_model
+        prompt = self._build_external_preview_analysis_prompt(
+            pack_name=pack_name,
+            preview_idx=int(preview["preview_idx"]),
+            file_name=str(preview["prompt_text"] or image_path.name),
+            max_stickers=max_stickers,
+        )
+        gemini = GeminiService(model=model)
+        with AICallLog(
+            service="gemini",
+            model=model,
+            task="external_pack:analyze_preview",
+            related_table="pack_previews",
+            related_id=int(preview["id"]),
+            prompt_summary=prompt[:500],
+            db_path=self.db_path,
+        ) as log:
+            result = gemini.analyze_image(
+                image_b64,
+                prompt,
+                media_type="image/png",
+                max_tokens=8192,
+            )
+            usage = result.get("usage") or {}
+            log.set_usage(
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                cost=float(result.get("cost") or 0.0),
+            )
+        parsed = try_parse_json(result.get("text") or "")
+        if not isinstance(parsed, dict):
+            raise ValueError("AI did not return a JSON object")
+        return parsed
+
+    def enrich_external_pack_with_ai(
+        self,
+        pack_id: int,
+        *,
+        split: bool = True,
+        max_stickers_per_preview: int = DEFAULT_EXTERNAL_AI_MAX_STICKERS_PER_PREVIEW,
+        replace_existing_stickers: bool = True,
+        split_workers: int = 1,
+    ) -> dict[str, Any]:
+        """Analyze imported preview images, update metadata briefs, then split.
+
+        External uploads initially have preview images but no reliable
+        ``pack_stickers`` rows. This method lets Gemini read each preview,
+        replace ``metadata_json.preview_briefs`` with a real sticker/card list,
+        and then reuses the existing preview split pipeline.
+        """
+        try:
+            max_stickers = int(max_stickers_per_preview or 0)
+        except (TypeError, ValueError):
+            max_stickers = DEFAULT_EXTERNAL_AI_MAX_STICKERS_PER_PREVIEW
+        max_stickers = max(1, min(max_stickers, EXTERNAL_AI_HARD_MAX_STICKERS_PER_PREVIEW))
+        split_workers = max(1, int(split_workers or 1))
+
+        with _open_db(self.db_path) as conn:
+            pack = conn.execute(
+                """
+                SELECT p.id, p.display_name, p.total_stickers, p.pack_uid,
+                       p.cover_image_path,
+                       s.id AS series_id, s.series_idx, s.series_name,
+                       s.style_anchor, s.palette, s.pack_archetype,
+                       s.metadata_json
+                  FROM packs p
+                  JOIN pack_series s ON s.id = p.series_id
+                 WHERE p.id = ?
+                """,
+                (int(pack_id),),
+            ).fetchone()
+            if not pack:
+                raise ValueError(f"pack #{pack_id} not found")
+            previews = conn.execute(
+                """
+                SELECT id, preview_idx, prompt_text, image_path,
+                       model_used, generation_status, generated_at
+                  FROM pack_previews
+                 WHERE series_id = ?
+                   AND generation_status = 'ok'
+                   AND COALESCE(image_path, '') != ''
+                 ORDER BY preview_idx
+                """,
+                (int(pack["series_id"]),),
+            ).fetchall()
+
+        if not previews:
+            raise ValueError(f"pack #{pack_id} has no generated preview images")
+
+        try:
+            metadata = json.loads(pack["metadata_json"] or "{}")
+            if not isinstance(metadata, dict):
+                metadata = {}
+        except Exception:
+            metadata = {}
+        old_briefs = {
+            int(b.get("preview_idx") or 0): b
+            for b in (metadata.get("preview_briefs") or [])
+            if isinstance(b, dict)
+        }
+
+        analyses: list[dict[str, Any]] = []
+        briefs: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        style_candidates: list[str] = []
+        palette_candidates: list[str] = []
+        archetype_candidates: list[str] = []
+        pack_name_candidates: list[str] = []
+
+        for preview in previews:
+            preview_idx = int(preview["preview_idx"])
+            try:
+                raw = self._analyze_external_preview_with_ai(
+                    pack_name=pack["display_name"] or pack["series_name"] or f"pack_{pack_id}",
+                    preview=preview,
+                    max_stickers=max_stickers,
+                )
+                stickers = self._normalize_ai_sticker_list(
+                    raw.get("stickers")
+                    or raw.get("cards")
+                    or raw.get("designs")
+                    or raw.get("items"),
+                    max_items=max_stickers,
+                )
+                if not stickers:
+                    previous = old_briefs.get(preview_idx) or {}
+                    stickers = self._normalize_ai_sticker_list(
+                        previous.get("stickers"),
+                        max_items=max_stickers,
+                    )
+                if not stickers:
+                    stickers = self._fallback_brief_from_preview(preview)["stickers"]
+
+                theme = self._clean_ai_text(
+                    raw.get("preview_theme") or raw.get("theme") or f"Imported preview {preview_idx}",
+                    limit=120,
+                )
+                brief = {
+                    "preview_idx": preview_idx,
+                    "theme": theme or f"Imported preview {preview_idx}",
+                    "stickers": stickers,
+                    "external_import": True,
+                    "ai_enriched": True,
+                    "source_preview_id": int(preview["id"]),
+                    "source_image_path": preview["image_path"],
+                }
+                briefs.append(brief)
+                clean_analysis = {
+                    "preview_idx": preview_idx,
+                    "preview_id": int(preview["id"]),
+                    "theme": brief["theme"],
+                    "sticker_count": len(stickers),
+                    "style_anchor": self._clean_ai_text(raw.get("style_anchor"), limit=800),
+                    "palette": self._clean_ai_text(raw.get("palette"), limit=300),
+                    "pack_archetype": self._clean_ai_text(raw.get("pack_archetype"), limit=80),
+                    "pack_name": self._clean_ai_text(raw.get("pack_name"), limit=160),
+                    "quality_notes": self._clean_ai_text(raw.get("quality_notes"), limit=500),
+                }
+                analyses.append(clean_analysis)
+                if clean_analysis["style_anchor"]:
+                    style_candidates.append(clean_analysis["style_anchor"])
+                if clean_analysis["palette"]:
+                    palette_candidates.append(clean_analysis["palette"])
+                if clean_analysis["pack_archetype"]:
+                    archetype_candidates.append(clean_analysis["pack_archetype"])
+                if clean_analysis["pack_name"]:
+                    pack_name_candidates.append(clean_analysis["pack_name"])
+            except Exception as e:  # noqa: BLE001 - keep background job moving per preview
+                err = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    "external pack #%d preview #%d AI enrichment failed: %s",
+                    pack_id,
+                    preview_idx,
+                    err,
+                )
+                errors.append({
+                    "preview_idx": preview_idx,
+                    "preview_id": int(preview["id"]),
+                    "error": err[:500],
+                })
+                previous = old_briefs.get(preview_idx)
+                if previous and previous.get("ai_enriched") and previous.get("stickers"):
+                    brief = dict(previous)
+                    brief["ai_reused_after_error"] = True
+                    brief["ai_error"] = err[:300]
+                else:
+                    brief = {
+                        "preview_idx": preview_idx,
+                        "theme": f"Imported preview {preview_idx}",
+                        "stickers": [],
+                        "external_import": True,
+                        "ai_enriched": False,
+                        "ai_error": err[:300],
+                        "source_preview_id": int(preview["id"]),
+                        "source_image_path": preview["image_path"],
+                    }
+                briefs.append(brief)
+
+        briefs.sort(key=lambda b: int(b.get("preview_idx") or 0))
+        total_expected = sum(len(b.get("stickers") or []) for b in briefs)
+        briefs_by_idx = {int(b.get("preview_idx") or 0): b for b in briefs}
+        now = int(time.time())
+
+        current_style = self._clean_ai_text(pack["style_anchor"], limit=1200)
+        ai_style = self._clean_ai_text(" ".join(style_candidates[:3]), limit=1500)
+        default_prefix = "External uploaded sticker/card pack named"
+        if ai_style and (not current_style or current_style.startswith(default_prefix)):
+            style_text = ai_style
+        elif ai_style and ai_style not in current_style:
+            style_text = f"{current_style}\n\nAI observed style: {ai_style}".strip()
+        else:
+            style_text = current_style
+
+        current_palette = self._clean_ai_text(pack["palette"], limit=500)
+        palette_text = current_palette or self._clean_ai_text("; ".join(palette_candidates[:3]), limit=500)
+        current_archetype = self._clean_ai_text(pack["pack_archetype"], limit=80)
+        archetype_text = current_archetype
+        for candidate in archetype_candidates:
+            cand = self._clean_ai_text(candidate, limit=80)
+            if cand and cand != "external_upload":
+                archetype_text = cand
+                break
+        archetype_text = archetype_text or "external_upload"
+
+        metadata["external_import"] = True
+        metadata["ai_enriched"] = bool(analyses)
+        metadata["ai_enriched_at"] = now
+        metadata["ai_enrich_errors"] = errors
+        metadata["ai_preview_analyses"] = analyses
+        metadata["preview_briefs"] = briefs
+        metadata["recommended_total_stickers"] = total_expected
+        if pack_name_candidates:
+            metadata["ai_suggested_pack_name"] = pack_name_candidates[0]
+
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE pack_series
+                   SET style_anchor = ?,
+                       palette = ?,
+                       pack_archetype = ?,
+                       metadata_json = ?
+                 WHERE id = ?
+                """,
+                (
+                    style_text,
+                    palette_text,
+                    archetype_text,
+                    json.dumps(metadata, ensure_ascii=False),
+                    int(pack["series_id"]),
+                ),
+            )
+            conn.execute(
+                "UPDATE packs SET total_stickers = ? WHERE id = ?",
+                (
+                    int(total_expected or int(pack["total_stickers"] or 0)),
+                    int(pack_id),
+                ),
+            )
+            replace_preview_ids = [
+                int(b.get("source_preview_id") or 0)
+                for b in briefs
+                if b.get("stickers") and int(b.get("source_preview_id") or 0) > 0
+            ]
+            if replace_existing_stickers and split and replace_preview_ids:
+                placeholders = ",".join("?" for _ in replace_preview_ids)
+                conn.execute(
+                    f"DELETE FROM pack_stickers WHERE preview_id IN ({placeholders})",
+                    tuple(replace_preview_ids),
+                )
+            conn.commit()
+
+        if style_text:
+            try:
+                get_pack_store().write_style_anchor(
+                    pack["pack_uid"],
+                    int(pack["series_idx"] or 1),
+                    style_text,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("failed to write enriched style anchor for pack #%d: %s", pack_id, e)
+
+        split_result = {
+            "prepared": 0,
+            "attempted": 0,
+            "ok": 0,
+            "error": 0,
+            "errors": [],
+            "skipped": 0,
+        }
+        if split and total_expected > 0:
+            from src.services.preview_gen import get_preview_gen_service
+
+            preview_svc = get_preview_gen_service()
+            for preview in previews:
+                brief = briefs_by_idx.get(int(preview["preview_idx"]))
+                if not brief or not brief.get("stickers"):
+                    split_result["skipped"] += 1
+                    continue
+                try:
+                    prep = preview_svc.prepare_stickers(int(preview["id"]))
+                    split_result["prepared"] += int(prep.get("created") or 0)
+                    if prep.get("skipped_reason"):
+                        split_result["skipped"] += 1
+                        continue
+                    one = preview_svc.split_pending_for_preview(
+                        int(preview["id"]),
+                        max_workers=split_workers,
+                    )
+                    split_result["attempted"] += int(one.get("attempted") or 0)
+                    split_result["ok"] += int(one.get("ok") or 0)
+                    split_result["error"] += int(one.get("error") or 0)
+                    split_result["errors"].extend(one.get("errors") or [])
+                except Exception as e:  # noqa: BLE001
+                    split_result["error"] += 1
+                    split_result["errors"].append({
+                        "preview_id": int(preview["id"]),
+                        "error": f"{type(e).__name__}: {e}"[:300],
+                    })
+
+        logger.info(
+            "external pack #%d AI enrichment complete: previews=%d stickers=%d split_ok=%d split_err=%d",
+            pack_id,
+            len(previews),
+            total_expected,
+            split_result["ok"],
+            split_result["error"],
+        )
+        return {
+            "pack_id": int(pack_id),
+            "series_id": int(pack["series_id"]),
+            "preview_count": len(previews),
+            "total_stickers": total_expected,
+            "ai_ok": len(analyses),
+            "ai_errors": errors,
+            "split": split_result,
         }
 
     def update_status(self, pack_id: int, new_status: str) -> bool:

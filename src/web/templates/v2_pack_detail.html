@@ -85,6 +85,13 @@
             {% if pack.split_task_running %}切图中…{% else %}切 / 补齐 Stickers{% endif %}
           </button>
         </form>
+        <form method="post" action="/v2/packs/{{ pack.id }}/ai-enrich-and-split" data-async-form data-pending-text="已派发 AI 补全和切图任务…">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <input type="hidden" name="split" value="1">
+          <button type="submit" class="button v2-button-full" {% if pack.external_ai_task_running or ps.ok == 0 %}disabled{% endif %}>
+            {% if pack.external_ai_task_running %}AI 补全中…{% else %}AI 补充信息并切图{% endif %}
+          </button>
+        </form>
       </div>
       <p class="muted" style="margin-top:10px;">每张图通常 30–60 秒，任务会进入后台；需要进度时手动刷新即可。</p>
 
