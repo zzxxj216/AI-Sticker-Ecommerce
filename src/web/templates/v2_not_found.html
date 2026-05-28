@@ -1,0 +1,19 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header" style="margin-bottom:16px;">
+  <div>
+    <p class="eyebrow">404 · Not Found</p>
+    <h1>{{ what }} 不存在</h1>
+    <p class="page-subtitle">{{ hint or '这条记录已经不存在了。' }}</p>
+  </div>
+</section>
+
+<section class="panel" style="padding:40px 24px;text-align:center;">
+  <div style="font-size:56px;margin-bottom:14px;line-height:1;">🔍</div>
+  <h3 style="margin:0 0 8px;font-size:18px;">找不到「{{ what }}」</h3>
+  <p class="muted" style="margin:0 0 22px;font-size:13px;">{{ hint or '这条记录已经不存在了。' }}</p>
+  <a href="{{ back_url }}" class="button" style="display:inline-block;">{{ back_label }}</a>
+</section>
+
+{% endblock %}

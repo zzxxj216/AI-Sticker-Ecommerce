@@ -372,8 +372,54 @@
 
   // ---------- AI modal ----------
   const modal = document.getElementById('ai-modal');
-  document.getElementById('ai-modal-open').addEventListener('click', () => modal.showModal());
+  document.getElementById('ai-modal-open').addEventListener('click', () => {
+    modal.showModal();
+    // If a task is already running (operator left & came back), pick up
+    // its state instead of showing the blank "ready to start" form.
+    restoreIfRunning();
+  });
   document.getElementById('ai-modal-close').addEventListener('click', () => modal.close());
+
+  // On page load (or after we navigated back), check the server for any
+  // in-flight task on this product. If one's running, show a persistent
+  // banner so the operator can see at a glance without opening the modal.
+  async function restoreIfRunning() {
+    try {
+      const r = await fetch(`/v2/products/${PRODUCT_ID}/auto_design_status`);
+      const data = await r.json();
+      if (!data || !data.ok || !data.running) return;
+      // Task is in-flight: flip the modal into polling mode immediately.
+      const goBtn = document.getElementById('ai-gen-go');
+      goBtn.disabled = true;
+      goBtn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+      document.getElementById('ai-gen-status').innerHTML =
+        `🟢 检测到正在运行的任务，恢复跟踪…`;
+      stopPolling();
+      pollTimer = setInterval(pollStatus, 4000);
+      setTimeout(pollStatus, 200);
+      // Banner outside the modal: visible across navigations.
+      let banner = document.getElementById('ai-running-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'ai-running-banner';
+        banner.style.cssText =
+          'margin:10px 0;padding:10px 14px;border-radius:8px;' +
+          'background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.30);' +
+          'color:var(--success);font-size:12px;display:flex;' +
+          'justify-content:space-between;align-items:center;gap:10px;';
+        const sec = document.getElementById('img-section');
+        if (sec) sec.parentNode.insertBefore(banner, sec);
+      }
+      banner.innerHTML =
+        `🟢 <strong>AI 主图生成中</strong> · 已完成 ${data.images.length} 张 — ` +
+        `<button type="button" id="ai-banner-open" style="margin-left:8px;padding:4px 10px;` +
+        `background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:11px;` +
+        `font-weight:600;cursor:pointer;">查看进度</button>`;
+      document.getElementById('ai-banner-open').onclick = () => {
+        modal.showModal();
+      };
+    } catch (e) { /* ignore */ }
+  }
   document.getElementById('ai-modal-done').addEventListener('click', () => {
     modal.close();
     // Refresh page so the newly-saved AI images show in the main grid.
@@ -484,6 +530,9 @@
     ));
     document.getElementById('ai-gen-status').textContent = `✓ 已删除未选 ${toDelete.length} 张。点「完成」回到详情页。`;
   });
+
+  // Final step: kick the resume check after every helper above is defined.
+  restoreIfRunning();
 })();
 </script>
 

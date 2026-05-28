@@ -452,6 +452,7 @@
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/system/health') %}active{% endif %}" href="/v2/system/health">健康检查</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/system/ai-logs') %}active{% endif %}" href="/v2/system/ai-logs">AI 调用日志</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/system/scheduled-jobs') %}active{% endif %}" href="/v2/system/scheduled-jobs">调度任务</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/system/running-tasks') %}active{% endif %}" href="/v2/system/running-tasks">后台任务</a>
             </div>
           </div>
 

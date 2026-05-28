@@ -1,0 +1,79 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<section class="page-header" style="margin-bottom:16px;">
+  <div>
+    <p class="eyebrow">System · Background tasks</p>
+    <h1>后台任务</h1>
+    <p class="page-subtitle">当前在跑的内存中长时任务（AI 主图、贴纸切分、字幕等）。重启服务后清空 — DB 记录的调度任务在「调度任务」页。</p>
+  </div>
+  <div class="header-actions">
+    <button type="button" id="refresh-btn" class="button ghost" style="padding:6px 14px;font-size:12px;">🔄 刷新</button>
+  </div>
+</section>
+
+<section class="panel" style="padding:0;">
+  <div class="panel-header" style="padding:16px 20px;">
+    <h3 style="margin:0;font-size:16px;">运行中（<span id="tasks-count">{{ tasks|length }}</span>）</h3>
+    <p class="muted" style="margin-top:4px;font-size:12px;">每 5 秒自动刷新；闲置时为空。</p>
+  </div>
+  <div id="tasks-body">
+    {% if tasks %}
+    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+      <thead>
+        <tr style="text-align:left;color:var(--text-muted);background:var(--bg-subtle);">
+          <th style="padding:10px 16px;">任务</th>
+          <th style="padding:10px 16px;width:120px;">已运行</th>
+          <th style="padding:10px 16px;width:160px;">起始时间</th>
+          <th style="padding:10px 16px;width:120px;text-align:right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tasks %}
+        <tr style="border-top:1px solid var(--line-soft);">
+          <td style="padding:11px 16px;">
+            <div style="font-weight:600;">{{ t.label or t.task_id }}</div>
+            <div class="muted" style="font-size:11px;margin-top:2px;"><code>{{ t.task_id }}</code></div>
+          </td>
+          <td style="padding:11px 16px;color:var(--text-muted);font-size:12px;">{{ t.elapsed_s }} 秒</td>
+          <td style="padding:11px 16px;color:var(--text-muted);font-size:11px;">{{ t.started_human }}</td>
+          <td style="padding:11px 16px;text-align:right;">
+            {% if t.link %}
+            <a href="{{ t.link }}" class="button ghost" style="padding:4px 12px;font-size:11px;">→ 查看</a>
+            {% else %}
+            <span class="muted" style="font-size:11px;">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:40px 24px;text-align:center;color:var(--text-muted);font-size:13px;">
+      <div style="font-size:36px;margin-bottom:10px;">💤</div>
+      没有正在运行的后台任务
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+(function(){
+  async function refresh() {
+    try {
+      const r = await fetch('/v2/system/running-tasks', {headers:{'X-Requested-With':'fetch'}});
+      const html = await r.text();
+      // Cheap update: re-parse and swap the tasks table only.
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const newBody = doc.getElementById('tasks-body');
+      const newCount = doc.getElementById('tasks-count');
+      if (newBody) document.getElementById('tasks-body').innerHTML = newBody.innerHTML;
+      if (newCount) document.getElementById('tasks-count').textContent = newCount.textContent;
+    } catch (e) { /* ignore */ }
+  }
+  document.getElementById('refresh-btn').addEventListener('click', refresh);
+  setInterval(refresh, 5000);
+})();
+</script>
+
+{% endblock %}

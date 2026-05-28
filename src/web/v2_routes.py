@@ -771,6 +771,40 @@ def v2_scheduled_jobs(request: Request, limit: int = 100):
     )
 
 
+@router.get("/system/running-tasks", response_class=HTMLResponse)
+def v2_running_tasks(request: Request):
+    """At-a-glance view of in-flight background tasks (AI image gen,
+    sticker split, caption gen, etc.). Read from the in-memory registry
+    in ``src.web.background`` — DB-tracked jobs go under 调度任务 instead.
+    """
+    tasks = list_running()
+    for t in tasks:
+        t["started_human"] = _fmt_ts(t.get("started_at"))
+        # Best-effort link-out for AI image tasks so the operator can jump
+        # to the detail page that started it.
+        tid = t.get("task_id", "")
+        if tid.startswith("tkshop_auto_design_local:"):
+            t["link"] = f"/v2/local-products/{tid.split(':', 1)[1]}"
+        elif tid.startswith("tkshop_auto_design:"):
+            t["link"] = f"/v2/products/{tid.split(':', 1)[1]}"
+        else:
+            t["link"] = ""
+    return templates.TemplateResponse(
+        "v2_running_tasks.html",
+        {
+            "request": request,
+            "page_title": "后台任务",
+            "tasks": tasks,
+        },
+    )
+
+
+@router.get("/api/system/running-tasks")
+def v2_running_tasks_json():
+    """JSON variant for any UI that wants live data without a refresh."""
+    return JSONResponse({"tasks": list_running()})
+
+
 # ----------------------------------------------------------------------
 # Module placeholders (real pages land in W2 / W3 / W4)
 # ----------------------------------------------------------------------
@@ -3916,7 +3950,18 @@ def v2_local_product_detail(request: Request, local_product_id: int):
     svc = get_tkshop_service()
     lp = svc.get_local_product(local_product_id)
     if not lp:
-        raise HTTPException(status_code=404, detail="local product not found")
+        return templates.TemplateResponse(
+            "v2_not_found.html",
+            {
+                "request": request,
+                "page_title": "本地产品不存在",
+                "what": f"本地产品 #{local_product_id}",
+                "back_url": "/v2/local-products/",
+                "back_label": "← 返回本地产品库",
+                "hint": "可能已被删除，或链接里的 id 写错了。",
+            },
+            status_code=404,
+        )
     lp["created_human"] = _fmt_ts(lp.get("created_at"))
     lp["updated_human"] = _fmt_ts(lp.get("updated_at"))
     cover = _path_to_v2_url(lp.get("pack_cover") or "")
@@ -4451,7 +4496,18 @@ def v2_product_detail(request: Request, product_id: int):
     svc = get_tkshop_service()
     p = svc.get_product(product_id)
     if not p:
-        raise HTTPException(status_code=404, detail="product not found")
+        return templates.TemplateResponse(
+            "v2_not_found.html",
+            {
+                "request": request,
+                "page_title": "listing 不存在",
+                "what": f"listing #{product_id}",
+                "back_url": "/v2/products",
+                "back_label": "← 返回产品列表",
+                "hint": "可能已被删除，或链接里的 id 写错了。",
+            },
+            status_code=404,
+        )
     p["created_human"] = _fmt_ts(p.get("created_at"))
     p["published_human"] = _fmt_ts(p.get("published_at"))
     cover = _path_to_v2_url(p.get("cover_image_path") or "")

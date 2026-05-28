@@ -233,8 +233,14 @@
   const LOCAL_PRODUCT_ID = {{ lp.id }};
   const modal = document.getElementById('ai-modal');
   if (!modal) return;
-  document.getElementById('ai-modal-open').addEventListener('click', () => modal.showModal());
+  document.getElementById('ai-modal-open').addEventListener('click', () => {
+    modal.showModal();
+    // Resume in-progress task if any — avoids the operator clicking 开始
+    // a second time and seeing "started=false" with no visible feedback.
+    restoreIfRunning();
+  });
   document.getElementById('ai-modal-close').addEventListener('click', () => modal.close());
+  modal.addEventListener('close', () => stopPolling());
   document.getElementById('ai-modal-done').addEventListener('click', () => {
     modal.close();
     // Reload so the new master images show in the gallery.
@@ -312,6 +318,48 @@
       btn.disabled = false; btn.textContent = '🚀 开始生成';
     }
   });
+
+  // Page-load resume: if a task is already running on the server (e.g.
+  // operator submitted then navigated away and came back), show a banner
+  // and let them re-open the modal to follow progress.
+  async function restoreIfRunning() {
+    try {
+      const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_status`);
+      const data = await r.json();
+      if (!data || !data.ok || !data.running) return;
+      const goBtn = document.getElementById('ai-gen-go');
+      goBtn.disabled = true;
+      goBtn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+      document.getElementById('ai-gen-status').innerHTML =
+        `🟢 检测到正在运行的任务，恢复跟踪…`;
+      renderResultGrid(data.images);
+      stopPolling();
+      pollTimer = setInterval(pollStatus, 4000);
+      setTimeout(pollStatus, 200);
+      let banner = document.getElementById('ai-running-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'ai-running-banner';
+        banner.style.cssText =
+          'margin:10px 0;padding:10px 14px;border-radius:8px;' +
+          'background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.30);' +
+          'color:var(--success);font-size:12px;display:flex;' +
+          'justify-content:space-between;align-items:center;gap:10px;';
+        const host = document.querySelector('.lp-page');
+        const firstSection = host && host.querySelector('.page-header');
+        if (firstSection && firstSection.parentNode) {
+          firstSection.parentNode.insertBefore(banner, firstSection.nextSibling);
+        }
+      }
+      banner.innerHTML =
+        `🟢 <strong>AI 主图生成中</strong> · 已完成 ${data.images.length} 张 — ` +
+        `<button type="button" id="ai-banner-open" style="margin-left:8px;padding:4px 10px;` +
+        `background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:11px;` +
+        `font-weight:600;cursor:pointer;">查看进度</button>`;
+      document.getElementById('ai-banner-open').onclick = () => modal.showModal();
+    } catch (e) { /* ignore */ }
+  }
+  restoreIfRunning();
 })();
 </script>
 
