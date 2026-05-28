@@ -189,7 +189,7 @@
       <div class="pack-action-form-grid">
         <div class="v2-field">
           <label for="external-display-name">卡贴包名称</label>
-          <input id="external-display-name" class="v2-input" type="text" name="display_name" maxlength="200" required autocomplete="off" placeholder="例如 5.14-3 卡贴包">
+          <input id="external-display-name" class="v2-input" type="text" name="display_name" maxlength="200" autocomplete="off" placeholder="可留空，自动使用文件名 / AI 识别名称">
         </div>
         <div class="v2-field">
           <label for="external-total">预计数量</label>
@@ -203,6 +203,16 @@
           <label for="external-source-zip">批量 ZIP（可选）</label>
           <input id="external-source-zip" class="v2-input" type="file" name="source_zip" accept=".zip">
         </div>
+        <input type="hidden" name="batch_each_file" value="0">
+        <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" name="batch_each_file" value="1">
+          <span>批量导入：每个 PDF / 图片单独创建一个卡包</span>
+        </label>
+        <input type="hidden" name="auto_name" value="0">
+        <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" name="auto_name" value="1" checked>
+          <span>自动生成卡包名称（先用文件名，AI 补全后自动改成识别名称）</span>
+        </label>
         <div class="v2-field full">
           <label for="external-style">风格说明（可选）</label>
           <textarea id="external-style" name="style_anchor" rows="3" placeholder="例如 Y2K cartoon waterproof vinyl sticker pack, colorful bold outlines..."></textarea>

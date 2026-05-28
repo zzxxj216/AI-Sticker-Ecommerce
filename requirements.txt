@@ -29,6 +29,10 @@ rich>=13.0.0
 
 # Image Processing
 Pillow>=10.0.0              # imported as `PIL`
+numpy>=1.26.0               # local sticker-region detection / image processing
+opencv-python>=4.9.0        # imported as `cv2` for local sticker crop detection
+PyMuPDF>=1.24.0             # imported as `fitz` for PDF preview extraction
+pypdfium2>=4.30.0           # fallback PDF renderer for external pack imports
 
 # Markdown Processing
 Markdown>=3.5.0

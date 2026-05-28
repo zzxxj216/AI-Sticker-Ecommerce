@@ -1132,6 +1132,7 @@ Rules:
         palette: str = "",
         pack_archetype: str = "external_upload",
         topic_name: str = "",
+        auto_named: bool = False,
     ) -> dict[str, Any]:
         """Create a complete preview-only pack from operator-supplied files.
 
@@ -1210,6 +1211,7 @@ Rules:
         metadata = {
             "external_import": True,
             "external_imported_at": now,
+            "auto_named": bool(auto_named),
             "source_files": saved_sources,
             "preview_briefs": [
                 {
@@ -1235,6 +1237,7 @@ Rules:
             "external_import": True,
             "pack_uid": pack_uid,
             "display_name": final_name,
+            "auto_named": bool(auto_named),
             "source_files": source_names,
             "total_stickers": expected_total,
         }
@@ -1705,8 +1708,15 @@ Rules:
             "local_crop_warnings": local_crop_warnings,
         }
         metadata["recommended_total_stickers"] = total_expected
+        suggested_pack_name = ""
         if pack_name_candidates:
-            metadata["ai_suggested_pack_name"] = pack_name_candidates[0]
+            suggested_pack_name = self._clean_ai_text(pack_name_candidates[0], limit=160)
+            metadata["ai_suggested_pack_name"] = suggested_pack_name
+        should_apply_ai_name = (
+            bool(metadata.get("auto_named"))
+            and bool(suggested_pack_name)
+            and suggested_pack_name.casefold() != str(pack["display_name"] or "").casefold()
+        )
 
         generated_previews: list[dict[str, Any]] = []
         preview_generation_errors: list[dict[str, Any]] = []
@@ -1877,6 +1887,15 @@ Rules:
                     int(pack_id),
                 ),
             )
+            if should_apply_ai_name:
+                conn.execute(
+                    "UPDATE packs SET display_name = ? WHERE id = ?",
+                    (suggested_pack_name, int(pack_id)),
+                )
+                conn.execute(
+                    "UPDATE pack_series SET series_name = ? WHERE id = ?",
+                    (suggested_pack_name, int(pack["series_id"])),
+                )
             replace_preview_ids = [
                 int(b.get("source_preview_id") or 0)
                 for b in grouped_briefs

@@ -287,6 +287,13 @@ async def _external_pack_assets_from_form(form: Any) -> list[dict[str, Any]]:
     return deduped
 
 
+def _external_pack_name_from_filename(filename: str) -> str:
+    stem = Path(filename or "external_pack").stem.strip()
+    if stem.lower().endswith(".cdr"):
+        stem = Path(stem).stem.strip()
+    return (stem[:200] or "External Sticker Pack")
+
+
 async def _manual_pack_assets_from_form(form: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     assets: list[dict[str, Any]] = []
     for upload in form.getlist("sticker_files"):
@@ -2232,8 +2239,8 @@ async def v2_pack_import_external(request: Request):
     if not assets:
         raise HTTPException(status_code=400, detail="upload at least one PDF or image file")
     display_name = (form.get("display_name") or "").strip()
-    if not display_name:
-        display_name = Path(assets[0]["filename"]).stem
+    batch_each_file = _form_bool(form, "batch_each_file", default=False)
+    auto_name = _form_bool(form, "auto_name", default=not bool(display_name))
     total_raw = (form.get("total_stickers") or "").strip()
     total_stickers = 0
     if total_raw:
@@ -2241,19 +2248,6 @@ async def v2_pack_import_external(request: Request):
             total_stickers = max(0, int(total_raw))
         except ValueError:
             raise HTTPException(status_code=400, detail="total_stickers must be a number")
-    try:
-        svc = get_pack_service()
-        result = svc.import_external_pack(
-            display_name=display_name,
-            source_assets=assets,
-            total_stickers=total_stickers,
-            style_anchor=(form.get("style_anchor") or "").strip(),
-            palette=(form.get("palette") or "").strip(),
-            pack_archetype=(form.get("pack_archetype") or "external_upload").strip(),
-            topic_name=(form.get("topic_name") or "").strip(),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     ai_enrich = _form_bool(form, "ai_enrich", default=True)
     group_previews = _form_bool(form, "group_previews", default=True)
     max_raw = (form.get("max_stickers_total") or form.get("max_stickers_per_preview") or "").strip()
@@ -2280,25 +2274,62 @@ async def v2_pack_import_external(request: Request):
             stickers_per_preview = max(0, int(per_raw))
         except ValueError:
             raise HTTPException(status_code=400, detail="stickers_per_preview must be a number")
+    import_groups: list[tuple[str, list[dict[str, Any]], bool]] = []
+    if batch_each_file:
+        for asset in assets:
+            file_name = _external_pack_name_from_filename(asset["filename"])
+            name = f"{display_name} - {file_name}" if display_name else file_name
+            import_groups.append((name, [asset], auto_name or not display_name))
+    else:
+        name = display_name or _external_pack_name_from_filename(assets[0]["filename"])
+        import_groups.append((name, assets, auto_name or not display_name))
+
+    svc = get_pack_service()
+    imported: list[dict[str, Any]] = []
+    try:
+        for name, group_assets, group_auto_name in import_groups:
+            result = svc.import_external_pack(
+                display_name=name,
+                source_assets=group_assets,
+                total_stickers=total_stickers,
+                style_anchor=(form.get("style_anchor") or "").strip(),
+                palette=(form.get("palette") or "").strip(),
+                pack_archetype=(form.get("pack_archetype") or "external_upload").strip(),
+                topic_name=(form.get("topic_name") or "").strip(),
+                auto_named=group_auto_name,
+            )
+            imported.append(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    kwargs: dict[str, Any] = {
+        "split": False,
+        "group_previews": group_previews,
+    }
+    if max_stickers > 0:
+        kwargs["max_stickers_per_preview"] = max_stickers
+    if target_preview_count > 0:
+        kwargs["target_preview_count"] = target_preview_count
+    if stickers_per_preview > 0:
+        kwargs["stickers_per_preview"] = stickers_per_preview
     if ai_enrich:
-        kwargs: dict[str, Any] = {
-            "split": False,
-            "group_previews": group_previews,
-        }
-        if max_stickers > 0:
-            kwargs["max_stickers_per_preview"] = max_stickers
-        if target_preview_count > 0:
-            kwargs["target_preview_count"] = target_preview_count
-        if stickers_per_preview > 0:
-            kwargs["stickers_per_preview"] = stickers_per_preview
-        run_async(
-            f"external_pack_ai:{result['pack_id']}",
-            svc.enrich_external_pack_with_ai,
-            int(result["pack_id"]),
-            label=f"AI 补全外部卡包 #{result['pack_id']}",
-            **kwargs,
+        for result in imported:
+            run_async(
+                f"external_pack_ai:{result['pack_id']}",
+                svc.enrich_external_pack_with_ai,
+                int(result["pack_id"]),
+                label=f"AI enrich external pack #{result['pack_id']}",
+                **kwargs,
+            )
+    logger.info("external pack import -> %s", imported)
+    if len(imported) > 1:
+        back = _safe_v2_redirect(form.get("return_to"), "/v2/packs")
+        sep = "&" if "?" in back else "?"
+        msg = f"Imported {len(imported)} external packs"
+        return RedirectResponse(
+            url=f"{back}{sep}batch_summary={msg}",
+            status_code=303,
         )
-    logger.info("external pack import -> %s", result)
+    result = imported[0]
     return RedirectResponse(
         url=f"/v2/packs/{result['pack_id']}",
         status_code=303,
