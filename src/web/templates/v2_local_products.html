@@ -1,0 +1,333 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .lp-page { padding-top:14px; }
+  .lp-panel { padding:16px 20px; margin-bottom:16px; }
+  .lp-panel .panel-header { margin-bottom:14px; padding-bottom:12px; }
+  .lp-filter-row { gap:12px; align-items:end; }
+  .lp-filter-row .v2-field { gap:6px; }
+  .lp-filter-row .v2-input,
+  .lp-filter-row .v2-select { min-height:38px; padding:8px 10px; font-size:13px; }
+  /* Shop-listing badges — show which TK shops this master is on. */
+  .shop-badges { display:inline-flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+  .shop-badge {
+    display:inline-flex; align-items:center; gap:3px;
+    padding:1px 7px; border-radius:var(--radius-pill);
+    font-size:10px; font-weight:700; white-space:nowrap;
+    border:1px solid var(--line);
+    background:var(--bg-subtle);
+    color:var(--text-muted);
+  }
+  .shop-badge.ok       { color:var(--success);     border-color:rgba(34,197,94,.30);  background:rgba(34,197,94,.10); }
+  .shop-badge.draft    { color:var(--accent-dark); border-color:var(--accent-glow);   background:var(--accent-bg); }
+  .shop-badge.missing  { opacity:.55; }
+  /* Bulk-publish toolbar — slides in when the operator picks rows. */
+  .lp-bulk-bar {
+    display:none; align-items:center; gap:10px;
+    padding:10px 14px; margin:0 0 12px;
+    border-radius:var(--radius-md);
+    background:var(--accent-bg); border:1px solid var(--accent-glow);
+    color:var(--accent-dark); font-size:13px; font-weight:600;
+  }
+  .lp-bulk-bar.show { display:flex; }
+  .lp-bulk-bar .spacer { flex:1; }
+  .lp-bulk-bar select {
+    padding:6px 10px; border-radius:6px;
+    border:1px solid var(--line); background:var(--surface); color:var(--text);
+    font-size:12px; font-weight:600;
+  }
+  .lp-bulk-bar button[disabled] { opacity:.5; cursor:not-allowed; }
+  .lp-bulk-bar .pub-btn {
+    padding:6px 14px; background:var(--accent); color:#fff;
+    border:none; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;
+  }
+  .lp-bulk-toast {
+    margin:0 0 12px; padding:10px 14px;
+    border-radius:var(--radius-md);
+    background:rgba(34,197,94,.10);
+    border:1px solid rgba(34,197,94,.30);
+    color:var(--success);
+    font-size:13px;
+  }
+  .lp-table-wrap { max-height:calc(100vh - 320px); min-height:400px; overflow:auto; }
+  .lp-table th { position:sticky; top:0; z-index:2; padding:10px 12px; background:var(--surface); }
+  .lp-table td { padding:11px 12px; font-size:13px; vertical-align:middle; }
+  .lp-cover { width:48px; height:48px; border-radius:var(--radius-md); border:1px solid var(--line-soft); object-fit:cover; background:var(--bg-subtle); }
+  .lp-title-cell { max-width:300px; }
+  .lp-title-cell a { color:var(--text); font-weight:700; text-decoration:none; }
+  .lp-title-cell a:hover { color:var(--accent); }
+  .lp-title-cell .pack { color:var(--text-muted); font-size:11px; margin-top:3px; }
+  .lp-row-actions {
+    display:inline-flex; gap:6px;
+    justify-content:flex-end; align-items:center;
+    flex-wrap:nowrap; white-space:nowrap;
+  }
+  .lp-row-actions .row-btn {
+    display:inline-flex; align-items:center; justify-content:center;
+    height:26px; padding:0 10px;
+    background:var(--surface); color:var(--text);
+    border:1px solid var(--line); border-radius:6px;
+    font-size:12px; line-height:1; cursor:pointer;
+    text-decoration:none; white-space:nowrap;
+    transition:background .12s, border-color .12s, color .12s;
+  }
+  .lp-row-actions .row-btn:hover { background:var(--bg-subtle); border-color:var(--accent-glow); }
+  .lp-row-actions .row-btn.primary  { color:var(--accent-dark); border-color:var(--accent-glow); }
+  .lp-row-actions .row-btn.primary:hover { background:var(--accent-bg); }
+</style>
+
+<div class="lp-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">C · Master Catalog</p>
+      <h1>本地产品库</h1>
+      <p class="page-subtitle">每个 pack 一条主版本（标题/描述/卖点/关键词/图集）。可批量推送到各家 TKShop 店铺。</p>
+    </div>
+  </section>
+
+  {% set _q_suffix = '' %}
+  {% if pack_id_filter %}{% set _q_suffix = _q_suffix + '&pack_id=' + (pack_id_filter|string) %}{% endif %}
+  {% if q %}{% set _q_suffix = _q_suffix + '&q=' + q %}{% endif %}
+
+  <p class="muted" style="margin:-6px 0 14px;font-size:12px;">
+    📦 当前视图：<strong>本地草稿池</strong>（{{ total }} 条）
+    <span style="margin-left:10px;color:var(--text-muted);">
+      去店铺视图：{% for s in tkshop_shops %}{% if not loop.first %} · {% endif %}<a href="/v2/products?tab={{ s }}" style="color:var(--text-muted);text-decoration:none;">{{ shop_label(s) }}</a>{% endfor %}
+    </span>
+  </p>
+
+  <section class="panel lp-panel">
+    <div class="panel-header">
+      <div>
+        <h3 style="margin:0;font-size:16px;">筛选 / 搜索</h3>
+        <p class="muted" style="margin-top:4px;">按卡包、关键词筛选主版本。</p>
+      </div>
+    </div>
+    <form method="get" action="/v2/local-products/" class="v2-toolbar lp-filter-row">
+      <div class="v2-field" style="flex:1;min-width:240px;">
+        <label for="lp-q">关键词</label>
+        <input id="lp-q" class="v2-input" type="search" name="q" value="{{ q or '' }}" autocomplete="off"
+               placeholder="标题、卡包名、seller_sku…">
+      </div>
+      <div class="v2-field" style="min-width:140px;">
+        <label for="lp-pack-id">卡包 ID</label>
+        <input id="lp-pack-id" class="v2-input" type="number" name="pack_id" value="{{ pack_id_filter or '' }}" min="1" inputmode="numeric" autocomplete="off" placeholder="可选…">
+      </div>
+      <div class="v2-field" style="min-width:105px;">
+        <label for="lp-limit">每页</label>
+        <select id="lp-limit" name="limit" class="v2-select" autocomplete="off">
+          {% for n in [25,50,100,200] %}
+          <option value="{{ n }}" {% if (limit or 50) == n %}selected{% endif %}>{{ n }} 条</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="v2-action-row">
+        <button type="submit" class="button">搜索</button>
+        <a href="/v2/local-products/" class="button ghost">重置</a>
+      </div>
+    </form>
+  </section>
+
+  {% if batch_summary %}
+  <div class="lp-bulk-toast">✓ {{ batch_summary }} — 任务已在后台运行，可在「系统 → 后台任务」查看进度，完成后刷新本页。</div>
+  {% endif %}
+
+  <!-- Bulk forms live outside the table (HTML disallows nested forms).
+       Checkboxes use form="<id>" to associate with both. -->
+  <form id="export-form"   method="post" action="/v2/products/export" target="_blank" style="display:none;"></form>
+  <form id="bulk-pub-form" method="post" action="/v2/products/batch-publish-from-local" style="display:none;">
+    <input type="hidden" name="back" value="/v2/local-products/{{ _q_suffix and '?' + _q_suffix[1:] or '' }}">
+  </form>
+
+  {% if tkshop_shops|length > 0 %}
+  <div id="lp-bulk-bar" class="lp-bulk-bar" role="region" aria-label="批量上架工具栏">
+    <span>已选 <strong id="bulk-count">0</strong> 个本地草稿</span>
+    <span class="spacer"></span>
+    <label style="font-size:12px;font-weight:600;">上架到：
+      <select id="bulk-target-shop" form="bulk-pub-form" name="target_shop">
+        {% for s in tkshop_shops %}
+        <option value="{{ s }}">🏪 {{ shop_label(s) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" form="bulk-pub-form" class="pub-btn" id="bulk-pub-go" disabled
+            title="若该 pack 已在目标店上架，则跳过；标题/类目/主图缺失的也跳过。">
+      🚀 批量上架（后台）
+    </button>
+  </div>
+  {% endif %}
+
+  <section class="panel lp-panel" style="padding:0;">
+    <div class="panel-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div>
+        <h3 style="margin:0;font-size:16px;">本地产品列表</h3>
+        <p class="muted" style="margin-top:4px;">共 {{ total }} 个 · <span id="picked-count">0</span> 已选</p>
+      </div>
+      <div class="v2-action-row" style="gap:8px;">
+        <button type="button" id="pick-all"
+                style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">全选当前页</button>
+        <button type="button" id="pick-none"
+                style="padding:6px 12px;background:#f3f4f6;color:#111827;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">清空</button>
+        <button type="submit" form="export-form" name="fmt" value="xlsx" id="btn-export-xlsx" disabled
+                title="导出含主图嵌入的 Excel 表（含标题/SKU/状态/卖点/关键词等全部字段）"
+                style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5;">📊 导出 XLSX (含图)</button>
+        <button type="submit" form="export-form" name="fmt" value="zip" id="btn-export-zip" disabled
+                title="导出 ZIP：products.csv + images/ 全部产品图"
+                style="padding:6px 14px;background:#10b981;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;opacity:.5;">📦 导出 ZIP (CSV+图)</button>
+      </div>
+    </div>
+    <div class="table-wrap lp-table-wrap">
+      <table class="lp-table" style="width:100%;font-size:13px;min-width:1020px;">
+        <thead>
+          <tr style="text-align:left;color:var(--text-muted);">
+            <th style="width:36px;text-align:center;"><input type="checkbox" id="pick-header" title="切换本页"></th>
+            <th style="width:60px;">封面</th>
+            <th>title (en) / pack</th>
+            <th style="width:170px;">seller_sku</th>
+            <th style="width:140px;">上架进度</th>
+            <th style="width:120px;">created</th>
+            <th style="width:120px;">updated</th>
+            <th style="width:140px;text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr style="border-top:1px solid var(--line-soft);">
+            <td style="text-align:center;">
+              <input type="checkbox" form="export-form" name="local_product_ids" value="{{ p.id }}" class="row-pick">
+            </td>
+            <td>
+              {% if p.pack_cover_url %}
+              <img src="{{ p.pack_cover_url }}" class="lp-cover">
+              {% endif %}
+            </td>
+            <td class="lp-title-cell">
+              <a href="/v2/local-products/{{ p.id }}">{{ (p.title or '（未生成 — 进入页面填写）')[:80] }}</a>
+              <div class="pack">
+                本地 #{{ p.id }} · {{ p.pack_name or '—' }}
+                · <span class="muted">{{ p.image_count or 0 }} 图 · {{ p.listing_count or 0 }} listing</span>
+              </div>
+              <div class="shop-badges" aria-label="该卡包的上架状态">
+                {% for s in tkshop_shops %}
+                  {% set _info = (p.shops or {}).get(s) %}
+                  {% set _label = shop_label(s) %}
+                  {% if _info and _info.tiktok_product_id %}
+                    <span class="shop-badge ok" title="已上架到 {{ _label }}（listing #{{ _info.product_id }}）">🏪 {{ _label }} ✓</span>
+                  {% elif _info %}
+                    <span class="shop-badge draft" title="{{ _label }} 已有本地 listing #{{ _info.product_id }}（{{ _info.publish_status }}）">🏪 {{ _label }} · {{ _info.publish_status }}</span>
+                  {% else %}
+                    <span class="shop-badge missing" title="{{ _label }} 暂未上架">🏪 {{ _label }} —</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </td>
+            <td>
+              <code style="font-size:11px;color:var(--text-muted);" title="{{ p.seller_sku or '' }}">{{ (p.seller_sku or '—')[:18] }}{% if p.seller_sku and p.seller_sku|length > 18 %}…{% endif %}</code>
+            </td>
+            <td>
+              {% set _total = (p.listing_count or 0) %}
+              {% set _live = (p.shops or {})|length %}
+              <span class="v2-status-pill {% if _total == 0 %}pending{% elif _live %}ok{% else %}pending{% endif %}">
+                {% if _total == 0 %}未上架{% else %}{{ _live }} / {{ _total }} 在店{% endif %}
+              </span>
+            </td>
+            <td style="color:var(--text-muted);font-size:11px;">{{ p.created_human }}</td>
+            <td style="color:var(--text-muted);font-size:11px;">{{ p.updated_human or '—' }}</td>
+            <td>
+              <div class="lp-row-actions">
+                <a href="/v2/local-products/{{ p.id }}" class="row-btn primary" title="进入主版本编辑（标题/描述/图集 + 推送到各店）">✏️ 主版本</a>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+            {% if q or pack_id_filter %}
+              没有命中筛选条件的本地产品 — <a href="/v2/local-products/" style="color:var(--accent);">清空筛选</a>
+            {% else %}
+              暂无本地产品 — 去某个卡包详情页点 “→ TKShop 产品”
+            {% endif %}
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+  const exportForm = document.getElementById('export-form');
+  const bulkForm   = document.getElementById('bulk-pub-form');
+  const bulkBar    = document.getElementById('lp-bulk-bar');
+  const bulkCount  = document.getElementById('bulk-count');
+  const bulkGo     = document.getElementById('bulk-pub-go');
+  const bulkShop   = document.getElementById('bulk-target-shop');
+  if (!exportForm) return;
+  const rowPicks = () => Array.from(document.querySelectorAll('.row-pick'));
+  const headerPick = document.getElementById('pick-header');
+  const pickAll  = document.getElementById('pick-all');
+  const pickNone = document.getElementById('pick-none');
+  const countEl  = document.getElementById('picked-count');
+  const btnX = document.getElementById('btn-export-xlsx');
+  const btnZ = document.getElementById('btn-export-zip');
+
+  // Mirror picked ids into bulk-pub-form via hidden inputs (a checkbox can
+  // only declare one form= attribute, so sync on each change).
+  function syncBulkForm() {
+    if (!bulkForm) return;
+    Array.from(bulkForm.querySelectorAll('input[name="local_product_ids"]'))
+      .forEach(n => n.remove());
+    rowPicks().filter(c => c.checked).forEach(c => {
+      const h = document.createElement('input');
+      h.type = 'hidden'; h.name = 'local_product_ids'; h.value = c.value;
+      bulkForm.appendChild(h);
+    });
+  }
+
+  function refresh() {
+    const total   = rowPicks().length;
+    const checked = rowPicks().filter(c => c.checked).length;
+    countEl.textContent = checked;
+    if (headerPick) {
+      headerPick.indeterminate = checked > 0 && checked < total;
+      headerPick.checked = checked > 0 && checked === total;
+    }
+    [btnX, btnZ].forEach(b => {
+      if (!b) return;
+      b.disabled = checked === 0;
+      b.style.opacity = checked === 0 ? '.5' : '1';
+    });
+    if (bulkBar) bulkBar.classList.toggle('show', checked > 0);
+    if (bulkCount) bulkCount.textContent = checked;
+    if (bulkGo) bulkGo.disabled = checked === 0;
+    syncBulkForm();
+  }
+  rowPicks().forEach(c => c.addEventListener('change', refresh));
+  if (headerPick) headerPick.addEventListener('change', () => {
+    const v = headerPick.checked;
+    rowPicks().forEach(c => { c.checked = v; });
+    refresh();
+  });
+  if (pickAll) pickAll.addEventListener('click', () => {
+    rowPicks().forEach(c => { c.checked = true; });
+    refresh();
+  });
+  if (pickNone) pickNone.addEventListener('click', () => {
+    rowPicks().forEach(c => { c.checked = false; });
+    refresh();
+  });
+  if (bulkForm) bulkForm.addEventListener('submit', (e) => {
+    const n = rowPicks().filter(c => c.checked).length;
+    if (n === 0) { e.preventDefault(); return; }
+    const shop = bulkShop ? bulkShop.value : '';
+    if (!confirm('将把 ' + n + ' 个本地草稿上架到「' + shop + '」店。已上架过的 pack 会被跳过，标题/类目/主图缺失的也会被跳过。继续?')) {
+      e.preventDefault(); return;
+    }
+    if (bulkGo) { bulkGo.disabled = true; bulkGo.textContent = '已派发到后台…'; }
+  });
+  refresh();
+})();
+</script>
+
+{% endblock %}

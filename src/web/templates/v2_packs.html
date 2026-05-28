@@ -20,6 +20,10 @@
     justify-content: flex-end;
     align-items: center;
   }
+  .pack-row-actions form { margin: 0; display: inline-flex; }
+  .btn-sm.danger { color: var(--danger); border-color: var(--danger-border); }
+  .btn-sm.danger:hover:not(:disabled) { background: var(--danger-bg); }
+  .btn-sm:disabled { opacity: .45; cursor: not-allowed; }
   /* Pipeline-status chips on each row — quick glance "where is this pack" */
   .pack-pipeline-chip {
     display:inline-flex; align-items:center; gap:3px;
@@ -216,18 +220,26 @@
           <input type="checkbox" name="ai_enrich" value="1" checked>
           <span>导入后 AI 自动补充卡包信息和单张清单</span>
         </label>
-        <input type="hidden" name="ai_split" value="0">
+        <input type="hidden" name="group_previews" value="0">
         <label class="v2-field full" style="display:flex;align-items:center;gap:8px;">
-          <input type="checkbox" name="ai_split" value="1" checked>
-          <span>AI 补全后自动分割单张图</span>
+          <input type="checkbox" name="group_previews" value="1" checked>
+          <span>AI 补全后按数量生成多张预览图</span>
         </label>
         <div class="v2-field">
-          <label for="external-max-stickers">每张预览最多识别</label>
-          <input id="external-max-stickers" class="v2-input" type="number" name="max_stickers_per_preview" min="1" max="80" inputmode="numeric" autocomplete="off" placeholder="默认 40">
+          <label for="external-target-previews">拆成几张预览图</label>
+          <input id="external-target-previews" class="v2-input" type="number" name="target_preview_count" min="1" max="80" inputmode="numeric" autocomplete="off" placeholder="可选，例如 4">
+        </div>
+        <div class="v2-field">
+          <label for="external-stickers-per-preview">每张预览约放几张</label>
+          <input id="external-stickers-per-preview" class="v2-input" type="number" name="stickers_per_preview" min="1" max="80" inputmode="numeric" autocomplete="off" placeholder="默认 10">
+        </div>
+        <div class="v2-field">
+          <label for="external-max-stickers">最多识别总数</label>
+          <input id="external-max-stickers" class="v2-input" type="number" name="max_stickers_total" min="1" max="160" inputmode="numeric" autocomplete="off" placeholder="默认 80">
         </div>
         <input type="hidden" name="pack_archetype" value="external_upload">
       </div>
-      <p class="muted" style="margin:12px 0 0;">AI 补全和切图在后台运行；完成后会出现真实 sticker 数量，可继续创建 TK 商品、生成产品信息和主图。</p>
+      <p class="muted" style="margin:12px 0 0;">AI 会先识别原图中的贴纸，再平分生成多张预览图；单张 sticker 后续可用「切 / 补齐 Stickers」单独执行。</p>
     </div>
     <div class="v2-dialog-footer">
       <button type="button" class="button ghost" data-close-dialog>取消</button>
@@ -290,6 +302,8 @@
         <tbody>
           {% for p in packs %}
           {% set has_product = (p.product_count or 0) > 0 %}
+          {% set has_local_product = (p.local_product_count or 0) > 0 %}
+          {% set has_downstream = (p.video_count or 0) > 0 or has_product or has_local_product %}
           {% set can_generate = (p.sticker_ok_count or 0) > 0 or (p.preview_ok_count or 0) > 0 %}
           <tr class="v2-pack-row" data-has-product="{{ '1' if has_product else '0' }}">
             <td style="text-align:center;">
@@ -337,6 +351,7 @@
                 <span class="pack-pipeline-chip muted">未生成</span>
                 {% if p.video_count %}<span class="pack-pipeline-chip muted">🎬 {{ p.video_count }}</span>{% endif %}
               {% endif %}
+              {% if has_local_product %}<span class="pack-pipeline-chip ok" title="已有 {{ p.local_product_count }} 个本地产品">本地 {{ p.local_product_count }}</span>{% endif %}
             </td>
             <td><span class="v2-status-pill {% if p.status == 'active' %}ok{% else %}error{% endif %}">{{ p.status }}</span></td>
             <td style="text-align:right;">
@@ -353,6 +368,14 @@
                 {% endif %}
                 <button type="button" class="btn-sm" data-open-dialog="feedback-pack-dialog-{{ p.id }}">反馈</button>
                 <a class="btn-sm" href="/v2/packs/{{ p.id }}/stickers.zip">下载 ZIP</a>
+                <form method="post" action="/v2/packs/{{ p.id }}/delete"
+                      onsubmit="return confirm('只删除 pack 聚合行，原始系列/预览/贴纸会保留。确认删除 #{{ p.id }}？')">
+                  <input type="hidden" name="return_to" value="{{ close_url }}">
+                  <button type="submit" class="btn-sm danger"
+                          {% if has_downstream %}disabled title="已有视频、TK 商品或本地产品，不能直接删除；请先进入详情页归档。"{% endif %}>
+                    删除
+                  </button>
+                </form>
               </div>
             </td>
           </tr>

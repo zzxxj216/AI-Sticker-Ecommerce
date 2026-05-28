@@ -85,11 +85,12 @@
             {% if pack.split_task_running %}切图中…{% else %}切 / 补齐 Stickers{% endif %}
           </button>
         </form>
-        <form method="post" action="/v2/packs/{{ pack.id }}/ai-enrich-and-split" data-async-form data-pending-text="已派发 AI 补全和切图任务…">
+        <form method="post" action="/v2/packs/{{ pack.id }}/ai-enrich-and-split" data-async-form data-pending-text="已派发 AI 补全 + 分组预览任务…"
+              title="读取大图，AI 识别全部贴纸，再按默认每张约 10 个平分到多张新预览图；失败时保留原图。">
           <input type="hidden" name="return_to" value="{{ return_to }}">
-          <input type="hidden" name="split" value="1">
+          <input type="hidden" name="group_previews" value="1">
           <button type="submit" class="button v2-button-full" {% if pack.external_ai_task_running or ps.ok == 0 %}disabled{% endif %}>
-            {% if pack.external_ai_task_running %}AI 补全中…{% else %}AI 补充信息并切图{% endif %}
+            {% if pack.external_ai_task_running %}AI 补全中…{% else %}AI 补充信息 + 分组预览{% endif %}
           </button>
         </form>
       </div>

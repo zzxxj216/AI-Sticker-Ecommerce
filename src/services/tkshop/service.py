@@ -19,10 +19,12 @@ import os
 import re
 import sqlite3
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
+from PIL import Image
 
 from src.core.exceptions import APIError
 from src.core.logger import get_logger
@@ -1116,12 +1118,27 @@ class TKShopService:
             ).fetchall() if row["series_id"] else []
 
         briefs: list[str] = []
+        source_image_paths: list[str] = []
         try:
             md = json.loads(row["metadata_json"] or "{}")
             for pb in md.get("preview_briefs", [])[:3]:
                 briefs.extend(pb.get("stickers", [])[:6])
+            for source in md.get("source_files") or []:
+                for key in ("source_path", "source_image_path"):
+                    p = str(source.get(key) or "").strip()
+                    if p:
+                        source_image_paths.append(p)
+                for p in source.get("preview_paths") or []:
+                    p = str(p or "").strip()
+                    if p:
+                        source_image_paths.append(p)
+            for pb in md.get("ai_source_preview_briefs") or []:
+                p = str(pb.get("source_image_path") or "").strip()
+                if p:
+                    source_image_paths.append(p)
         except Exception:
             pass
+        source_image_paths = list(dict.fromkeys(source_image_paths))
 
         return {
             "product_id": product_id,
@@ -1134,11 +1151,32 @@ class TKShopService:
             "briefs_sample": briefs,
             "preview_prompts": [p["prompt_text"] or "" for p in previews],
             "preview_image_paths": [p["image_path"] for p in previews if p["image_path"]],
+            "source_image_paths": source_image_paths,
             "sticker_image_paths": [s["image_path"] for s in stickers if s["image_path"]],
             "selected_sticker_subjects": [
                 s["name"] for s in stickers if s["is_selected"] and (s["name"] or "").strip()
             ],
         }
+
+    @staticmethod
+    def _render_white_canvas_image(source_path: Path, *, size: str = "1024x1024") -> bytes:
+        try:
+            w_str, h_str = (size or "1024x1024").lower().split("x")
+            canvas_w, canvas_h = int(w_str), int(h_str)
+        except Exception:
+            canvas_w, canvas_h = 1024, 1024
+        canvas_w = max(512, canvas_w)
+        canvas_h = max(512, canvas_h)
+        with Image.open(source_path) as src:
+            image = src.convert("RGBA")
+            image.thumbnail((int(canvas_w * 0.94), int(canvas_h * 0.94)), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
+            x = (canvas_w - image.width) // 2
+            y = (canvas_h - image.height) // 2
+            canvas.alpha_composite(image, (x, y))
+        out = BytesIO()
+        canvas.convert("RGB").save(out, "PNG", optimize=True)
+        return out.getvalue()
 
     def synthesize_image_specs(
         self,
@@ -1238,6 +1276,7 @@ class TKShopService:
         ctx = synth["context"]
 
         sheet_paths = [Path(p) for p in ctx.get("preview_image_paths", []) if Path(p).exists()]
+        source_paths = [Path(p) for p in ctx.get("source_image_paths", []) if Path(p).exists()]
         sticker_paths = [Path(p) for p in ctx.get("sticker_image_paths", []) if Path(p).exists()]
         if not sheet_paths and not sticker_paths:
             raise ValueError(
@@ -1262,20 +1301,44 @@ class TKShopService:
         size = _safe_size(size)
         main_size = _safe_size(main_size)
 
-        # One MERGED reference: when enough preview sheets exist they better
-        # represent the whole product family. If previews are sparse (for
-        # example one manually-uploaded sheet), prefer split sticker/sheet
-        # assets so a single preview cannot dominate the main image.
-        preview_threshold = max(1, int(os.getenv("TKSHOP_MAIN_PREVIEW_MIN_COUNT", "3")))
-        if len(sheet_paths) >= preview_threshold:
-            main_bundle_paths = sheet_paths
-            main_bundle_ref_label = "preview_sheets_merged_grid"
-        elif sticker_paths:
-            main_bundle_paths = sticker_paths
-            main_bundle_ref_label = "split_stickers_merged_grid"
+        # For external uploads, the operator-provided full overview is the
+        # authoritative artwork source. Use it directly for the main image
+        # instead of asking image_edit to redraw/re-sample the pack, which can
+        # duplicate stickers or subtly change designs.
+        external_overview_paths = [
+            p for p in source_paths
+            if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
+        ]
+        if external_overview_paths:
+            main_bundle_paths = external_overview_paths[:1]
+            main_bundle_ref_label = "external_source_overview"
+            main_from_source_path: Optional[Path] = main_bundle_paths[0]
         else:
-            main_bundle_paths = sheet_paths
-            main_bundle_ref_label = "preview_sheets_merged_grid"
+            main_from_source_path = None
+
+        # One MERGED reference for AI-generated secondary variety angles. When
+        # enough preview sheets exist they represent the whole family; otherwise
+        # split sticker assets prevent a single preview from dominating.
+        preview_threshold = max(1, int(os.getenv("TKSHOP_MAIN_PREVIEW_MIN_COUNT", "3")))
+        if not external_overview_paths:
+            if len(sheet_paths) >= preview_threshold:
+                main_bundle_paths = sheet_paths
+                main_bundle_ref_label = "preview_sheets_merged_grid"
+            elif sticker_paths:
+                main_bundle_paths = sticker_paths
+                main_bundle_ref_label = "split_stickers_merged_grid"
+            else:
+                main_bundle_paths = sheet_paths
+                main_bundle_ref_label = "preview_sheets_merged_grid"
+        if len(sheet_paths) >= preview_threshold:
+            secondary_bundle_paths = sheet_paths
+            secondary_bundle_ref_label = "preview_sheets_merged_grid"
+        elif sticker_paths:
+            secondary_bundle_paths = sticker_paths
+            secondary_bundle_ref_label = "split_stickers_merged_grid"
+        else:
+            secondary_bundle_paths = sheet_paths
+            secondary_bundle_ref_label = "preview_sheets_merged_grid"
         merge_sources = [p.as_posix() for p in main_bundle_paths]
         merged_ref_bytes = compose_reference_grid(
             merge_sources,
@@ -1283,6 +1346,13 @@ class TKShopService:
             max_side=2048,
         )
         merged_ref_hash = average_hash(merged_ref_bytes)
+        secondary_merge_sources = [p.as_posix() for p in secondary_bundle_paths]
+        secondary_merged_ref_bytes = compose_reference_grid(
+            secondary_merge_sources,
+            cell=384 if len(secondary_bundle_paths) >= 12 else 512,
+            max_side=2048,
+        )
+        secondary_merged_ref_hash = average_hash(secondary_merged_ref_bytes)
         single_source_hashes: list[tuple[str, int]] = []
         if len(main_bundle_paths) > 1:
             for p in main_bundle_paths[:12]:
@@ -1323,6 +1393,13 @@ class TKShopService:
             """
             rt = (role_type or "hero").strip().lower()
             if rt in self._VARIETY_ROLE_TYPES or not sticker_paths:
+                if main_from_source_path is not None and rt != "hero":
+                    return (
+                        secondary_bundle_ref_label,
+                        secondary_merged_ref_bytes,
+                        secondary_merged_ref_hash,
+                        True,
+                    )
                 return main_bundle_ref_label, merged_ref_bytes, merged_ref_hash, True
             pick = sticker_paths[idx % len(sticker_paths)]
             key = pick.as_posix()
@@ -1425,6 +1502,34 @@ class TKShopService:
             this_size = main_size if role == "main" else size
             this_quality = main_quality if role == "main" else secondary_quality
             want = _expected_wh(this_size)
+            if role == "main" and main_from_source_path is not None:
+                try:
+                    out_bytes = self._render_white_canvas_image(main_from_source_path, size=this_size)
+                    tmp = tmpdir / f"source_main_{idx}_{int(time.time()*1000)}.png"
+                    tmp.write_bytes(out_bytes)
+                    return {
+                        "idx": idx,
+                        "role": role,
+                        "ok": True,
+                        "tmp_path": tmp,
+                        "concept": concept_label or "external source overview",
+                        "image_prompt": (
+                            "Local main image generated from the operator-uploaded "
+                            f"source overview without AI redraw: {main_from_source_path.as_posix()}"
+                        ),
+                        "role_type": "hero",
+                        "reference": main_from_source_path.as_posix(),
+                        "reference_count": 1,
+                    }
+                except Exception as e:
+                    return {
+                        "idx": idx,
+                        "role": role,
+                        "ok": False,
+                        "error": f"source overview render failed: {type(e).__name__}: {e}"[:300],
+                        "concept": concept_label,
+                        "image_prompt": base_prompt,
+                    }
 
             attempts = 2  # initial + one retry on QA failure
             last_reason = ""

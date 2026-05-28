@@ -107,18 +107,13 @@
   {% if status_filter and status_filter != 'all' %}{% set _q_suffix = _q_suffix + '&status=' + status_filter %}{% endif %}
   {% if pack_id_filter %}{% set _q_suffix = _q_suffix + '&pack_id=' + (pack_id_filter|string) %}{% endif %}
   {% if q %}{% set _q_suffix = _q_suffix + '&q=' + q %}{% endif %}
-  {# Subtitle: which shop is on screen + the per-tab counts (since the user
-     no longer sees the tab strip with badge counts). #}
+  {# Subtitle: which shop is on screen + sibling links. Local-products
+     moved to /v2/local-products/, so we link out instead of counting it. #}
   <p class="muted" style="margin:-6px 0 14px;font-size:12px;">
-    {% if is_local_tab %}
-      📦 当前视图：<strong>本地草稿池</strong>（{{ tab_counts.get('local', 0) }} 条）
-    {% else %}
-      🏪 当前视图：<strong>{{ shop_label(tab) }}</strong>（{{ tab_counts.get(tab, 0) }} 条）
-    {% endif %}
+    🏪 当前视图：<strong>{{ shop_label(tab) }}</strong>（{{ tab_counts.get(tab, 0) }} 条）
     <span style="margin-left:10px;color:var(--text-muted);">
-      切换：本地 {{ tab_counts.get('local', 0) }}
-      {% for s in tkshop_shops %} · {{ shop_label(s) }} {{ tab_counts.get(s, 0) }}{% endfor %}
-      → 见左侧 TKShop 菜单
+      切换：<a href="/v2/local-products/" style="color:var(--text-muted);text-decoration:none;">📦 本地产品库</a>
+      {% for s in tkshop_shops %} · <a href="/v2/products?tab={{ s }}" style="color:var(--text-muted);text-decoration:none;">{{ shop_label(s) }} {{ tab_counts.get(s, 0) }}</a>{% endfor %}
     </span>
   </p>
 
@@ -189,7 +184,7 @@
   <form id="export-form"   method="post" action="/v2/products/export" target="_blank" style="display:none;"></form>
   {% if is_local_tab %}
   <form id="bulk-pub-form" method="post" action="/v2/products/batch-publish-from-local" style="display:none;">
-    <input type="hidden" name="back" value="/v2/products?tab=local{{ _q_suffix }}">
+    <input type="hidden" name="back" value="/v2/local-products/">
   </form>
   {% else %}
   <form id="bulk-pub-form" method="post" action="/v2/products/batch-publish-to-shop" style="display:none;">

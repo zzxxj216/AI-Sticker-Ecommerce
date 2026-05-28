@@ -14,11 +14,13 @@ import os
 import re
 import sqlite3
 import time
+from collections import Counter
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
 from src.core.logger import get_logger
+from src.services.preview_gen.prompts import build_preview_prompt
 from src.services.storage.pack_store import get_pack_store, make_pack_uid
 
 logger = get_logger("service.packs")
@@ -30,13 +32,16 @@ _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 _SOURCE_SUFFIXES = _IMAGE_SUFFIXES | {".pdf"}
 DEFAULT_EXTERNAL_AI_MAX_STICKERS_PER_PREVIEW = int(
-    os.getenv("TKSHOP_EXTERNAL_IMPORT_MAX_STICKERS_PER_PREVIEW", "40")
+    os.getenv("TKSHOP_EXTERNAL_IMPORT_MAX_STICKERS_PER_PREVIEW", "80")
 )
 EXTERNAL_AI_HARD_MAX_STICKERS_PER_PREVIEW = int(
-    os.getenv("TKSHOP_EXTERNAL_IMPORT_HARD_MAX_STICKERS_PER_PREVIEW", "80")
+    os.getenv("TKSHOP_EXTERNAL_IMPORT_HARD_MAX_STICKERS_PER_PREVIEW", "160")
 )
 EXTERNAL_AI_ANALYSIS_MAX_SIDE = int(
     os.getenv("TKSHOP_EXTERNAL_IMPORT_AI_MAX_SIDE", "1600")
+)
+DEFAULT_EXTERNAL_GROUP_STICKERS_PER_PREVIEW = int(
+    os.getenv("TKSHOP_EXTERNAL_IMPORT_GROUP_STICKERS_PER_PREVIEW", "10")
 )
 
 
@@ -218,6 +223,14 @@ class PackService:
             params.extend([like, like, like, like, like, like])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with _open_db(self.db_path) as conn:
+            has_local_products = bool(conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_products'",
+            ).fetchone())
+            local_product_count_sql = (
+                "(SELECT COUNT(*) FROM local_products lp WHERE lp.pack_id = p.id)"
+                if has_local_products
+                else "0"
+            )
             total = conn.execute(
                 f"""
                 SELECT COUNT(*)
@@ -295,7 +308,8 @@ class PackService:
                        (SELECT COUNT(*) FROM tk_videos v
                          WHERE v.pack_id = p.id) AS video_count,
                        (SELECT COUNT(*) FROM tkshop_products pr
-                         WHERE pr.pack_id = p.id) AS product_count
+                         WHERE pr.pack_id = p.id) AS product_count,
+                       {local_product_count_sql} AS local_product_count
                   FROM packs       p
              LEFT JOIN pack_series s ON s.id = p.series_id
              LEFT JOIN topic_plans tp ON tp.id = s.plan_id
@@ -373,8 +387,21 @@ class PackService:
                 """,
                 (pack_id,),
             ).fetchall()
+            local_products: list[sqlite3.Row] = []
+            local_table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_products'",
+            ).fetchone()
+            if local_table:
+                local_products = conn.execute(
+                    """
+                    SELECT id, title, seller_sku, category_id, created_at, updated_at
+                      FROM local_products WHERE pack_id = ? ORDER BY id DESC
+                    """,
+                    (pack_id,),
+                ).fetchall()
         d["videos"] = [dict(v) for v in videos]
         d["products"] = [dict(p) for p in products]
+        d["local_products"] = [dict(p) for p in local_products]
         return d
 
     def get_pack(self, pack_id: int) -> Optional[dict]:
@@ -634,6 +661,174 @@ Rules:
             "fallback": True,
             "source_prompt": filename[:200],
         }
+
+    @staticmethod
+    def _distribute_evenly(items: list[Any], group_count: int) -> list[list[Any]]:
+        group_count = max(1, min(int(group_count or 1), max(1, len(items))))
+        groups: list[list[Any]] = []
+        n = len(items)
+        start = 0
+        for i in range(group_count):
+            remaining_items = n - start
+            remaining_groups = group_count - i
+            size = (remaining_items + remaining_groups - 1) // remaining_groups
+            groups.append(items[start:start + size])
+            start += size
+        return [g for g in groups if g]
+
+    @staticmethod
+    def _target_group_count(
+        *,
+        total_items: int,
+        target_preview_count: int = 0,
+        stickers_per_preview: int = DEFAULT_EXTERNAL_GROUP_STICKERS_PER_PREVIEW,
+    ) -> int:
+        if total_items <= 0:
+            return 0
+        if target_preview_count and target_preview_count > 0:
+            return max(1, min(int(target_preview_count), total_items))
+        per = max(1, int(stickers_per_preview or DEFAULT_EXTERNAL_GROUP_STICKERS_PER_PREVIEW))
+        return max(1, (total_items + per - 1) // per)
+
+    @staticmethod
+    def _build_external_group_prompt(
+        *,
+        group_idx: int,
+        group_count: int,
+        stickers: list[str],
+        style_anchor: str,
+    ) -> str:
+        lines = "\n".join(f"{i}. {s}" for i, s in enumerate(stickers, 1))
+        return (
+            "Create a clean ecommerce sticker/card sheet preview by extracting "
+            f"ONLY this subset from the uploaded full pack sheet: group {group_idx} "
+            f"of {group_count}.\n\n"
+            f"Subset designs:\n{lines}\n\n"
+            "Keep the exact artwork, text, colors, outlines, and visual style from "
+            "the source image. Arrange only these designs as a neat grid on a clean "
+            "white background, with every sticker/card fully visible, evenly spaced, "
+            "no overlap, no extra designs, no packaging, no mockup, no hands, square "
+            "1:1 product preview composition. "
+            f"Style reference: {style_anchor[:500]}"
+        )
+
+    @staticmethod
+    def _build_external_local_group_prompt(
+        *,
+        group_idx: int,
+        group_count: int,
+        stickers: list[str],
+    ) -> str:
+        lines = "\n".join(f"{i}. {s}" for i, s in enumerate(stickers, 1))
+        return (
+            "Local pixel-preserving grouped preview assembled from the uploaded "
+            f"source artwork: group {group_idx} of {group_count}.\n\n"
+            f"Included designs:\n{lines}\n\n"
+            "No AI redraw was used for this preview; source sticker regions were "
+            "cropped locally and arranged on a clean white ecommerce sheet."
+        )
+
+    @staticmethod
+    def _crop_external_box_bytes(preview_path: Path, box: tuple[int, int, int, int]) -> bytes:
+        from PIL import Image
+
+        with Image.open(preview_path) as source:
+            crop = source.convert("RGBA").crop(box)
+            out = BytesIO()
+            crop.save(out, format="PNG")
+            return out.getvalue()
+
+    @staticmethod
+    def _compose_external_group_preview(crops: list[bytes], *, canvas_size: int = 1024) -> bytes:
+        from PIL import Image
+
+        if not crops:
+            raise ValueError("no local sticker crops to compose")
+        n = len(crops)
+        cols = max(1, int((n * 1.15) ** 0.5 + 0.999))
+        rows = max(1, (n + cols - 1) // cols)
+        margin = 54 if n <= 10 else 42
+        gap = 24 if n <= 10 else 18
+        cell_w = max(1, (canvas_size - margin * 2 - gap * (cols - 1)) // cols)
+        cell_h = max(1, (canvas_size - margin * 2 - gap * (rows - 1)) // rows)
+        sheet = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 255))
+
+        for idx, crop_bytes in enumerate(crops):
+            with Image.open(BytesIO(crop_bytes)) as src:
+                sticker = src.convert("RGBA")
+            w, h = sticker.size
+            if w <= 0 or h <= 0:
+                continue
+            scale = min(cell_w / w, cell_h / h, 1.2)
+            new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+            if new_size != sticker.size:
+                sticker = sticker.resize(new_size, Image.Resampling.LANCZOS)
+            row = idx // cols
+            col = idx % cols
+            x = margin + col * (cell_w + gap) + (cell_w - sticker.width) // 2
+            y = margin + row * (cell_h + gap) + (cell_h - sticker.height) // 2
+            sheet.alpha_composite(sticker, (x, y))
+
+        out = BytesIO()
+        sheet.convert("RGB").save(out, format="PNG")
+        return out.getvalue()
+
+    def _extract_external_local_crops(
+        self,
+        source_briefs: list[dict[str, Any]],
+    ) -> tuple[dict[tuple[int, int], bytes], list[dict[str, Any]], list[dict[str, Any]]]:
+        from src.services.preview_gen.service import PreviewGenService
+
+        crop_map: dict[tuple[int, int], bytes] = {}
+        crop_errors: list[dict[str, Any]] = []
+        crop_warnings: list[dict[str, Any]] = []
+        for brief in source_briefs:
+            source_idx = int(brief.get("source_preview_idx") or brief.get("preview_idx") or 0)
+            image_path = Path(str(brief.get("source_image_path") or ""))
+            stickers = list(brief.get("stickers") or [])
+            if source_idx <= 0 or not image_path.is_file() or not stickers:
+                continue
+            try:
+                boxes = PreviewGenService._detect_sticker_boxes(image_path, len(stickers))
+            except Exception as e:  # noqa: BLE001
+                crop_errors.append({
+                    "source_preview_idx": source_idx,
+                    "error": f"{type(e).__name__}: {e}"[:500],
+                })
+                continue
+
+            listed_before = len(stickers)
+            if len(boxes) > len(stickers):
+                for extra_idx in range(listed_before + 1, len(boxes) + 1):
+                    stickers.append(
+                        f"Visible sticker/card artwork from imported preview {source_idx} item {extra_idx}"
+                    )
+                brief["stickers"] = stickers
+                crop_warnings.append({
+                    "source_preview_idx": source_idx,
+                    "detected": len(boxes),
+                    "listed": listed_before,
+                    "note": "local crop detected extra sticker regions; placeholder descriptions were added",
+                })
+            elif len(boxes) < len(stickers):
+                brief["stickers"] = stickers[:len(boxes)]
+                crop_warnings.append({
+                    "source_preview_idx": source_idx,
+                    "detected": len(boxes),
+                    "listed": len(stickers),
+                    "note": "local crop detected fewer regions than AI listed; AI list was trimmed to detected regions",
+                })
+
+            for item_idx, box in enumerate(boxes, 1):
+                try:
+                    crop_map[(source_idx, item_idx)] = self._crop_external_box_bytes(image_path, box)
+                except Exception as e:  # noqa: BLE001
+                    crop_errors.append({
+                        "source_preview_idx": source_idx,
+                        "source_item_idx": item_idx,
+                        "error": f"{type(e).__name__}: {e}"[:500],
+                    })
+        return crop_map, crop_errors, crop_warnings
 
     @staticmethod
     def _pdf_pages_to_png_bytes(data: bytes, *, max_side: int = 2048) -> list[bytes]:
@@ -1220,17 +1415,21 @@ Rules:
         self,
         pack_id: int,
         *,
-        split: bool = True,
+        split: bool = False,
+        group_previews: bool = True,
+        target_preview_count: int = 0,
+        stickers_per_preview: int = DEFAULT_EXTERNAL_GROUP_STICKERS_PER_PREVIEW,
         max_stickers_per_preview: int = DEFAULT_EXTERNAL_AI_MAX_STICKERS_PER_PREVIEW,
         replace_existing_stickers: bool = True,
         split_workers: int = 1,
     ) -> dict[str, Any]:
-        """Analyze imported preview images, update metadata briefs, then split.
+        """Analyze imported preview images and optionally create grouped previews.
 
         External uploads initially have preview images but no reliable
         ``pack_stickers`` rows. This method lets Gemini read each preview,
-        replace ``metadata_json.preview_briefs`` with a real sticker/card list,
-        and then reuses the existing preview split pipeline.
+        identify every sticker/card design, then distributes those designs
+        across one or more preview sheet rows. ``split`` is intentionally
+        false by default: single-sticker extraction is a later/manual stage.
         """
         try:
             max_stickers = int(max_stickers_per_preview or 0)
@@ -1271,6 +1470,8 @@ Rules:
         if not previews:
             raise ValueError(f"pack #{pack_id} has no generated preview images")
 
+        source_previews = list(previews)
+
         try:
             metadata = json.loads(pack["metadata_json"] or "{}")
             if not isinstance(metadata, dict):
@@ -1284,7 +1485,7 @@ Rules:
         }
 
         analyses: list[dict[str, Any]] = []
-        briefs: list[dict[str, Any]] = []
+        source_briefs: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         style_candidates: list[str] = []
         palette_candidates: list[str] = []
@@ -1320,7 +1521,7 @@ Rules:
                     limit=120,
                 )
                 brief = {
-                    "preview_idx": preview_idx,
+                    "source_preview_idx": preview_idx,
                     "theme": theme or f"Imported preview {preview_idx}",
                     "stickers": stickers,
                     "external_import": True,
@@ -1328,7 +1529,7 @@ Rules:
                     "source_preview_id": int(preview["id"]),
                     "source_image_path": preview["image_path"],
                 }
-                briefs.append(brief)
+                source_briefs.append(brief)
                 clean_analysis = {
                     "preview_idx": preview_idx,
                     "preview_id": int(preview["id"]),
@@ -1365,11 +1566,14 @@ Rules:
                 previous = old_briefs.get(preview_idx)
                 if previous and previous.get("ai_enriched") and previous.get("stickers"):
                     brief = dict(previous)
+                    brief["source_preview_idx"] = preview_idx
+                    brief["source_preview_id"] = int(preview["id"])
+                    brief["source_image_path"] = preview["image_path"]
                     brief["ai_reused_after_error"] = True
                     brief["ai_error"] = err[:300]
                 else:
                     brief = {
-                        "preview_idx": preview_idx,
+                        "source_preview_idx": preview_idx,
                         "theme": f"Imported preview {preview_idx}",
                         "stickers": [],
                         "external_import": True,
@@ -1378,11 +1582,91 @@ Rules:
                         "source_preview_id": int(preview["id"]),
                         "source_image_path": preview["image_path"],
                     }
-                briefs.append(brief)
+                source_briefs.append(brief)
 
-        briefs.sort(key=lambda b: int(b.get("preview_idx") or 0))
-        total_expected = sum(len(b.get("stickers") or []) for b in briefs)
-        briefs_by_idx = {int(b.get("preview_idx") or 0): b for b in briefs}
+        source_briefs.sort(key=lambda b: int(b.get("source_preview_idx") or b.get("preview_idx") or 0))
+        local_crop_map: dict[tuple[int, int], bytes] = {}
+        local_crop_errors: list[dict[str, Any]] = []
+        local_crop_warnings: list[dict[str, Any]] = []
+        if group_previews:
+            local_crop_map, local_crop_errors, local_crop_warnings = self._extract_external_local_crops(source_briefs)
+        all_sticker_items: list[dict[str, Any]] = []
+        seen_stickers: set[str] = set()
+        for brief in source_briefs:
+            for source_item_idx, sticker in enumerate(brief.get("stickers") or [], 1):
+                clean = self._clean_ai_text(sticker, limit=240)
+                if not clean:
+                    continue
+                key = clean.casefold()
+                if key in seen_stickers:
+                    continue
+                seen_stickers.add(key)
+                all_sticker_items.append({
+                    "text": clean,
+                    "source_preview_idx": int(brief.get("source_preview_idx") or brief.get("preview_idx") or 0),
+                    "source_item_idx": source_item_idx,
+                    "source_preview_id": int(brief.get("source_preview_id") or 0),
+                    "source_image_path": brief.get("source_image_path") or "",
+                })
+        total_expected = len(all_sticker_items)
+        group_count = self._target_group_count(
+            total_items=total_expected,
+            target_preview_count=int(target_preview_count or 0),
+            stickers_per_preview=int(stickers_per_preview or DEFAULT_EXTERNAL_GROUP_STICKERS_PER_PREVIEW),
+        )
+        grouped_items = self._distribute_evenly(all_sticker_items, group_count) if total_expected else []
+        grouped_briefs: list[dict[str, Any]] = []
+        for idx, items in enumerate(grouped_items, 1):
+            source_id_counts = Counter(int(item.get("source_preview_id") or 0) for item in items)
+            source_idx_counts = Counter(int(item.get("source_preview_idx") or 0) for item in items)
+            primary_source_id = source_id_counts.most_common(1)[0][0] if source_id_counts else 0
+            primary_source_idx = source_idx_counts.most_common(1)[0][0] if source_idx_counts else 0
+            primary_source_path = next(
+                (
+                    str(item.get("source_image_path") or "")
+                    for item in items
+                    if int(item.get("source_preview_id") or 0) == primary_source_id
+                    and str(item.get("source_image_path") or "")
+                ),
+                "",
+            )
+            stickers = [str(item.get("text") or "") for item in items if item.get("text")]
+            grouped_briefs.append({
+                "preview_idx": idx,
+                "theme": f"{pack['display_name'] or pack['series_name'] or 'External pack'} group {idx}/{len(grouped_items)}",
+                "stickers": stickers,
+                "external_import": True,
+                "ai_enriched": True,
+                "grouped_preview": True,
+                "source_preview_idx": primary_source_idx,
+                "source_preview_id": primary_source_id,
+                "source_preview_ids": sorted({
+                    int(item.get("source_preview_id") or 0)
+                    for item in items
+                    if int(item.get("source_preview_id") or 0) > 0
+                }),
+                "source_image_path": primary_source_path,
+                "source_items": [
+                    {
+                        "source_preview_idx": int(item.get("source_preview_idx") or 0),
+                        "source_item_idx": int(item.get("source_item_idx") or 0),
+                    }
+                    for item in items
+                ],
+            })
+        if not grouped_briefs:
+            grouped_briefs = [
+                {
+                    "preview_idx": int(b.get("source_preview_idx") or b.get("preview_idx") or i),
+                    "theme": b.get("theme") or f"Imported preview {i}",
+                    "stickers": b.get("stickers") or [],
+                    "external_import": True,
+                    "ai_enriched": bool(b.get("ai_enriched")),
+                    "source_preview_id": b.get("source_preview_id"),
+                    "source_image_path": b.get("source_image_path"),
+                }
+                for i, b in enumerate(source_briefs, 1)
+            ]
         now = int(time.time())
 
         current_style = self._clean_ai_text(pack["style_anchor"], limit=1200)
@@ -1411,10 +1695,133 @@ Rules:
         metadata["ai_enriched_at"] = now
         metadata["ai_enrich_errors"] = errors
         metadata["ai_preview_analyses"] = analyses
-        metadata["preview_briefs"] = briefs
+        metadata["ai_source_preview_briefs"] = source_briefs
+        metadata["preview_grouping"] = {
+            "enabled": bool(group_previews),
+            "target_preview_count": int(target_preview_count or 0),
+            "stickers_per_preview": int(stickers_per_preview or 0),
+            "actual_preview_count": len(grouped_briefs),
+            "generation_method": "local_crop_compose" if group_previews else "source_preview",
+            "local_crop_warnings": local_crop_warnings,
+        }
         metadata["recommended_total_stickers"] = total_expected
         if pack_name_candidates:
             metadata["ai_suggested_pack_name"] = pack_name_candidates[0]
+
+        generated_previews: list[dict[str, Any]] = []
+        preview_generation_errors: list[dict[str, Any]] = []
+        if group_previews and grouped_briefs and total_expected > 0:
+            preview_generation_errors.extend(local_crop_errors)
+            store = get_pack_store()
+            for brief in grouped_briefs:
+                preview_idx = int(brief["preview_idx"])
+                prompt_text = self._build_external_local_group_prompt(
+                    group_idx=preview_idx,
+                    group_count=len(grouped_briefs),
+                    stickers=list(brief.get("stickers") or []),
+                )
+                try:
+                    crops: list[bytes] = []
+                    missing_items: list[dict[str, int]] = []
+                    for item in brief.get("source_items") or []:
+                        key = (
+                            int(item.get("source_preview_idx") or 0),
+                            int(item.get("source_item_idx") or 0),
+                        )
+                        crop = local_crop_map.get(key)
+                        if crop:
+                            crops.append(crop)
+                        else:
+                            missing_items.append({
+                                "source_preview_idx": key[0],
+                                "source_item_idx": key[1],
+                            })
+                    if missing_items:
+                        raise ValueError(f"missing local crops: {missing_items[:5]}")
+                    out_bytes = self._compose_external_group_preview(crops)
+                    img_path = store.write_preview(
+                        pack["pack_uid"],
+                        int(pack["series_idx"] or 1),
+                        preview_idx,
+                        out_bytes,
+                        prompt_text=prompt_text,
+                    )
+                    generated_previews.append({
+                        "preview_idx": preview_idx,
+                        "image_path": img_path.as_posix(),
+                        "prompt_text": prompt_text,
+                        "model_used": "external_local_group_preview",
+                    })
+                except Exception as e:  # noqa: BLE001
+                    err = f"{type(e).__name__}: {e}"
+                    logger.warning(
+                        "external pack #%d local grouped preview #%d failed: %s",
+                        pack_id,
+                        preview_idx,
+                        err,
+                    )
+                    preview_generation_errors.append({
+                        "preview_idx": preview_idx,
+                        "error": err[:500],
+                    })
+        if not group_previews:
+            source_briefs_by_idx = {
+                int(b.get("source_preview_idx") or b.get("preview_idx") or 0): b
+                for b in source_briefs
+            }
+            for preview in source_previews:
+                idx = int(preview["preview_idx"])
+                src_brief = source_briefs_by_idx.get(idx) or {}
+                generated_previews.append({
+                    "preview_idx": idx,
+                    "image_path": preview["image_path"],
+                    "prompt_text": build_preview_prompt(
+                        style_anchor=style_text,
+                        palette=palette_text,
+                        preview_theme=src_brief.get("theme") or f"Imported preview {idx}",
+                        stickers=list(src_brief.get("stickers") or []),
+                    ),
+                })
+
+        previews_replaced = (
+            bool(group_previews)
+            and bool(generated_previews)
+            and not preview_generation_errors
+            and len(generated_previews) == len(grouped_briefs)
+        )
+
+        if group_previews:
+            effective_briefs = grouped_briefs if previews_replaced else [
+                {
+                    "preview_idx": int(b.get("source_preview_idx") or b.get("preview_idx") or i),
+                    "theme": b.get("theme") or f"Imported preview {i}",
+                    "stickers": b.get("stickers") or [],
+                    "external_import": True,
+                    "ai_enriched": bool(b.get("ai_enriched")),
+                    "source_preview_id": b.get("source_preview_id"),
+                    "source_image_path": b.get("source_image_path"),
+                }
+                for i, b in enumerate(source_briefs, 1)
+            ]
+        else:
+            effective_briefs = [
+                {
+                    "preview_idx": int(b.get("source_preview_idx") or b.get("preview_idx") or i),
+                    "theme": b.get("theme") or f"Imported preview {i}",
+                    "stickers": b.get("stickers") or [],
+                    "external_import": True,
+                    "ai_enriched": bool(b.get("ai_enriched")),
+                    "source_preview_id": b.get("source_preview_id"),
+                    "source_image_path": b.get("source_image_path"),
+                }
+                for i, b in enumerate(source_briefs, 1)
+            ]
+        briefs_by_idx = {int(b.get("preview_idx") or 0): b for b in effective_briefs}
+
+        metadata["preview_grouping"]["generated_preview_count"] = len(generated_previews)
+        metadata["preview_grouping"]["previews_replaced"] = previews_replaced
+        metadata["preview_grouping"]["errors"] = preview_generation_errors
+        metadata["preview_briefs"] = effective_briefs
 
         with _open_db(self.db_path) as conn:
             conn.execute(
@@ -1434,6 +1841,35 @@ Rules:
                     int(pack["series_id"]),
                 ),
             )
+            if previews_replaced:
+                conn.execute("DELETE FROM pack_stickers WHERE preview_id IN (SELECT id FROM pack_previews WHERE series_id = ?)",
+                             (int(pack["series_id"]),))
+                conn.execute("DELETE FROM pack_previews WHERE series_id = ?", (int(pack["series_id"]),))
+                for row in generated_previews:
+                    conn.execute(
+                        """
+                        INSERT INTO pack_previews
+                            (series_id, preview_idx, prompt_text, image_path,
+                             model_used, generation_status, generated_at)
+                        VALUES (?, ?, ?, ?, ?, 'ok', ?)
+                        """,
+                        (
+                            int(pack["series_id"]),
+                            int(row["preview_idx"]),
+                            row["prompt_text"],
+                            row["image_path"],
+                            row.get("model_used") or "external_local_group_preview",
+                            now,
+                        ),
+                    )
+                conn.execute(
+                    """
+                    UPDATE packs
+                       SET cover_image_path = ?
+                     WHERE id = ?
+                    """,
+                    (generated_previews[0]["image_path"], int(pack_id)),
+                )
             conn.execute(
                 "UPDATE packs SET total_stickers = ? WHERE id = ?",
                 (
@@ -1443,7 +1879,7 @@ Rules:
             )
             replace_preview_ids = [
                 int(b.get("source_preview_id") or 0)
-                for b in briefs
+                for b in grouped_briefs
                 if b.get("stickers") and int(b.get("source_preview_id") or 0) > 0
             ]
             if replace_existing_stickers and split and replace_preview_ids:
@@ -1476,7 +1912,17 @@ Rules:
             from src.services.preview_gen import get_preview_gen_service
 
             preview_svc = get_preview_gen_service()
-            for preview in previews:
+            with _open_db(self.db_path) as conn:
+                split_previews = conn.execute(
+                    """
+                    SELECT id, preview_idx, image_path, generation_status
+                      FROM pack_previews
+                     WHERE series_id = ?
+                     ORDER BY preview_idx
+                    """,
+                    (int(pack["series_id"]),),
+                ).fetchall()
+            for preview in split_previews:
                 brief = briefs_by_idx.get(int(preview["preview_idx"]))
                 if not brief or not brief.get("stickers"):
                     split_result["skipped"] += 1
@@ -1513,10 +1959,14 @@ Rules:
         return {
             "pack_id": int(pack_id),
             "series_id": int(pack["series_id"]),
-            "preview_count": len(previews),
+            "source_preview_count": len(source_previews),
+            "preview_count": len(generated_previews) or len(source_previews),
             "total_stickers": total_expected,
             "ai_ok": len(analyses),
             "ai_errors": errors,
+            "grouped_previews": len(generated_previews) if previews_replaced else 0,
+            "previews_replaced": previews_replaced,
+            "group_preview_errors": preview_generation_errors,
             "split": split_result,
         }
 
@@ -1653,15 +2103,34 @@ Rules:
             products = conn.execute(
                 "SELECT COUNT(*) FROM tkshop_products WHERE pack_id = ?", (pack_id,),
             ).fetchone()[0]
-            if videos or products:
+            local_products = 0
+            local_table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_products'",
+            ).fetchone()
+            if local_table:
+                local_products = conn.execute(
+                    "SELECT COUNT(*) FROM local_products WHERE pack_id = ?", (pack_id,),
+                ).fetchone()[0]
+            if videos or products or local_products:
                 raise ValueError(
                     f"pack #{pack_id} has downstream work "
-                    f"({videos} videos, {products} products); archive instead"
+                    f"({videos} videos, {products} products, "
+                    f"{local_products} local products); archive instead"
                 )
 
-            conn.execute("DELETE FROM packs WHERE id = ?", (pack_id,))
+            try:
+                conn.execute("DELETE FROM packs WHERE id = ?", (pack_id,))
+            except sqlite3.IntegrityError as e:
+                raise ValueError(
+                    f"pack #{pack_id} is still referenced by downstream records; archive instead"
+                ) from e
             conn.commit()
-        return {"deleted": True, "videos": videos, "products": products}
+        return {
+            "deleted": True,
+            "videos": videos,
+            "products": products,
+            "local_products": local_products,
+        }
 
 
 # ---------------------------------------------------------------------------

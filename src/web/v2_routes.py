@@ -356,6 +356,9 @@ def _decorate_pack_for_ui(pack: dict[str, Any] | None) -> dict[str, Any] | None:
         v["published_human"] = _fmt_ts(v.get("published_at"))
     for pr in pack.get("products", []):
         pr["created_human"] = _fmt_ts(pr.get("created_at"))
+    for lp in pack.get("local_products", []):
+        lp["created_human"] = _fmt_ts(lp.get("created_at"))
+        lp["updated_human"] = _fmt_ts(lp.get("updated_at"))
 
     series_id = int(pack.get("series_id") or 0)
     preview_summary = pack.get("preview_summary") or {}
@@ -382,7 +385,11 @@ def _decorate_pack_for_ui(pack: dict[str, Any] | None) -> dict[str, Any] | None:
         or sticker_summary.get("pending")
         or sticker_summary.get("error")
     )
-    pack["downstream_count"] = len(pack.get("videos", [])) + len(pack.get("products", []))
+    pack["downstream_count"] = (
+        len(pack.get("videos", []))
+        + len(pack.get("products", []))
+        + len(pack.get("local_products", []))
+    )
     return pack
 
 
@@ -2219,7 +2226,7 @@ async def v2_pack_manual_create(request: Request):
 
 @router.post("/packs/import-external")
 async def v2_pack_import_external(request: Request):
-    """Import operator-made pack files, then optionally AI-enrich/split."""
+    """Import operator-made pack files, then optionally AI-enrich/group previews."""
     form = await request.form()
     assets = await _external_pack_assets_from_form(form)
     if not assets:
@@ -2248,8 +2255,8 @@ async def v2_pack_import_external(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     ai_enrich = _form_bool(form, "ai_enrich", default=True)
-    ai_split = _form_bool(form, "ai_split", default=True)
-    max_raw = (form.get("max_stickers_per_preview") or "").strip()
+    group_previews = _form_bool(form, "group_previews", default=True)
+    max_raw = (form.get("max_stickers_total") or form.get("max_stickers_per_preview") or "").strip()
     max_stickers = 0
     if max_raw:
         try:
@@ -2257,12 +2264,33 @@ async def v2_pack_import_external(request: Request):
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="max_stickers_per_preview must be a number",
+                detail="max_stickers_total must be a number",
             )
+    target_raw = (form.get("target_preview_count") or "").strip()
+    target_preview_count = 0
+    if target_raw:
+        try:
+            target_preview_count = max(0, int(target_raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="target_preview_count must be a number")
+    per_raw = (form.get("stickers_per_preview") or "").strip()
+    stickers_per_preview = 0
+    if per_raw:
+        try:
+            stickers_per_preview = max(0, int(per_raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="stickers_per_preview must be a number")
     if ai_enrich:
-        kwargs: dict[str, Any] = {"split": ai_split}
+        kwargs: dict[str, Any] = {
+            "split": False,
+            "group_previews": group_previews,
+        }
         if max_stickers > 0:
             kwargs["max_stickers_per_preview"] = max_stickers
+        if target_preview_count > 0:
+            kwargs["target_preview_count"] = target_preview_count
+        if stickers_per_preview > 0:
+            kwargs["stickers_per_preview"] = stickers_per_preview
         run_async(
             f"external_pack_ai:{result['pack_id']}",
             svc.enrich_external_pack_with_ai,
@@ -2534,19 +2562,30 @@ async def v2_pack_ai_enrich_and_split(request: Request, pack_id: int):
     pack = svc.get_pack(pack_id)
     if not pack:
         raise HTTPException(status_code=404, detail="pack not found")
-    split = (form.get("split") or "1").strip().lower() not in (
-        "0", "off", "false", "no",
-    )
-    max_raw = (form.get("max_stickers_per_preview") or "").strip()
-    kwargs: dict[str, Any] = {"split": split}
+    split = _form_bool(form, "split", default=False)
+    group_previews = _form_bool(form, "group_previews", default=True)
+    max_raw = (form.get("max_stickers_total") or form.get("max_stickers_per_preview") or "").strip()
+    kwargs: dict[str, Any] = {"split": split, "group_previews": group_previews}
     if max_raw:
         try:
             kwargs["max_stickers_per_preview"] = int(max_raw)
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="max_stickers_per_preview must be a number",
+                detail="max_stickers_total must be a number",
             )
+    target_raw = (form.get("target_preview_count") or "").strip()
+    if target_raw:
+        try:
+            kwargs["target_preview_count"] = max(0, int(target_raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="target_preview_count must be a number")
+    per_raw = (form.get("stickers_per_preview") or "").strip()
+    if per_raw:
+        try:
+            kwargs["stickers_per_preview"] = max(0, int(per_raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="stickers_per_preview must be a number")
     run_async(
         f"external_pack_ai:{pack_id}",
         svc.enrich_external_pack_with_ai,
@@ -2558,6 +2597,11 @@ async def v2_pack_ai_enrich_and_split(request: Request, pack_id: int):
         url=_safe_v2_redirect(form.get("return_to"), f"/v2/packs/{pack_id}"),
         status_code=303,
     )
+
+
+@router.get("/packs/{pack_id:int}/delete")
+def v2_pack_delete_get(pack_id: int):
+    return RedirectResponse(url=f"/v2/packs/{pack_id}", status_code=303)
 
 
 @router.post("/packs/{pack_id:int}/delete")
@@ -3629,23 +3673,28 @@ def v2_products_list(
     checked: int | None = None,
     batch_summary: str = "",
 ):
+    # Local-products listing was split out to /v2/local-products/. Redirect
+    # legacy ?tab=local URLs (and any bare landing without a shop choice)
+    # so old bookmarks keep working.
+    if tab == "local":
+        return RedirectResponse(url="/v2/local-products/", status_code=307)
     # ``pack_id`` arrives as a string because the filter form posts an empty
     # value when blank — coercing to ``int | None`` directly in the signature
     # makes FastAPI return 422 on every search submission. Parse defensively.
     pack_id_int: Optional[int] = None
     if pack_id and pack_id.strip().isdigit():
         pack_id_int = int(pack_id.strip())
-    # Tabs (top-level):
-    #   'local'  → local draft pool, no TikTok ID yet (default landing)
-    #   '<shop>' → that shop's listed products (tiktok_product_id set)
-    # Back-compat: a bare ?shop=X URL still works and is mapped to tab=X.
+    # Tabs are per-shop now. Back-compat: a bare ?shop=X URL still maps to
+    # tab=X; otherwise default to the first configured shop.
     if not tab:
-        tab = "local"
         if shop and shop in TKSHOP_SHOPS:
-            # Old links land on a per-shop view; treat them as that shop's tab.
             tab = shop
-    is_local_tab = tab == "local"
-    shop_filter: Optional[str] = None if is_local_tab else tab
+        elif TKSHOP_SHOPS:
+            tab = TKSHOP_SHOPS[0]
+        else:
+            tab = ""
+    is_local_tab = False  # Local moved to /v2/local-products/
+    shop_filter: Optional[str] = tab or None
     svc = get_tkshop_service()
     # Local tab now reads from the master catalog (local_products); each
     # row is one pack with shop-listing badges built from the joined
@@ -3757,6 +3806,76 @@ def v2_products_list(
 # ----------------------------------------------------------------------
 # Local products (master catalog) — split out from /v2/products listings
 # ----------------------------------------------------------------------
+
+@router.get("/local-products/", response_class=HTMLResponse)
+@router.get("/local-products", response_class=HTMLResponse)
+def v2_local_products_list(
+    request: Request,
+    q: str = "",
+    pack_id: str = "",
+    limit: int = 50,
+    batch_summary: str = "",
+):
+    """Master catalog list. Took over the 本地产品 tab that used to live
+    inside /v2/products. Each row is one pack's master record with badges
+    showing which TKShop stores it's already listed on."""
+    pack_id_int: Optional[int] = None
+    if pack_id and pack_id.strip().isdigit():
+        pack_id_int = int(pack_id.strip())
+    svc = get_tkshop_service()
+    products, total = svc.list_local_products(
+        pack_id=pack_id_int,
+        q=q.strip() or None,
+        limit=limit,
+    )
+    # Cover fallback: pack_cover → main local_product_image → any 'ok' preview.
+    import sqlite3 as _sql
+    fb_conn = _sql.connect("data/ops_workbench.db")
+    fb_conn.row_factory = _sql.Row
+    try:
+        for p in products:
+            p["created_human"] = _fmt_ts(p.get("created_at"))
+            p["updated_human"] = _fmt_ts(p.get("updated_at"))
+            cover = _path_to_v2_url(p.get("pack_cover") or "")
+            if not cover:
+                row = fb_conn.execute(
+                    "SELECT local_path FROM local_product_images "
+                    "WHERE local_product_id = ? AND role = 'main' "
+                    "ORDER BY sort_order LIMIT 1",
+                    (p["id"],),
+                ).fetchone()
+                if row and row["local_path"]:
+                    cover = _path_to_v2_url(row["local_path"])
+            if not cover:
+                row = fb_conn.execute(
+                    """SELECT pp.image_path
+                         FROM packs pk
+                    LEFT JOIN pack_previews pp ON pp.series_id = pk.series_id
+                                              AND pp.generation_status = 'ok'
+                                              AND COALESCE(pp.image_path,'') != ''
+                        WHERE pk.id = ?
+                        ORDER BY pp.preview_idx LIMIT 1""",
+                    (p["pack_id"],),
+                ).fetchone()
+                if row and row["image_path"]:
+                    cover = _path_to_v2_url(row["image_path"])
+            p["pack_cover_url"] = cover
+    finally:
+        fb_conn.close()
+    return templates.TemplateResponse(
+        "v2_local_products.html",
+        {
+            "request": request,
+            "page_title": "本地产品库",
+            "products": products,
+            "total": total,
+            "q": q,
+            "pack_id_filter": pack_id_int,
+            "limit": limit,
+            "batch_summary": batch_summary,
+        },
+    )
+
 
 @router.get("/local-products/{local_product_id:int}", response_class=HTMLResponse)
 def v2_local_product_detail(request: Request, local_product_id: int):
@@ -3910,7 +4029,7 @@ async def v2_products_batch_publish_from_local(request: Request):
         "batch-publish-from-local dispatched: %d masters → %s (task=%s)",
         len(ids), target_shop, task_id,
     )
-    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/products?tab=local")
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/local-products/")
     sep = "&" if "?" in back else "?"
     msg = f"已派发 {len(ids)} 个本地产品上架到 {target_shop}"
     return RedirectResponse(
