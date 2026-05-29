@@ -222,6 +222,14 @@
                     <span class="shop-badge missing" title="{{ _label }} 暂未上架">🏪 {{ _label }} —</span>
                   {% endif %}
                 {% endfor %}
+                {% for s, _info in (p.shops or {}).items() if s not in tkshop_shops %}
+                  {% set _label = shop_label(s) %}
+                  {% if _info and _info.tiktok_product_id %}
+                    <span class="shop-badge ok{% if _info.needs_push %} push-pending{% endif %}" title="已上架到 {{ _label }}（listing #{{ _info.product_id }} · 旧店铺键 {{ s }}）">🏪 {{ _label }} ✓{% if _info.needs_push %} ⚠{% endif %}</span>
+                  {% elif _info %}
+                    <span class="shop-badge draft{% if _info.needs_push %} push-pending{% endif %}" title="{{ _label }} listing #{{ _info.product_id }}（{{ _info.publish_status }} · 旧键 {{ s }}）">🏪 {{ _label }} · {{ _info.publish_status }}{% if _info.needs_push %} ⚠{% endif %}</span>
+                  {% endif %}
+                {% endfor %}
               </div>
             </td>
             <td>

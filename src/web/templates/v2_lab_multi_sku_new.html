@@ -53,7 +53,7 @@
         <label for="shop">店铺（shop）</label>
         <select id="shop" name="shop">
           {% for s in tkshop_shops %}
-          <option value="{{ s }}" {% if s == tkshop_default_shop %}selected{% endif %}>{{ s }}</option>
+          <option value="{{ s }}" {% if s == tkshop_default_shop %}selected{% endif %}>{{ shop_label(s) }}</option>
           {% endfor %}
         </select>
       </div>

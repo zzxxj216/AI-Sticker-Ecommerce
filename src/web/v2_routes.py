@@ -256,6 +256,21 @@ def _resolve_local_product_cover_url(
     created_at = int(_row_val(row, "created_at", 1) or 0)
     if local_path and _resolve_disk_path(str(local_path)).is_file():
         return _versioned_url_from_path(str(local_path), cache_key=created_at)
+    listing_row = conn.execute(
+        """
+        SELECT ti.local_path, ti.created_at
+          FROM tkshop_products t
+          JOIN tkshop_product_images ti ON ti.product_id = t.id
+         WHERE t.local_product_id = ? AND ti.role = 'main'
+         ORDER BY ti.created_at DESC, ti.id DESC
+         LIMIT 1
+        """,
+        (local_product_id,),
+    ).fetchone()
+    listing_path = _row_val(listing_row, "local_path", 0)
+    listing_at = int(_row_val(listing_row, "created_at", 1) or 0)
+    if listing_path and _resolve_disk_path(str(listing_path)).is_file():
+        return _versioned_url_from_path(str(listing_path), cache_key=listing_at)
     preview = _first_ok_pack_preview_url(conn, pack_id)
     if preview:
         return preview

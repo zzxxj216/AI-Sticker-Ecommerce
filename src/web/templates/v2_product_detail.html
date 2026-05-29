@@ -9,7 +9,7 @@
       pack <a href="/v2/packs/{{ product.pack_id }}" style="color:var(--accent);">#{{ product.pack_id }}</a>
       · pack_uid <code>{{ product.pack_uid }}</code>
       {% if tkshop_shops|length > 1 %}
-      · 🏪 店铺 <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-weight:700;">{{ product.shop or 'main' }}</span>
+      · 🏪 店铺 <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-weight:700;">{{ shop_label(product.shop or 'main') }}</span>
       {% endif %}
       · <span class="v2-status-pill {{ status_pill_cls(product.publish_status) }}">{{ status_label_zh(product.publish_status) }}</span>
       {% if product.tiktok_product_id %}· tiktok_id: <code>{{ product.tiktok_product_id }}</code>{% endif %}

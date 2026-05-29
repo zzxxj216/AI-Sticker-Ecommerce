@@ -67,7 +67,7 @@
             {% for pk in packs %}<option value="{{ pk.id }}">#{{ pk.id }} {{ (pk.display_name or pk.pack_uid)[:24] }}</option>{% endfor %}
           </select>
           <select name="shop" class="msku-f">
-            {% for s in tkshop_shops %}<option value="{{ s }}">🏪 {{ s }}</option>{% endfor %}
+            {% for s in tkshop_shops %}<option value="{{ s }}">{{ shop_label(s) }}</option>{% endfor %}
           </select>
           <button type="submit" class="msku-act" style="background:var(--accent);color:#fff;border-color:var(--accent);">创建 →</button>
         </form>
@@ -83,7 +83,7 @@
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted);">
         <select id="fShop" onchange="mskuFilter()" class="msku-f">
           <option value="">全部店铺</option>
-          {% for s in tkshop_shops %}<option value="{{ s }}">🏪 {{ s }}</option>{% endfor %}
+          {% for s in tkshop_shops %}<option value="{{ s }}">{{ shop_label(s) }}</option>{% endfor %}
         </select>
         <select id="fStatus" onchange="mskuFilter()" class="msku-f">
           <option value="">全部状态</option>

@@ -143,12 +143,8 @@ def get_shop_sku_prefix(shop: str) -> str:
         return "INK"
 
 
-# Display-name map for shop keys. The shop key (TKSHOP_SHOPS env) is the
-# canonical identifier passed to multi-channel-api; the label is what the UI
-# shows. Operators set ``TKSHOP_SHOP_LABELS=main:inkelligentsticker,…`` when
-# they want a friendlier name without renaming the underlying shop config.
-# When unset, the shop key is used verbatim, with the one exception that
-# ``main`` defaults to ``inkelligentsticker`` (the actual store name).
+# Optional per-key label overrides via ``TKSHOP_SHOP_LABELS=main:2店·…`` env.
+# Default labels come from ``_SHOP_UI_LABELS`` (see get_shop_label).
 def _parse_shop_labels(raw: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for chunk in (raw or "").split(","):
@@ -168,18 +164,63 @@ _TKSHOP_SHOP_LABEL_OVERRIDES = _parse_shop_labels(
 )
 
 
+# ---------------------------------------------------------------------------
+# Shop registry — internal keys vs UI labels
+# ---------------------------------------------------------------------------
+# Internal ``shop`` values in tkshop_products / multi-channel-api must match
+# TIKTOK_SHOPS_JSON keys. The UI never shows raw keys like ``main`` or
+# ``second`` — always use ``get_shop_label()`` / ``shop_label`` in templates.
+#
+#   2店  inkelligentsticker  ← DB key ``main`` (SKU prefix INK / INK1)
+#   3店  inkelligentstudio   ← DB key ``inkelligentstudio`` (SKU prefix INK2)
+#   3店  inkelligentstudio   ← legacy DB key ``second`` (old registry name)
+# ---------------------------------------------------------------------------
+
+_SHOP_UI_LABELS: dict[str, tuple[str, str]] = {
+    # (店号, 店铺名)
+    "main": ("2店", "inkelligentsticker"),
+    "inkelligentsticker": ("2店", "inkelligentsticker"),
+    "inkelligentstudio": ("3店", "inkelligentstudio"),
+    "second": ("3店", "inkelligentstudio"),  # legacy key → same store as studio
+}
+
+
 def get_shop_label(shop: str) -> str:
-    """Display name for ``shop``. Falls back to the shop key itself."""
+    """Human-facing shop name for templates. Never returns ``main`` / ``second``."""
     s = (shop or "").strip()
     if not s:
         return ""
     if s in _TKSHOP_SHOP_LABEL_OVERRIDES:
         return _TKSHOP_SHOP_LABEL_OVERRIDES[s]
-    # Sensible default for the conventional 'main' bucket — the real store is
-    # inkelligentsticker, but the env still says 'main' for historical reasons.
+    if s in _SHOP_UI_LABELS:
+        num, name = _SHOP_UI_LABELS[s]
+        return f"{num} · {name}"
+    return s
+
+
+def get_shop_store_name(shop: str) -> str:
+    """Store name only (no 店号), e.g. ``inkelligentsticker``."""
+    s = (shop or "").strip()
+    if s in _SHOP_UI_LABELS:
+        return _SHOP_UI_LABELS[s][1]
+    if s in _TKSHOP_SHOP_LABEL_OVERRIDES:
+        return _TKSHOP_SHOP_LABEL_OVERRIDES[s]
     if s == "main":
         return "inkelligentsticker"
     return s
+
+
+def get_shop_number(shop: str) -> str:
+    """Return ``2店`` / ``3店`` or empty for unknown keys."""
+    s = (shop or "").strip()
+    if s in _SHOP_UI_LABELS:
+        return _SHOP_UI_LABELS[s][0]
+    return ""
+
+
+def is_legacy_shop_key(shop: str) -> bool:
+    """True for registry keys that should not appear as new listing targets."""
+    return (shop or "").strip() in {"second"}
 
 
 def get_shop_labels_map() -> dict[str, str]:

@@ -117,7 +117,7 @@
 
         <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;">店铺(多 SKU 用)</label>
         <select id="npShop" class="v2-input" style="width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;margin-bottom:12px;">
-          {% for s in tkshop_shops %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+          {% for s in tkshop_shops %}<option value="{{ s }}">{{ shop_label(s) }}</option>{% endfor %}
         </select>
 
         <form method="post" action="/v2/lab/multi-sku/from-pack/{{ pack.id }}" style="margin-bottom:12px;"
