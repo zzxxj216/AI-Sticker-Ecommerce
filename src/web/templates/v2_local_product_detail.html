@@ -217,7 +217,7 @@
     <div class="ai-modal-form">
       <div>
         <label for="ai-count">总数量（含 1 张主图）</label>
-        <input id="ai-count" type="number" min="1" max="8" value="4" step="1">
+        <input id="ai-count" type="number" min="1" max="8" value="5" step="1">
       </div>
       <div>
         <label for="ai-language">目标市场风格</label>
@@ -236,10 +236,14 @@
         </select>
       </div>
     </div>
-    <p style="margin:0 0 10px;font-size:11px;color:var(--text-muted);">⚠ 会替换已有 AI 生成的图（手动上传的图保留）。生成结果直接进入主版本图集；上架时会自动复制到各家店。</p>
-    <div style="display:flex;justify-content:flex-end;">
-      <button type="button" id="ai-gen-go"
-              style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 开始生成</button>
+    <p style="margin:0 0 10px;font-size:11px;color:var(--text-muted);">⚠ 只会替换被选中范围内已有 AI 生成的图（手动上传的保留）。生成结果直接进入主版本图集；上架时会自动复制到各家店。</p>
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+      <button type="button" class="ai-gen-go" data-mode="main"
+              style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🖼 只生成主图</button>
+      <button type="button" class="ai-gen-go" data-mode="secondary"
+              style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🎞 只生成附图</button>
+      <button type="button" class="ai-gen-go" data-mode="all" id="ai-gen-go"
+              style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 主图+附图</button>
     </div>
     <div id="ai-gen-status" style="margin-top:12px;font-size:12px;color:var(--text-muted);"></div>
     <div id="ai-result-grid" class="ai-result-grid" style="display:none;"></div>
@@ -298,45 +302,61 @@
         stopPolling();
         renderResultGrid(data.images);
         status.textContent = `✓ 完成 — 共 ${data.images.length} 张 AI 生成图已保存到主版本图集。点击「完成」刷新看效果。`;
-        const goBtn = document.getElementById('ai-gen-go');
-        goBtn.disabled = false;
-        goBtn.textContent = '🚀 重新生成';
+        // Re-enable all three buttons and restore their original labels.
+        document.querySelectorAll('.ai-gen-go').forEach(b => {
+          b.disabled = false;
+          // The labels map lives in the click-handler closure; use data-mode
+          // to reconstruct each button's text instead of guessing.
+          const m = b.dataset.mode || 'all';
+          b.textContent = m === 'main' ? '🖼 只生成主图'
+                         : m === 'secondary' ? '🎞 只生成附图'
+                         : '🚀 主图+附图（重新）';
+        });
       }
     } catch (e) { /* keep polling */ }
   }
 
-  document.getElementById('ai-gen-go').addEventListener('click', async (e) => {
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="v2-button-spinner"></span>启动中…';
-    document.getElementById('ai-gen-status').textContent = '⏳ 正在启动后台任务…';
-    document.getElementById('ai-result-grid').style.display = 'none';
-    try {
-      const body = {
-        count:    parseInt(document.getElementById('ai-count').value, 10) || 4,
-        language: document.getElementById('ai-language').value,
-        size:     document.getElementById('ai-size').value,
-      };
-      const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_images_sync`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body),
-      });
-      const data = await r.json();
-      if (!data.ok) {
-        document.getElementById('ai-gen-status').textContent = '❌ ' + (data.error || '启动失败');
-        btn.disabled = false; btn.textContent = '🚀 开始生成';
-        return;
+  // Three buttons share one handler — mode comes from the button's data attr.
+  // Disable all three while a task is in flight so the operator doesn't
+  // accidentally double-fire a different mode against the same product.
+  const _genButtons = Array.from(document.querySelectorAll('.ai-gen-go'));
+  const _origLabels = new Map(_genButtons.map(b => [b, b.textContent]));
+  _genButtons.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.mode || 'all';
+      _genButtons.forEach(b => { b.disabled = true; });
+      btn.innerHTML = '<span class="v2-button-spinner"></span>启动中…';
+      document.getElementById('ai-gen-status').textContent = '⏳ 正在启动后台任务…';
+      document.getElementById('ai-result-grid').style.display = 'none';
+      try {
+        const body = {
+          count:    parseInt(document.getElementById('ai-count').value, 10) || 5,
+          language: document.getElementById('ai-language').value,
+          size:     document.getElementById('ai-size').value,
+          mode:     mode,
+        };
+        const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_images_sync`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          document.getElementById('ai-gen-status').textContent = '❌ ' + (data.error || '启动失败');
+          _genButtons.forEach(b => { b.disabled = false; b.textContent = _origLabels.get(b); });
+          return;
+        }
+        btn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+        const modeText = mode === 'main' ? '主图' : mode === 'secondary' ? '附图' : '主图+附图';
+        document.getElementById('ai-gen-status').innerHTML =
+          `🟢 [${modeText}] ${data.message}<br><small style="color:var(--text-muted)">task_id: <code>${data.task_id}</code></small>`;
+        stopPolling();
+        pollTimer = setInterval(pollStatus, 4000);
+        setTimeout(pollStatus, 1500);
+      } catch (err) {
+        document.getElementById('ai-gen-status').textContent = '❌ 网络错误：' + err.message;
+        _genButtons.forEach(b => { b.disabled = false; b.textContent = _origLabels.get(b); });
       }
-      btn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
-      document.getElementById('ai-gen-status').innerHTML =
-        `🟢 ${data.message}<br><small style="color:var(--text-muted)">task_id: <code>${data.task_id}</code></small>`;
-      stopPolling();
-      pollTimer = setInterval(pollStatus, 4000);
-      setTimeout(pollStatus, 1500);
-    } catch (err) {
-      document.getElementById('ai-gen-status').textContent = '❌ 网络错误：' + err.message;
-      btn.disabled = false; btn.textContent = '🚀 开始生成';
-    }
+    });
   });
 
   // Per-image delete: AJAX so the tile vanishes without a full reload.
@@ -364,9 +384,13 @@
       const r = await fetch(`/v2/local-products/${LOCAL_PRODUCT_ID}/auto_design_status`);
       const data = await r.json();
       if (!data || !data.ok || !data.running) return;
-      const goBtn = document.getElementById('ai-gen-go');
-      goBtn.disabled = true;
-      goBtn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+      // Lock all three buttons while a previous task is still in flight.
+      document.querySelectorAll('.ai-gen-go').forEach(b => {
+        b.disabled = true;
+        if (b.id === 'ai-gen-go') {
+          b.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+        }
+      });
       document.getElementById('ai-gen-status').innerHTML =
         `🟢 检测到正在运行的任务，恢复跟踪…`;
       renderResultGrid(data.images);

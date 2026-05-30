@@ -1,0 +1,121 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .aud-page { padding-top: 14px; }
+  .aud-table { width:100%; font-size:13px; border-collapse:collapse; }
+  .aud-table th { text-align:left; color:var(--text-muted); font-size:11px; font-weight:600; padding:8px 12px; text-transform:uppercase; letter-spacing:.04em; background:var(--bg-subtle); }
+  .aud-table td { padding:10px 12px; border-top:1px solid var(--line-soft); vertical-align:top; }
+  .aud-table th.num, .aud-table td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .aud-table tr.is-winning td { background:rgba(16,185,129,.08); }
+  .aud-table tr.is-winning td:first-child { box-shadow: inset 3px 0 0 var(--success); }
+  .aud-name { font-weight:700; color:var(--text); }
+  .aud-hyp { color:var(--text-muted); font-size:12px; max-width:320px; }
+  .aud-empty { padding:36px 24px; text-align:center; color:var(--text-muted); }
+  .aud-toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; padding:14px 18px; }
+</style>
+
+<div class="aud-page">
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">Ads · 人群库</p>
+      <h1>优质人群库</h1>
+      <p class="page-subtitle">按投放目标分组的人群排行榜，指标与主 KPI 随目标变化 — 实验跑出来的优质人群（<span class="v2-status-pill ok">优质</span>）会高亮，可在 <a href="/v2/ads/experiments" class="text-link">新实验</a> 中复用。</p>
+    </div>
+  </section>
+
+  {% if hint %}
+  <div class="v2-async-note" style="margin-bottom:14px;">{{ hint }}</div>
+  {% endif %}
+
+  <section class="panel" style="padding:0;margin-bottom:14px;">
+    <form method="get" action="/v2/ads/audiences" class="aud-toolbar">
+      <div class="v2-field" style="min-width:220px;">
+        <label>按卡包筛选</label>
+        <select name="pack_id" class="v2-select" onchange="this.form.submit()">
+          <option value="">全部卡包</option>
+          {% for p in packs %}
+          <option value="{{ p.id }}" {% if pack_id_filter and pack_id_filter == p.id %}selected{% endif %}>#{{ p.id }} {{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <noscript><button type="submit" class="button-secondary">筛选</button></noscript>
+      {% if pack_id_filter %}<a href="/v2/ads/audiences" class="text-link" style="margin-bottom:9px;">清除筛选</a>{% endif %}
+    </form>
+  </section>
+
+  {#
+    The leaderboard may mix audiences from different objectives. Group rows by
+    objective so each group can show its own objective-appropriate metric
+    columns + 主 KPI. Rows without an objective fall into a generic group
+    (current ROAS-centric columns) so we degrade gracefully.
+  #}
+  {% set ns = namespace(groups={}, order=[]) %}
+  {% for a in audiences %}
+    {% set okey = (a.objective or '')|string %}
+    {% if okey not in ns.groups %}
+      {% set _ = ns.order.append(okey) %}
+      {% set _ = ns.groups.update({okey: []}) %}
+    {% endif %}
+    {% set _ = ns.groups[okey].append(a) %}
+  {% endfor %}
+
+  {% if not audiences %}
+  <section class="panel" style="padding:0;">
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table class="aud-table">
+        <tbody>
+          <tr><td class="aud-empty">
+            {% if pack_id_filter %}该卡包暂无人群数据。{% else %}人群库还是空的。去 <a href="/v2/ads/experiments" class="text-link">人群实验</a> 跑一次小预算测试来积累优质人群。{% endif %}
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  {% for okey in ns.order %}
+  {% set group_rows = ns.groups[okey] %}
+  {% set metric_cols = ads_metric_columns(okey) %}
+  <section class="panel" style="padding:0;margin-bottom:14px;">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--line-soft);">
+      <strong style="font-size:13px;">{{ ads_objective_label(okey) }}</strong>
+      {% if okey %}<span class="muted" style="font-size:11px;"> · {{ okey }}</span>{% else %}<span class="muted" style="font-size:11px;"> · 未标注目标（通用列）</span>{% endif %}
+    </div>
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table class="aud-table">
+        <thead>
+          <tr>
+            <th>人群</th>
+            <th>假设</th>
+            <th>状态</th>
+            <th class="num">花费</th>
+            {% for col in metric_cols %}
+            <th class="num">{% if col.fmt == 'kpi' %}{{ ads_kpi_label(okey) }}{% else %}{{ col.label }}{% endif %}</th>
+            {% endfor %}
+            <th class="num">实验数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in group_rows %}
+          <tr class="{% if (a.status or '')|lower == 'winning' %}is-winning{% endif %}">
+            <td>
+              <div class="aud-name">{{ a.name or '（未命名人群）' }}</div>
+              {% if a.id %}<div class="muted" style="font-size:11px;">#{{ a.id }}</div>{% endif %}
+            </td>
+            <td class="aud-hyp">{{ a.hypothesis or '—' }}</td>
+            <td><span class="v2-status-pill {{ ads_audience_status_pill(a.status) }}">{{ ads_audience_status_label(a.status) }}</span></td>
+            <td class="num">{{ '%.2f'|format(a.spend or 0) }}</td>
+            {% for col in metric_cols %}
+            <td class="num">{% if col.fmt == 'kpi' %}<strong>{{ ads_cell_value(a, col, okey) }}</strong>{% else %}{{ ads_cell_value(a, col) }}{% endif %}</td>
+            {% endfor %}
+            <td class="num">{{ a.experiment_count or a.experiments or 0 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

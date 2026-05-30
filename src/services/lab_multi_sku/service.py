@@ -155,6 +155,23 @@ def _build_listing_raw(
 class LabMultiSkuService:
     def __init__(self, db_path: Path = DEFAULT_DB_PATH) -> None:
         self.db_path = db_path
+        # Lazy migration: ensure the per-SKU image_path column exists so the
+        # operator can override the per-variant thumb without manually running
+        # the SQL migration script. ALTER TABLE … ADD COLUMN is idempotent
+        # against repeats via the try/except guard.
+        try:
+            with _open_db(self.db_path) as conn:
+                cols = {r["name"] for r in conn.execute(
+                    "PRAGMA table_info(lab_msku_product_skus)"
+                )}
+                if "image_path" not in cols:
+                    conn.execute(
+                        "ALTER TABLE lab_msku_product_skus "
+                        "ADD COLUMN image_path TEXT NOT NULL DEFAULT ''"
+                    )
+                    conn.commit()
+        except Exception as e:
+            logger.warning("lazy migration failed (lab_msku_product_skus.image_path): %s", e)
 
     # ------------------------------------------------------------------
     # CRUD: products
@@ -220,6 +237,7 @@ class LabMultiSkuService:
         category_id: str = "928016",
         primary_pack_id: Optional[int] = None,
         shop: str = "",
+        pack_image_paths: Optional[dict[int, str]] = None,
     ) -> int:
         if not pack_ids:
             raise ValueError("pack_ids required")
@@ -265,16 +283,20 @@ class LabMultiSkuService:
             product_id = cur.lastrowid
 
             # Build SKUs from packs — pack_id-based seller_sku guarantees uniqueness.
+            img_map = pack_image_paths or {}
             for i, p in enumerate(packs, start=1):
                 seller_sku = pack_seller_sku(p["pack_uid"] or p["display_name"] or "", p["id"])
                 attr_val = attr_value_en(p["display_name"] or "", f"Pack {p['id']}")
+                # Per-SKU image override: operator-picked AI image from the
+                # master gallery. Empty falls back to pack cover at publish time.
+                sku_image = (img_map.get(p["id"]) or "").strip()
                 conn.execute(
                     """INSERT INTO lab_msku_product_skus
                         (product_id, pack_id, seller_sku, sales_attribute_value,
                          price_amount_override, stock_override, sort_order,
-                         tiktok_sku_id, created_at)
-                       VALUES (?, ?, ?, ?, '', NULL, ?, '', ?)""",
-                    (product_id, p["id"], seller_sku, attr_val, i, n),
+                         tiktok_sku_id, image_path, created_at)
+                       VALUES (?, ?, ?, ?, '', NULL, ?, '', ?, ?)""",
+                    (product_id, p["id"], seller_sku, attr_val, i, sku_image, n),
                 )
             conn.commit()
         return product_id
@@ -752,13 +774,20 @@ class LabMultiSkuService:
                 stock_int = int(stock) if stock not in (None, "") else None
             except (TypeError, ValueError):
                 stock_int = None
+            # Per-variant image: operator-picked override on the SKU row wins;
+            # otherwise fall back to the pack's cover/first-preview chain.
+            override = (s.get("image_path") or "").strip()
+            if override:
+                ap_override = override if os.path.isabs(override) else os.path.abspath(override)
+                variant_image = ap_override if os.path.isfile(ap_override) else self._pack_image_abs(s.get("pack_id"))
+            else:
+                variant_image = self._pack_image_abs(s.get("pack_id"))
             skus_payload.append({
                 "seller_sku": s["seller_sku"],
                 "attribute_value": s.get("sales_attribute_value") or "",
                 "price_amount": (s.get("price_amount_override") or "").strip(),
                 "stock": stock_int,
-                # Per-variant image = this SKU's pack cover (or first preview).
-                "image_path": self._pack_image_abs(s.get("pack_id")),
+                "image_path": variant_image,
             })
 
         return {

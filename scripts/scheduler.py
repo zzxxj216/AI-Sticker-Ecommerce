@@ -315,6 +315,50 @@ def asset_feedback_collect_job(ctx: JobContext) -> None:
     logger.info("[%s] collected=%d", ctx.job_name, ctx.affected_rows)
 
 
+def ads_metrics_snapshot_job(ctx: JobContext) -> None:
+    """TikTok Ads — for every running experiment, refresh per-adgroup metrics
+    then re-evaluate audiences against the promotion thresholds.
+
+    Each experiment is handled best-effort: a failure on one is logged and
+    counted but does not abort the others.
+    """
+    from src.services.tiktok.ads_experiment_service import (
+        get_ads_experiment_service,
+    )
+
+    svc = get_ads_experiment_service()
+    conn = _open_db(ctx.db_path)
+    try:
+        exp_ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT id FROM tk_ad_experiments WHERE status = 'running' ORDER BY id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    refreshed = 0
+    evaluated = 0
+    errors: list[str] = []
+    for exp_id in exp_ids:
+        try:
+            svc.refresh_metrics(exp_id)
+            refreshed += 1
+            svc.evaluate_experiment(exp_id)
+            evaluated += 1
+        except Exception as e:
+            errors.append(f"experiment {exp_id}: {type(e).__name__}: {e}")
+            logger.warning("[%s] experiment %d failed: %s",
+                           ctx.job_name, exp_id, e)
+
+    ctx.affected_rows = evaluated
+    if errors:
+        logger.warning("[%s] errors: %s", ctx.job_name, errors[:3])
+    logger.info("[%s] running=%d refreshed=%d evaluated=%d errors=%d",
+                ctx.job_name, len(exp_ids), refreshed, evaluated, len(errors))
+
+
 def build_default_scheduler(db_path: Path = DEFAULT_DB_PATH) -> Scheduler:
     s = Scheduler(db_path=db_path)
     s.register("tk_metrics_refresh",         2 * 60 * 60, tk_metrics_refresh_job)
@@ -322,6 +366,7 @@ def build_default_scheduler(db_path: Path = DEFAULT_DB_PATH) -> Scheduler:
     s.register("tk_dispatch_status_poll",    5 * 60,      tk_dispatch_status_poll_job)
     s.register("tkshop_status_sync",        30 * 60,      tkshop_status_sync_job)
     s.register("asset_feedback_collect",     6 * 60 * 60, asset_feedback_collect_job)
+    s.register("ads_metrics_snapshot",      24 * 60 * 60, ads_metrics_snapshot_job)
     return s
 
 

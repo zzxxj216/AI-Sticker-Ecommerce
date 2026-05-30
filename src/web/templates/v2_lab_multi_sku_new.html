@@ -19,6 +19,16 @@
   .pack-card .check { position:absolute; top:6px; right:6px; width:22px; height:22px; border-radius:50%; background:#8b5cf6; color:#fff; display:none; align-items:center; justify-content:center; font-size:13px; font-weight:700; }
   .pack-card.selected .check { display:flex; }
   .pack-card input { display:none; }
+  /* Per-pack image picker strip — appears once the pack is selected. */
+  .pack-img-picker { display:none; padding:8px; background:var(--bg-subtle); border-top:1px solid var(--line-soft); }
+  .pack-card.selected .pack-img-picker { display:block; }
+  .pack-img-picker-label { font-size:10px; color:var(--text-muted); margin-bottom:6px; }
+  .pack-img-row { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+  .pack-img-thumb { flex:0 0 auto; width:46px; height:46px; border-radius:6px; border:2px solid var(--line); overflow:hidden; cursor:pointer; background:#f5f5f5; position:relative; }
+  .pack-img-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .pack-img-thumb.picked { border-color:#8b5cf6; box-shadow:0 0 0 2px rgba(139,92,246,.20); }
+  .pack-img-thumb .src-tag { position:absolute; bottom:0; left:0; right:0; font-size:8px; font-weight:700; color:#fff; background:rgba(0,0,0,.55); text-align:center; padding:1px 0; }
+  .pack-img-picker.loading { color:var(--text-muted); font-size:11px; }
   .msku-settings { border:1px solid var(--line); border-radius:10px; padding:16px; background:var(--bg-subtle); }
   .msku-settings label { display:block; font-size:11px; color:var(--text-muted); margin:10px 0 4px; }
   .msku-settings input, .msku-settings textarea { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; box-sizing:border-box; font-family:inherit; }
@@ -113,6 +123,54 @@
   function selectedPackIds(){
     return Array.from(packsEl.querySelectorAll('input[name="pack_ids"]:checked')).map(i => i.value);
   }
+
+  // Lazy-load master images for a pack once it gets selected. Pre-picks
+  // the first AI 'main' if available, else first item, else leaves blank.
+  const _packImgCache = new Map();
+  async function loadPackImages(packId, picker, hiddenInput){
+    if (picker.dataset.loaded === '1') return;
+    picker.classList.add('loading');
+    picker.innerHTML = '<span class="pack-img-picker-label">📷 加载图片中…</span>';
+    let images = _packImgCache.get(packId);
+    if (!images){
+      try {
+        const r = await fetch(`/v2/lab/multi-sku/packs/${packId}/master-images`);
+        const d = await r.json();
+        images = (d && d.ok) ? (d.images || []) : [];
+        _packImgCache.set(packId, images);
+      } catch (e) { images = []; }
+    }
+    picker.classList.remove('loading');
+    picker.dataset.loaded = '1';
+    if (!images.length){
+      picker.innerHTML = '<span class="pack-img-picker-label" style="color:var(--text-muted)">没有可选图片 — 将走默认 pack 封面</span>';
+      return;
+    }
+    picker.innerHTML = '<div class="pack-img-picker-label">🖼 这个 SKU 用哪张图：</div><div class="pack-img-row"></div>';
+    const row = picker.querySelector('.pack-img-row');
+    images.forEach((img, idx) => {
+      const t = document.createElement('div');
+      t.className = 'pack-img-thumb';
+      const tag = img.role === 'main' ? 'MAIN' : img.role === 'pack_cover' ? 'PACK' : (img.source || '').toUpperCase().slice(0,4);
+      t.innerHTML = `<img src="${img.url}" alt=""><span class="src-tag">${tag}</span>`;
+      t.dataset.path = img.local_path;
+      t.addEventListener('click', (e) => {
+        e.stopPropagation();
+        row.querySelectorAll('.pack-img-thumb').forEach(x => x.classList.remove('picked'));
+        t.classList.add('picked');
+        hiddenInput.value = img.local_path || '';
+      });
+      row.appendChild(t);
+    });
+    // Pre-pick: first AI main if present, else first image overall.
+    const aiMain = images.find(im => im.role === 'main' && im.source === 'ai');
+    const preferred = aiMain || images[0];
+    if (preferred){
+      const first = row.querySelector('.pack-img-thumb');
+      if (first){ first.classList.add('picked'); }
+      hiddenInput.value = preferred.local_path || '';
+    }
+  }
   function refresh(){
     const n = selectedPackIds().length;
     selCount.textContent = n;
@@ -137,11 +195,18 @@
         card.innerHTML = `${img}<div class="check">✓</div>
           <div class="cap"><b>#${p.id} ${(p.display_name||p.pack_uid||'未命名').slice(0,28)}</b>
           <span style="color:var(--text-muted);">${p.total_stickers||0} 张</span></div>
-          <input type="checkbox" name="pack_ids" value="${p.id}">`;
-        const cb = card.querySelector('input');
+          <input type="checkbox" name="pack_ids" value="${p.id}">
+          <input type="hidden" name="pack_image_path__${p.id}" value="">
+          <div class="pack-img-picker" data-pack-id="${p.id}"></div>`;
+        const cb = card.querySelector('input[name="pack_ids"]');
+        const imgInput = card.querySelector(`input[name="pack_image_path__${p.id}"]`);
+        const picker = card.querySelector('.pack-img-picker');
         card.addEventListener('click', (e) => {
-          if (e.target !== cb){ cb.checked = !cb.checked; }
+          // Clicking a thumbnail / hidden input shouldn't toggle pack selection.
+          if (e.target.closest('.pack-img-picker') || e.target === cb || e.target === imgInput) return;
+          cb.checked = !cb.checked;
           card.classList.toggle('selected', cb.checked);
+          if (cb.checked) loadPackImages(p.id, picker, imgInput);
           refresh();
         });
         packsEl.appendChild(card);

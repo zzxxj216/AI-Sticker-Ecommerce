@@ -103,6 +103,25 @@ TKSHOP_IMAGE_PUBLIC_BASE = os.getenv(
 TKSHOP_SHOPS = [s.strip() for s in (os.getenv("TKSHOP_SHOPS") or "main").split(",") if s.strip()]
 TKSHOP_DEFAULT_SHOP = TKSHOP_SHOPS[0] if TKSHOP_SHOPS else "main"
 
+# Auto discount: after a successful publish, ask the middle layer to put the
+# product on a N% discount. 0 (or negative) disables it. Default 40 per the
+# operator's standing rule "always launch at 40% off". The middle layer turns
+# this into a TikTok Promotion activity (see
+# docs/tiktok_product_shipping_discount_contract.md).
+try:
+    TKSHOP_AUTO_DISCOUNT_PERCENT = float(os.getenv("TKSHOP_AUTO_DISCOUNT_PERCENT", "40") or 0)
+except (TypeError, ValueError):
+    TKSHOP_AUTO_DISCOUNT_PERCENT = 40.0
+
+# Discount activity window (days). TikTok promotions need begin/end times and
+# CAP the period at 90 days (error 17029007), so default to 89. The middle
+# layer also clamps to 90 defensively. Activity type is passed through.
+try:
+    TKSHOP_DISCOUNT_WINDOW_DAYS = int(os.getenv("TKSHOP_DISCOUNT_WINDOW_DAYS", "89"))
+except (TypeError, ValueError):
+    TKSHOP_DISCOUNT_WINDOW_DAYS = 89
+TKSHOP_DISCOUNT_ACTIVITY_TYPE = os.getenv("TKSHOP_DISCOUNT_ACTIVITY_TYPE", "DIRECT_DISCOUNT")
+
 # Per-shop seller_sku prefix. Format: ``shopA:INK1,shopB:INK2``. When a shop
 # isn't listed, prefix derives from the shop's index in TKSHOP_SHOPS:
 # first shop → INK1, second → INK2, etc. This keeps SKUs on different shops
@@ -329,23 +348,28 @@ def compute_default_seller_sku(
     *, pack_uid: str, total_stickers: int = 0, pack_id: int,
     shop: Optional[str] = None,
 ) -> str:
-    """Default seller_sku = ``{shop_prefix}-{name_slug}-{pack_id}``.
+    """Default seller_sku = ``INK-{name_slug}-{pack_id}`` — cross-shop unified.
 
-    ``pack_id`` (the DB primary key) is appended to GUARANTEE global
-    uniqueness — the old ``INK-{slug10}-{total}`` form collided for packs made
-    the same day (date-dominated slug) with the same sticker count.
-    ``shop`` selects a per-shop prefix (``INK1``/``INK2``/…) so the same pack
-    cloned to multiple shops doesn't reuse a SKU. ``total_stickers`` is
-    accepted for backward compat but no longer encoded.
+    Historically this prepended a per-shop prefix (``INK1``/``INK2``/…) so the
+    same pack on two stores got distinct SKUs. The operator now wants the
+    SAME SKU on every shop for the same pack, mirroring the master catalog's
+    SKU. Pre-existing rows keep their old prefixed SKUs unchanged; only new
+    rows get the unified form. Cross-shop uniqueness is enforced per-shop by
+    ``_ensure_unique_seller_sku(conn, sku, shop=...)``, so two shops can
+    legitimately share ``INK-COASTAL-7`` without colliding.
+
+    ``shop`` and ``total_stickers`` are accepted for backward compat with
+    existing call sites but no longer encoded.
     """
-    prefix = get_shop_sku_prefix(shop or TKSHOP_DEFAULT_SHOP)
     slug = _slugify_for_sku(pack_uid) or f"P{pack_id}"
-    sku = f"{prefix}-{slug}-{pack_id}"
+    sku = f"INK-{slug}-{pack_id}"
     return sku[:25]
 
 
 def _ensure_unique_seller_sku(
-    conn: sqlite3.Connection, sku: str, *, exclude_product_id: Optional[int] = None,
+    conn: sqlite3.Connection, sku: str, *,
+    exclude_product_id: Optional[int] = None,
+    shop: Optional[str] = None,
 ) -> str:
     """Return a SKU guaranteed not to collide with any existing row.
 
@@ -353,6 +377,11 @@ def _ensure_unique_seller_sku(
     collision, appends ``-2``, ``-3``, … until free. Truncates to 25 chars
     while leaving room for the disambiguator. ``exclude_product_id`` lets
     an UPDATE keep its own existing SKU.
+
+    ``shop`` scopes the uniqueness check to that shop only — needed since the
+    operator now wants the same pack to share one SKU across shops, so two
+    shops legitimately holding ``INK-COASTAL-7`` is no longer a collision.
+    When ``shop`` is None the check is global (master-level callers, legacy).
     """
     base = (sku or "").strip().upper()[:25]
     if not base:
@@ -360,12 +389,15 @@ def _ensure_unique_seller_sku(
     candidate = base
     n = 1
     while True:
-        params: tuple = (candidate,)
         sql = "SELECT id FROM tkshop_products WHERE UPPER(seller_sku) = ?"
+        params: list = [candidate]
         if exclude_product_id is not None:
             sql += " AND id != ?"
-            params = (candidate, exclude_product_id)
-        if conn.execute(sql, params).fetchone() is None:
+            params.append(exclude_product_id)
+        if shop is not None:
+            sql += " AND shop = ?"
+            params.append(shop)
+        if conn.execute(sql, tuple(params)).fetchone() is None:
             return candidate
         n += 1
         suffix = f"-{n}"
@@ -684,11 +716,13 @@ class TKShopService:
             chosen_sku = default_sku
 
         with _open_db(self.db_path) as conn:
-            # Guarantee no other row uses this SKU — disambiguate with
-            # ``-2``/``-3``/… on collision. Cross-shop clones thus stay unique
-            # even if the AI echoes the same suggested SKU.
+            # Guarantee no other row on the same shop uses this SKU. Scope
+            # is per-shop now — two shops sharing the same pack legitimately
+            # share the same SKU (operator wants cross-shop alignment).
             chosen_sku = _ensure_unique_seller_sku(
-                conn, chosen_sku, exclude_product_id=product_id,
+                conn, chosen_sku,
+                exclude_product_id=product_id,
+                shop=row["shop"] or TKSHOP_DEFAULT_SHOP,
             )
             if extract_ok:
                 conn.execute(
@@ -842,6 +876,7 @@ class TKShopService:
                 clean_sku = _ensure_unique_seller_sku(
                     conn, (seller_sku or "").strip().upper()[:25],
                     exclude_product_id=product_id,
+                    shop=_get_product_shop(self.db_path, product_id),
                 )
                 sets.append("seller_sku = ?"); params.append(clean_sku)
             cur = conn.execute(
@@ -857,6 +892,7 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             clean = _ensure_unique_seller_sku(
                 conn, clean, exclude_product_id=product_id,
+                shop=_get_product_shop(self.db_path, product_id),
             )
             cur = conn.execute(
                 "UPDATE tkshop_products SET seller_sku = ? WHERE id = ?",
@@ -1425,6 +1461,7 @@ class TKShopService:
         main_size: Optional[str] = None,
         main_quality: Optional[str] = None,
         secondary_quality: Optional[str] = None,
+        mode: str = "all",
     ) -> dict[str, Any]:
         """End-to-end: design context → AI spec → image_edit per concept
         → save as tkshop_product_images rows (source='ai').
@@ -1660,11 +1697,23 @@ class TKShopService:
             except Exception:
                 return None
 
+        # ``mode`` filters which roles to actually generate:
+        #   "all"       — main + secondary (original behavior)
+        #   "main"      — only the hero/main image; secondaries untouched
+        #   "secondary" — only the secondary set; main untouched
+        # The unified spec generation upstream still runs in one GPT call
+        # regardless of mode, so the operator's prompt design is consistent.
+        mode_norm = (mode or "all").strip().lower()
+        if mode_norm not in {"all", "main", "secondary"}:
+            mode_norm = "all"
+        gen_main = mode_norm in {"all", "main"}
+        gen_secondary = mode_norm in {"all", "secondary"}
+
         if replace_existing_ai:
             roles_to_clear: set[str] = set()
-            if isinstance(spec.get("main"), dict):
+            if gen_main and isinstance(spec.get("main"), dict):
                 roles_to_clear.add("main")
-            if secondary_count > 0 and (spec.get("secondary") or []):
+            if gen_secondary and secondary_count > 0 and (spec.get("secondary") or []):
                 roles_to_clear.add("secondary")
             if roles_to_clear:
                 with _open_db(self.db_path) as conn:
@@ -1687,13 +1736,14 @@ class TKShopService:
 
         results: list[dict[str, Any]] = []
         concepts: list[tuple[str, dict[str, str]]] = []
-        if isinstance(spec.get("main"), dict):
+        if gen_main and isinstance(spec.get("main"), dict):
             m = dict(spec["main"])
             m["role_type"] = "hero"  # main is always the hero shot
             concepts.append(("main", m))
-        for sec in (spec.get("secondary") or [])[:secondary_count]:
-            if isinstance(sec, dict):
-                concepts.append(("secondary", sec))
+        if gen_secondary:
+            for sec in (spec.get("secondary") or [])[:secondary_count]:
+                if isinstance(sec, dict):
+                    concepts.append(("secondary", sec))
 
         # Concurrency: JieKou /v3/gpt-image-2-edit drops connections when
         # >= 2 simultaneous calls hit it (main bundle + secondary is enough).
@@ -2256,6 +2306,12 @@ class TKShopService:
                 )
             conn.commit()
 
+        # After a successful create, auto-apply the standing discount. This is
+        # best-effort and never flips a successful publish to failed.
+        discount_result = None
+        if success and tiktok_product_id:
+            discount_result = self.apply_discount(product_id)
+
         return {
             "ok": success,
             "tiktok_product_id": tiktok_product_id,
@@ -2265,7 +2321,170 @@ class TKShopService:
             "error_message": error_message,
             "field_hints": field_hints,
             "attempt_idx": attempt_idx,
+            "discount": discount_result,
         }
+
+    def _create_product_discount_remote(
+        self,
+        tiktok_product_id: str,
+        *,
+        percent: float,
+        shop: str,
+        sku_id: str = "",
+        title: str = "",
+    ) -> dict[str, Any]:
+        """POST a discount request to multi-channel-api.
+
+        Endpoint (repo B must implement — see
+        docs/tiktok_product_shipping_discount_contract.md). repo B turns this
+        into the TikTok Promotion two-step (create activity + add product)::
+
+            POST {TKSHOP_SERVER_URL}/api/v1/tiktok/products/{id}/discount?shop=
+
+        Body::
+            {"discount_percent": 40.0, "sku_id": "...", "product_title": "...",
+             "activity_type": "DIRECT_DISCOUNT", "begin_time": <epoch>,
+             "end_time": <epoch>}
+        Success:: {"ok": true, "activity_id": "...", "discount_percent": 40.0}
+        Failure:: {"ok": false, "error_code": "...", "error_message": "..."}
+        """
+        now = int(time.time())
+        endpoint = (
+            f"{TKSHOP_SERVER_URL.rstrip('/')}"
+            f"/api/v1/tiktok/products/{tiktok_product_id}/discount"
+        )
+        body = {
+            "discount_percent": float(percent),
+            "sku_id": sku_id or "",
+            "product_title": title or "",
+            # Activity context so repo B can build the Promotion activity. A long
+            # window emulates a "standing" discount.
+            "activity_type": TKSHOP_DISCOUNT_ACTIVITY_TYPE,
+            "begin_time": now,
+            "end_time": now + TKSHOP_DISCOUNT_WINDOW_DAYS * 86400,
+        }
+        resp = requests.post(
+            endpoint, json=body, params={"shop": shop},
+            timeout=TKSHOP_SERVER_TIMEOUT,
+        )
+        try:
+            rj = resp.json()
+        except Exception:
+            rj = {"_raw_text": resp.text[:500]}
+        # Unwrap the {success, message, data:{ok:...}} envelope when present.
+        if (isinstance(rj, dict) and isinstance(rj.get("data"), dict)
+                and "ok" in rj["data"]):
+            rj = rj["data"]
+        rj.setdefault("_http_status", resp.status_code)
+        return rj
+
+    def _set_discount_state(
+        self,
+        product_id: int,
+        *,
+        status: str,
+        percent: Optional[float] = None,
+        activity_id: Optional[str] = None,
+        applied_at: Optional[int] = None,
+    ) -> None:
+        """Persist discount tracking columns. Defensive: a missing-column error
+        (migration 022 not applied) is logged, not raised, so publish/discount
+        never breaks on an un-migrated DB."""
+        sets = ["discount_status = ?"]
+        params: list[Any] = [status]
+        if percent is not None:
+            sets.append("discount_percent = ?"); params.append(float(percent))
+        if activity_id is not None:
+            sets.append("discount_activity_id = ?"); params.append(activity_id)
+        if applied_at is not None:
+            sets.append("discount_applied_at = ?"); params.append(applied_at)
+        params.append(product_id)
+        try:
+            with _open_db(self.db_path) as conn:
+                conn.execute(
+                    f"UPDATE tkshop_products SET {', '.join(sets)} WHERE id = ?",
+                    tuple(params),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                "discount state persist skipped (run migration 022?): %s", e)
+
+    def apply_discount(
+        self,
+        product_id: int,
+        *,
+        percent: Optional[float] = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Put a published product on an N% discount via the middle layer.
+
+        Resolves the product's TikTok id / shop / sku from the DB, calls the
+        middle layer, and persists the outcome to the discount_* columns.
+        NEVER raises on a remote failure (the listing stays live); only raises
+        if the product row itself is missing.
+
+        - ``percent``: override; defaults to ``TKSHOP_AUTO_DISCOUNT_PERCENT``.
+        - ``force``: re-apply even if already marked applied (idempotent skip
+          otherwise).
+        """
+        pct = TKSHOP_AUTO_DISCOUNT_PERCENT if percent is None else float(percent)
+        if pct <= 0:
+            return {"applied": False, "reason": "disabled", "percent": pct}
+
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tiktok_product_id, tiktok_sku_id, title, shop, "
+                "discount_status FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+        if not row:
+            raise ValueError(f"product #{product_id} not found")
+
+        tt_id = (row["tiktok_product_id"] or "").strip()
+        if not tt_id:
+            return {"applied": False, "reason": "not_on_platform", "percent": pct}
+        if not force and (row["discount_status"] or "") == "applied":
+            return {"applied": True, "reason": "already_applied",
+                    "percent": pct, "skipped": True}
+
+        shop = row["shop"] or TKSHOP_DEFAULT_SHOP
+        self._set_discount_state(product_id, status="pending", percent=pct)
+
+        try:
+            rj = self._create_product_discount_remote(
+                tt_id, percent=pct, shop=shop,
+                sku_id=row["tiktok_sku_id"] or "", title=row["title"] or "",
+            )
+        except requests.RequestException as e:
+            self._set_discount_state(product_id, status="failed", percent=pct)
+            logger.warning("discount network error for product #%s: %s",
+                           product_id, e)
+            return {"applied": False, "reason": "network",
+                    "error": str(e)[:200], "percent": pct}
+        except Exception as e:  # pragma: no cover - defensive
+            self._set_discount_state(product_id, status="failed", percent=pct)
+            logger.warning("discount failed for product #%s: %s", product_id, e)
+            return {"applied": False, "reason": "internal",
+                    "error": f"{type(e).__name__}: {e}"[:200], "percent": pct}
+
+        ok = bool(rj.get("ok") is True or rj.get("success") is True)
+        if ok:
+            activity_id = str(rj.get("activity_id") or "")
+            self._set_discount_state(
+                product_id, status="applied", percent=pct,
+                activity_id=activity_id, applied_at=int(time.time()),
+            )
+            logger.info("discount applied: product #%s tiktok=%s %.0f%% activity=%s",
+                        product_id, tt_id, pct, activity_id)
+            return {"applied": True, "percent": pct, "activity_id": activity_id}
+
+        msg = str(rj.get("error_message") or rj.get("message")
+                  or rj.get("_raw_text") or "")
+        self._set_discount_state(product_id, status="failed", percent=pct)
+        logger.warning("discount rejected for product #%s: %s", product_id, msg[:200])
+        return {"applied": False, "reason": "rejected",
+                "error": msg[:200], "percent": pct}
 
     def publish_with_self_heal(
         self,
@@ -2460,7 +2679,9 @@ class TKShopService:
               "category_id": str,
               "seller_sku": str,
               "quantity": int,
-              "image_urls": [str, ...]
+              "image_urls": [str, ...],
+              "image_paths": [str, ...],
+              "auto_activate": bool
             }
         """
         with _open_db(self.db_path) as conn:
@@ -2522,6 +2743,7 @@ class TKShopService:
                 )
                 seller_sku = _ensure_unique_seller_sku(
                     conn, seller_sku, exclude_product_id=product_id,
+                    shop=pr["shop"] or TKSHOP_DEFAULT_SHOP,
                 )
                 # Persist so future retries/self-heal see the same value.
                 conn.execute(
@@ -2861,17 +3083,18 @@ class TKShopService:
                 raise ValueError(
                     f"product #{product_id} is already on shop {target_shop!r}"
                 )
-            # Regenerate the SKU with the target shop's prefix so e.g. main →
-            # INK1-…, inkelligentstudio → INK2-… don't share an identifier on
-            # different stores. _ensure_unique_seller_sku then disambiguates
-            # against every existing row.
+            # Unified SKU: same pack on different shops gets the same SKU now,
+            # so clone-to-shop produces an identical seller_sku as the source
+            # row. Uniqueness is scoped to the target shop; if some pre-existing
+            # row on the target shop already squats that SKU it gets a -2.
             target_sku = compute_default_seller_sku(
                 pack_uid=src["pack_uid"] or "",
                 total_stickers=src["total_stickers"] or 0,
                 pack_id=src["pack_id"],
-                shop=target_shop,
             )
-            target_sku = _ensure_unique_seller_sku(conn, target_sku)
+            target_sku = _ensure_unique_seller_sku(
+                conn, target_sku, shop=target_shop,
+            )
             # Carry the source's local_product_id over to the clone so the new
             # listing still points at the same master — that's what makes a
             # multi-shop pack reuse one catalog entry instead of forking copies.
@@ -3415,6 +3638,10 @@ class TKShopService:
         # in real responses too — fold them all into 'published'.
         if ts in ("LIVE", "ACTIVATE", "ACTIVE"):
             return "published"
+        # Audit rejection surfaces as FAILED / AUDIT_FAILED / REJECTED — fold
+        # them into local 'failed' so the UI surfaces a fix-rejection action.
+        if ts in ("FAILED", "AUDIT_FAILED", "REJECTED"):
+            return "failed"
         # TikTok lumps seller-initiated deactivation and platform violation
         # suspension into the same SUSPENDED bucket — pick the friendlier
         # interpretation since both are recoverable via the activate API.
@@ -3426,6 +3653,146 @@ class TKShopService:
         # local status with junk (e.g. when the platform response omits the
         # status field). Callers that need a value supply their own fallback.
         return ""
+
+    @staticmethod
+    def _extract_audit_reasons(tt_data: dict) -> list[str]:
+        """Pull human-readable rejection reasons out of a TikTok product
+        detail payload. The wrapper's response shape isn't fully documented,
+        so try several field names and flatten what we find.
+
+        Returns an empty list when no audit-rejection info is present.
+        """
+        if not isinstance(tt_data, dict):
+            return []
+        out: list[str] = []
+        # Common single-string field names.
+        for k in ("audit_failed_reasons", "audit_fail_reason", "fail_reason",
+                  "reject_reason", "rejection_reason", "qa_failed_reason"):
+            v = tt_data.get(k)
+            if isinstance(v, str) and v.strip():
+                out.append(v.strip())
+        # List-of-objects / list-of-strings field names. Items may be
+        # ``{"reason": "...", "field": "title"}`` or just strings.
+        for k in ("audit_failed_reasons", "audit_failed_list",
+                  "reject_reasons", "rejection_reasons"):
+            v = tt_data.get(k)
+            if isinstance(v, list):
+                for item in v:
+                    if isinstance(item, str) and item.strip():
+                        out.append(item.strip())
+                    elif isinstance(item, dict):
+                        msg = (item.get("reason") or item.get("message")
+                               or item.get("desc") or item.get("text") or "").strip()
+                        field = (item.get("field") or item.get("attribute") or "").strip()
+                        if msg and field:
+                            out.append(f"[{field}] {msg}")
+                        elif msg:
+                            out.append(msg)
+        # Dedup while keeping order.
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for r in out:
+            if r in seen:
+                continue
+            seen.add(r); uniq.append(r)
+        return uniq
+
+    def fix_rejection_and_resubmit(
+        self,
+        product_id: int,
+        *,
+        max_retries: int = 2,
+    ) -> dict[str, Any]:
+        """Self-heal for audit-rejected listings on the platform side.
+
+        Flow:
+          1. Fetch TikTok product detail and extract audit_failed_reasons.
+          2. If reasons exist, feed them into the existing self-heal AI
+             prompt as error_message + field_hints.
+          3. Apply the AI patch to the local listing fields.
+          4. Push the corrected content to TikTok via update_on_platform.
+          5. Re-fetch detail to confirm the audit cleared; if still failing
+             and we have retries left, loop with the latest reasons.
+
+        Returns a summary dict with the trail of attempts so the UI can
+        show what AI changed each round.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tiktok_product_id, shop, publish_status "
+                "FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"product #{product_id} not found")
+            tt_id = (row["tiktok_product_id"] or "").strip()
+            shop_name = row["shop"] or TKSHOP_DEFAULT_SHOP
+        if not tt_id:
+            return {
+                "ok": False,
+                "error_message": "no tiktok_product_id — product never reached the platform",
+            }
+
+        cap = max(1, int(max_retries))
+        attempts: list[dict[str, Any]] = []
+        last_reasons: list[str] = []
+        for i in range(cap):
+            # 1) Pull current platform state.
+            platform = self.get_platform_product(tt_id, shop=shop_name)
+            data = platform.get("data") or {}
+            reasons = self._extract_audit_reasons(data)
+            remote_status = (data.get("status") or "").strip()
+            attempts.append({
+                "round": i + 1,
+                "remote_status": remote_status,
+                "reasons": reasons,
+            })
+            last_reasons = reasons
+            if not reasons:
+                # Either the listing isn't actually rejected, or the platform
+                # doesn't surface reasons in this response. Bail out so we
+                # don't pointlessly rewrite a passing listing.
+                attempts[-1]["note"] = "no audit reasons returned — nothing to fix"
+                break
+            # 2) Ask AI to rewrite the failing fields.
+            try:
+                fix = self._ai_fix_payload(
+                    product_id,
+                    error_code="AUDIT_REJECTED",
+                    error_message=" | ".join(reasons[:6])[:1200],
+                    field_hints=[],
+                )
+            except Exception as exc:
+                attempts[-1]["ai_error"] = str(exc)[:300]
+                logger.warning(
+                    "fix_rejection_and_resubmit: AI fix failed for #%d round %d: %s",
+                    product_id, i + 1, exc,
+                )
+                break
+            attempts[-1]["changed_fields"] = fix.get("changed_fields") or []
+            attempts[-1]["rationale"] = fix.get("rationale") or ""
+            if not fix.get("changed_fields"):
+                attempts[-1]["note"] = "AI proposed no changes — stopping"
+                break
+            # 3) Push the patched listing to TikTok.
+            try:
+                push = self.update_on_platform(product_id)
+                attempts[-1]["push_ok"] = bool(push.get("ok"))
+                attempts[-1]["push_error"] = push.get("error_message") or ""
+            except Exception as exc:
+                attempts[-1]["push_error"] = str(exc)[:300]
+                logger.warning(
+                    "fix_rejection_and_resubmit: update_on_platform failed for #%d: %s",
+                    product_id, exc,
+                )
+                break
+
+        return {
+            "ok": bool(attempts) and not last_reasons,
+            "product_id": product_id,
+            "attempts": attempts,
+            "remaining_reasons": last_reasons,
+        }
 
     def sync_one_status(self, product_id: int) -> dict[str, Any]:
         """Refresh the publish_status for a single product from TikTok."""
@@ -3875,6 +4242,8 @@ class TKShopService:
                        pr.keywords, pr.category_id,
                        pr.default_template_json, pr.publish_status,
                        pr.created_at, pr.published_at,
+                       pr.discount_percent, pr.discount_status,
+                       pr.discount_activity_id, pr.discount_applied_at,
                        p.display_name AS pack_name, p.cover_image_path,
                        p.pack_uid, p.total_stickers
                   FROM tkshop_products pr
@@ -4126,11 +4495,10 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             if seller_sku is not None:
                 clean = (seller_sku or "").strip().upper()[:25]
-                # Unique across tkshop_products too — a master and a listing
-                # never share an SKU because per-shop prefix would diverge,
-                # but be defensive.
-                clean = _ensure_unique_seller_sku(conn, clean)
-                # Also check uniqueness inside local_products itself.
+                # Master SKU intentionally matches its listings' SKUs (unified
+                # cross-shop scheme). Don't check tkshop_products — masters and
+                # their listings SHARE one SKU by design now.
+                # Uniqueness is still enforced inside local_products below.
                 while conn.execute(
                     "SELECT 1 FROM local_products "
                     "WHERE UPPER(seller_sku) = ? AND id != ?",

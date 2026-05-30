@@ -4194,12 +4194,15 @@ async def v2_local_product_auto_design_sync(request: Request, local_product_id: 
     """
     payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else dict(await request.form())
     try:
-        count = max(1, min(int(payload.get("count", 4)), 8))
+        count = max(1, min(int(payload.get("count", 5)), 8))
     except (TypeError, ValueError):
-        count = 4
+        count = 5
     language = (str(payload.get("language") or "en")).lower().strip() or "en"
     size = (str(payload.get("size") or "1024x1024")).strip() or "1024x1024"
     shop = (str(payload.get("shop") or "")).strip() or None
+    mode = (str(payload.get("mode") or "all")).strip().lower()
+    if mode not in {"all", "main", "secondary"}:
+        mode = "all"
     secondary_count = max(0, count - 1)
     task_id = f"tkshop_auto_design_local:{local_product_id}"
     try:
@@ -4211,7 +4214,8 @@ async def v2_local_product_auto_design_sync(request: Request, local_product_id: 
             language=language,
             replace_existing_ai=True,
             size=size,
-            label=f"AI 主图设计 (master #{local_product_id}, {count} 张, {language}, {size})",
+            mode=mode,
+            label=f"AI 主图设计 (master #{local_product_id}, mode={mode}, {count} 张, {language}, {size})",
         )
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -4694,6 +4698,8 @@ def v2_product_detail(request: Request, product_id: int):
             "request": request,
             "page_title": f"产品 #{product_id}",
             "product": p,
+            "flash_ok": request.query_params.get("ok"),
+            "flash_err": request.query_params.get("error"),
         },
     )
 
@@ -4796,11 +4802,14 @@ async def v2_product_auto_design_images_sync(request: Request, product_id: int):
     """
     payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else dict(await request.form())
     try:
-        count = max(1, min(int(payload.get("count", 4)), 8))
+        count = max(1, min(int(payload.get("count", 5)), 8))
     except (TypeError, ValueError):
-        count = 4
+        count = 5
     language = (str(payload.get("language") or "en")).lower().strip() or "en"
     size = (str(payload.get("size") or "1024x1024")).strip() or "1024x1024"
+    mode = (str(payload.get("mode") or "all")).strip().lower()
+    if mode not in {"all", "main", "secondary"}:
+        mode = "all"
     secondary_count = max(0, count - 1)
     task_id = f"tkshop_auto_design:{product_id}"
     started = run_async(
@@ -4810,7 +4819,8 @@ async def v2_product_auto_design_images_sync(request: Request, product_id: int):
         language=language,
         replace_existing_ai=True,
         size=size,
-        label=f"AI 主图设计 (product #{product_id}, {count} 张, {language}, {size})",
+        mode=mode,
+        label=f"AI 主图设计 (product #{product_id}, mode={mode}, {count} 张, {language}, {size})",
     )
     if not started:
         return JSONResponse({
@@ -4878,6 +4888,31 @@ async def v2_product_deactivate(request: Request, product_id: int):
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
     return JSONResponse(result)
+
+
+@router.post("/products/{product_id:int}/fix-rejection")
+async def v2_product_fix_rejection(request: Request, product_id: int):
+    """Pull the TikTok audit-failure reasons for this product, ask AI to
+    rewrite the offending fields, then push the patched listing back.
+    Background so the operator can keep working — they refresh to see
+    the new status. Returns JSON when an XHR caller asks for it.
+    """
+    svc = get_tkshop_service()
+    task_id = f"tkshop_fix_rejection:{product_id}"
+    started = run_async(
+        task_id,
+        svc.fix_rejection_and_resubmit, product_id,
+        label=f"修复审核拒绝 (product #{product_id})",
+    )
+    if request.headers.get("accept", "").startswith("application/json") or \
+       request.headers.get("x-requested-with", "").lower() == "fetch":
+        return JSONResponse({
+            "ok": True, "task_id": task_id, "started": started,
+            "message": "已派发后台任务：拉取审核原因 → AI 修改 → 重新提交",
+        })
+    return RedirectResponse(
+        url=f"/v2/products/{product_id}?fix_rejection=1", status_code=303,
+    )
 
 
 @router.post("/products/{product_id:int}/sync_status")
@@ -5047,6 +5082,37 @@ async def v2_product_clone_to_shop(request: Request, product_id: int):
     return RedirectResponse(url=f"/v2/products/{new_id}", status_code=303)
 
 
+@router.post("/products/{product_id:int}/apply-discount")
+async def v2_product_apply_discount(request: Request, product_id: int):
+    """Manually (re-)apply the standing discount to a published product.
+
+    Used when auto-discount on publish failed (e.g. middle layer was down) or
+    the operator wants to re-apply at a different percent. ``force=True`` so a
+    prior applied/failed state doesn't block a retry.
+    """
+    form = await request.form()
+    raw = (form.get("percent") or "").strip()
+    percent = None
+    if raw:
+        try:
+            percent = float(raw)
+        except ValueError:
+            percent = None
+    svc = get_tkshop_service()
+    try:
+        result = svc.apply_discount(product_id, percent=percent, force=True)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if result.get("applied"):
+        flash = {"ok": f"已应用 {result.get('percent')}% 折扣"}
+    else:
+        reason = result.get("error") or result.get("reason") or "未知原因"
+        flash = {"error": f"折扣未应用：{reason}"}
+    return RedirectResponse(
+        url=_append_query(f"/v2/products/{product_id}", flash), status_code=303,
+    )
+
+
 @router.get("/products/{product_id:int}/publish_status")
 def v2_product_publish_status(product_id: int):
     """Poll endpoint used by the detail page to detect when publish finishes."""
@@ -5159,6 +5225,21 @@ async def v2_lab_multi_sku_create(request: Request):
     detail_main_raw_text = (form.get("detail_main_raw_text") or "").strip()
     shop = (form.get("shop") or "").strip()
 
+    # Per-pack image overrides: the form posts ``pack_image_path__<pack_id>``
+    # fields when the operator picked a master image for that pack. Missing
+    # entries mean "use the existing pack-cover fallback at publish time".
+    pack_image_paths: dict[int, str] = {}
+    for k, v in form.items() if hasattr(form, "items") else []:
+        if not k.startswith("pack_image_path__"):
+            continue
+        try:
+            key_pack_id = int(k.split("__", 1)[1])
+        except (TypeError, ValueError):
+            continue
+        path_val = (v or "").strip()
+        if path_val:
+            pack_image_paths[key_pack_id] = path_val
+
     from src.services.lab_multi_sku import get_lab_multi_sku_service
     svc = get_lab_multi_sku_service()
     try:
@@ -5169,6 +5250,7 @@ async def v2_lab_multi_sku_create(request: Request):
             selling_points=selling_points, keywords=keywords,
             detail_main_raw_text=detail_main_raw_text,
             shop=shop,
+            pack_image_paths=pack_image_paths or None,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -5282,6 +5364,50 @@ def v2_lab_multi_sku_topic_packs(topic_id: int):
         d["cover_url"] = _path_to_v2_url(d.get("cover_image_path") or "")
         packs.append(d)
     return JSONResponse({"ok": True, "packs": packs})
+
+
+@router.get("/lab/multi-sku/packs/{pack_id:int}/master-images")
+def v2_lab_multi_sku_pack_master_images(pack_id: int):
+    """Return the master gallery images for ``pack_id`` so the multi-SKU
+    builder can offer them as per-variant thumbnail picks. Falls back to
+    the pack's cover + first ``ok`` previews when no master images exist
+    yet so the picker is never empty.
+    """
+    import sqlite3 as _sql
+    conn = _sql.connect("data/ops_workbench.db")
+    conn.row_factory = _sql.Row
+    try:
+        lp_row = conn.execute(
+            "SELECT id FROM local_products WHERE pack_id = ?", (pack_id,),
+        ).fetchone()
+        images: list[dict] = []
+        if lp_row:
+            for r in conn.execute(
+                """SELECT id, role, source, local_path, sort_order, created_at
+                     FROM local_product_images
+                    WHERE local_product_id = ?
+                    ORDER BY role = 'main' DESC, sort_order ASC, id ASC""",
+                (lp_row["id"],),
+            ):
+                d = dict(r)
+                d["url"] = _path_to_v2_url(d.get("local_path") or "")
+                images.append(d)
+        # Always include the pack cover as the trailing fallback option so
+        # the operator can revert to the historical default.
+        cover_row = conn.execute(
+            "SELECT cover_image_path FROM packs WHERE id = ?", (pack_id,),
+        ).fetchone()
+        if cover_row and cover_row["cover_image_path"]:
+            images.append({
+                "id": 0,
+                "role": "pack_cover",
+                "source": "pack",
+                "local_path": cover_row["cover_image_path"],
+                "url": _path_to_v2_url(cover_row["cover_image_path"]),
+            })
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True, "pack_id": pack_id, "images": images})
 
 
 # ---------------------------------------------------------------------------
@@ -5716,3 +5842,842 @@ def v2_lab_multi_sku_publish_status_json(product_id: int):
         "publish_status": row["publish_status"],
         "tiktok_product_id": row["tiktok_product_id"] or "",
     })
+
+
+# ----------------------------------------------------------------------
+# Ads — TikTok 人群测试实验 & 优质人群库
+#
+# UI track (W). Backend lives in src/services/tiktok/ads_experiment_service.py
+# and is built in parallel (Track B). We import those services *lazily inside
+# each route* so a missing symbol during parallel dev never breaks module
+# import. Read paths query the tk_ad_* tables directly (see migration 020);
+# all mutations + AI audience generation go through the service per the
+# docs/tiktok_ads_contract.md signatures.
+# ----------------------------------------------------------------------
+
+# Status vocabulary → friendly Chinese labels + pill class.
+# Vocabulary matches the backend (ads_experiment_service) + migration 020:
+#   experiments: draft / running / evaluating / done / failed / killed
+#   audiences:   candidate / testing / winning / inconclusive / paused / retired
+#   adgroups (local): preview / pending / running / paused / failed
+_ADS_EXP_STATUS_ZH = {
+    "draft": "草稿",
+    "running": "投放中",
+    "evaluating": "评估中",
+    "done": "已结束",
+    "failed": "失败",
+    "killed": "已停投",
+}
+_ADS_EXP_STATUS_PILL = {
+    "draft": "pending",
+    "running": "running",
+    "evaluating": "running",
+    "done": "ok",
+    "failed": "error",
+    "killed": "error",
+}
+_ADS_AUDIENCE_STATUS_ZH = {
+    "candidate": "候选",
+    "testing": "测试中",
+    "winning": "优质",
+    "inconclusive": "数据不足",
+    "paused": "暂停",
+    "retired": "已淘汰",
+}
+_ADS_AUDIENCE_STATUS_PILL = {
+    "candidate": "pending",
+    "testing": "running",
+    "winning": "ok",
+    "inconclusive": "pending",
+    "paused": "pending",
+    "retired": "error",
+}
+_ADS_GROUP_STATUS_PILL = {
+    "preview": "pending",
+    "pending": "pending",
+    "enable": "ok",
+    "enabled": "ok",
+    "running": "running",
+    "paused": "pending",
+    "disable": "error",
+    "disabled": "error",
+    "failed": "error",
+    "killed": "error",
+    "error": "error",
+}
+
+
+def _ads_exp_status_label(status: Any) -> str:
+    s = str(status or "").strip().lower()
+    return _ADS_EXP_STATUS_ZH.get(s, status or "—")
+
+
+def _ads_exp_status_pill(status: Any) -> str:
+    return _ADS_EXP_STATUS_PILL.get(str(status or "").strip().lower(), "pending")
+
+
+def _ads_audience_status_label(status: Any) -> str:
+    s = str(status or "").strip().lower()
+    return _ADS_AUDIENCE_STATUS_ZH.get(s, status or "—")
+
+
+def _ads_audience_status_pill(status: Any) -> str:
+    return _ADS_AUDIENCE_STATUS_PILL.get(str(status or "").strip().lower(), "pending")
+
+
+def _ads_group_status_pill(status: Any) -> str:
+    return _ADS_GROUP_STATUS_PILL.get(str(status or "").strip().lower(), "pending")
+
+
+# ----------------------------------------------------------------------
+# Phase 2 — objective-aware metric columns.
+#
+# The visible metric columns + the 主 KPI column depend on the experiment's
+# `objective` (migration 021 makes objective a first-class input). The
+# leaderboard rows already carry `primary_kpi_value` + `primary_kpi_name`
+# from the service; here we only describe which *raw aggregate* columns to
+# show per objective and their 中文表头. Each column is
+# (row_key, 中文表头, fmt) where fmt ∈ {"int", "num", "kpi"}.
+#   - "int"  → thousands-grouped integer
+#   - "num"  → 2-decimal float
+#   - "kpi"  → primary KPI (uses primary_kpi_value/primary_kpi_name)
+# The KPI column's header falls back to a per-objective default when the
+# service hasn't filled `primary_kpi_name`.
+_ADS_OBJECTIVE_LABELS = {
+    "VIDEO_VIEWS": "视频播放",
+    "ENGAGEMENT": "互动涨粉",
+    "PRODUCT_SALES": "商品销售",
+}
+
+_ADS_OBJECTIVE_COLUMNS: dict[str, list[tuple[str, str, str]]] = {
+    "VIDEO_VIEWS": [
+        ("video_views", "播放", "int"),
+        ("video_6s", "6s", "int"),
+        ("video_p100", "完播", "int"),
+        ("primary_kpi", "CPV", "kpi"),
+    ],
+    "ENGAGEMENT": [
+        ("follows", "涨粉", "int"),
+        ("profile_visits", "主页访问", "int"),
+        ("engagements", "互动", "int"),
+        ("primary_kpi", "单粉成本", "kpi"),
+    ],
+    "PRODUCT_SALES": [
+        ("orders", "成交", "int"),
+        ("gmv", "GMV", "num"),
+        ("primary_kpi", "ROAS", "kpi"),
+    ],
+}
+
+# Generic fallback when objective is missing/unknown (current Phase-1 columns).
+_ADS_GENERIC_COLUMNS: list[tuple[str, str, str]] = [
+    ("orders", "订单", "int"),
+    ("gmv", "GMV", "num"),
+    ("roas", "ROAS", "num"),
+]
+
+# Default KPI header per objective when the service omits primary_kpi_name.
+_ADS_KPI_DEFAULT_NAME = {
+    "VIDEO_VIEWS": "CPV",
+    "ENGAGEMENT": "单粉成本",
+    "PRODUCT_SALES": "ROAS",
+}
+
+
+def _ads_normalize_objective(objective: Any) -> str:
+    return str(objective or "").strip().upper()
+
+
+def _ads_objective_label(objective: Any) -> str:
+    """Friendly Chinese label for an objective, e.g. VIDEO_VIEWS → 视频播放."""
+    obj = _ads_normalize_objective(objective)
+    return _ADS_OBJECTIVE_LABELS.get(obj, objective or "—")
+
+
+def _ads_metric_columns(objective: Any) -> list[dict[str, str]]:
+    """Return the ordered metric-column descriptors for an objective.
+
+    Falls back to the generic ROAS-centric columns when the objective is
+    missing/unknown so the UI degrades gracefully (no 500, no blank table).
+    Each descriptor is {"key", "label", "fmt"}.
+    """
+    obj = _ads_normalize_objective(objective)
+    cols = _ADS_OBJECTIVE_COLUMNS.get(obj, _ADS_GENERIC_COLUMNS)
+    return [{"key": k, "label": lbl, "fmt": fmt} for (k, lbl, fmt) in cols]
+
+
+def _ads_kpi_label(objective: Any, primary_kpi_name: Any = None) -> str:
+    """Header/label for the 主 KPI column: prefer the service-provided
+    `primary_kpi_name`, else a per-objective default."""
+    name = str(primary_kpi_name or "").strip()
+    if name:
+        return name
+    obj = _ads_normalize_objective(objective)
+    return _ADS_KPI_DEFAULT_NAME.get(obj, "主 KPI")
+
+
+# Per-objective primary-KPI derivation from raw aggregates (used on the
+# experiment-detail page, where rows are per-adgroup raw metrics without a
+# precomputed primary_kpi_value). direction matters for sorting but not for
+# display; here we only compute the value.
+#   PRODUCT_SALES → ROAS  = gmv / spend            (higher better)
+#   VIDEO_VIEWS   → CPV   = spend / video_views    (lower better)
+#   ENGAGEMENT    → 单粉成本 = spend / follows       (lower better)
+def _ads_derive_kpi(row_get, objective: Any) -> Optional[float]:
+    obj = _ads_normalize_objective(objective)
+
+    def _f(k: str) -> float:
+        try:
+            return float(row_get(k, 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    spend = _f("spend")
+    if obj == "PRODUCT_SALES":
+        return (_f("gmv") / spend) if spend else 0.0
+    if obj == "VIDEO_VIEWS":
+        views = _f("video_views")
+        return (spend / views) if views else 0.0
+    if obj == "ENGAGEMENT":
+        follows = _f("follows")
+        return (spend / follows) if follows else 0.0
+    # Generic fallback: roas-like.
+    return (_f("gmv") / spend) if spend else 0.0
+
+
+def _ads_cell_value(row: Any, col: dict[str, str], objective: Any = None) -> str:
+    """Format one metric cell for `row` given a column descriptor. Used by both
+    the experiment-detail and leaderboard tables so formatting stays consistent
+    and missing keys degrade to 0 / —.
+
+    For the KPI column it prefers a precomputed `primary_kpi_value` (leaderboard
+    rows) and otherwise derives the KPI from raw aggregates + `objective`
+    (experiment-detail adgroup rows)."""
+    try:
+        get = row.get  # dict-like (leaderboard rows + adgroup dicts)
+    except AttributeError:
+        def get(k, default=None):  # pragma: no cover - defensive
+            return getattr(row, k, default)
+
+    fmt = col.get("fmt")
+    if fmt == "kpi":
+        val = get("primary_kpi_value", None)
+        if val is None:
+            val = _ads_derive_kpi(get, objective)
+        if val is None:
+            return "—"
+        try:
+            return f"{float(val):.2f}"
+        except (TypeError, ValueError):
+            return str(val)
+
+    key = col.get("key")
+    val = get(key, 0)
+    if fmt == "int":
+        try:
+            return "{:,}".format(int(val or 0))
+        except (TypeError, ValueError):
+            return "0"
+    # default / "num"
+    try:
+        return f"{float(val or 0):.2f}"
+    except (TypeError, ValueError):
+        return "0.00"
+
+
+templates.env.globals["ads_exp_status_label"] = _ads_exp_status_label
+templates.env.globals["ads_exp_status_pill"] = _ads_exp_status_pill
+templates.env.globals["ads_audience_status_label"] = _ads_audience_status_label
+templates.env.globals["ads_audience_status_pill"] = _ads_audience_status_pill
+templates.env.globals["ads_group_status_pill"] = _ads_group_status_pill
+templates.env.globals["ads_objective_label"] = _ads_objective_label
+templates.env.globals["ads_metric_columns"] = _ads_metric_columns
+templates.env.globals["ads_kpi_label"] = _ads_kpi_label
+templates.env.globals["ads_cell_value"] = _ads_cell_value
+
+
+def _ads_list_advertisers() -> tuple[list[dict[str, Any]], str]:
+    """Best-effort fetch of authorized advertisers.
+
+    Returns (advertisers, hint). On any failure (service not built yet, no
+    credentials, no authorization) we degrade to an empty list + a friendly
+    Chinese hint so the page never 500s.
+    """
+    try:
+        from src.services.tiktok.tiktok_ads_service import get_tiktok_ads_service
+    except Exception:
+        return [], "广告投放服务尚未就绪（后端开发中）。"
+    try:
+        svc = get_tiktok_ads_service()
+        advertisers = svc.list_advertisers() or []
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("ads list_advertisers failed: %s", e)
+        return [], "连不上广告服务：请确认 multi-channel-api 正在运行（localhost:8000）。"
+    if not advertisers:
+        return [], "未检测到广告主：授权与 token 由 multi-channel-api 持有，请检查其 .env 的 TIKTOK_ADS_* 配置。"
+    return [dict(a) for a in advertisers], ""
+
+
+def _ads_list_identities() -> tuple[list[dict[str, Any]], str]:
+    """Best-effort fetch of Spark ad identities (for video promotion).
+
+    Degrades to an empty list + Chinese hint on any failure (service/method
+    not built yet during parallel dev, no credentials, none configured).
+    """
+    try:
+        from src.services.tiktok.ads_experiment_service import (
+            get_ads_experiment_service,
+        )
+    except Exception:
+        return [], "广告实验服务尚未就绪（后端开发中）。"
+    try:
+        svc = get_ads_experiment_service()
+        fn = getattr(svc, "list_identities", None)
+        if fn is None:
+            return [], "身份列表接口尚未就绪（后端开发中）。"
+        identities = fn() or []
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("ads list_identities failed: %s", e)
+        return [], "无法获取广告身份列表，请先在中间层完成 Marketing 授权。"
+    if not identities:
+        return [], "尚未配置任何广告身份，投视频（Spark）前需先在 TikTok 后台准备身份。"
+    return [dict(x) for x in identities], ""
+
+
+def _ads_list_promotable_videos(pack_id: int | None = None) -> tuple[list[dict[str, Any]], str]:
+    """Best-effort fetch of already-posted videos usable for Spark promotion.
+
+    Rows carry at least `tiktok_video_id` (used as promote_ref_id) + a
+    human one_liner. Degrades gracefully.
+    """
+    try:
+        from src.services.tiktok.ads_experiment_service import (
+            get_ads_experiment_service,
+        )
+    except Exception:
+        return [], "广告实验服务尚未就绪（后端开发中）。"
+    try:
+        svc = get_ads_experiment_service()
+        fn = getattr(svc, "list_promotable_videos", None)
+        if fn is None:
+            return [], "已发布视频接口尚未就绪（后端开发中）。"
+        videos = fn(pack_id=pack_id) or []
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("ads list_promotable_videos failed: %s", e)
+        return [], "无法获取已发布视频列表。"
+    if not videos:
+        return [], "暂无已发布到 TikTok 的视频，投视频（Spark）需要已发帖的视频。"
+    return [dict(v) for v in videos], ""
+
+
+def _ads_cached_advertisers(conn: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]]:
+    """Fast local fallback for the new-experiment form.
+
+    The remote advertiser list can be slow or unavailable; the list page should
+    still render immediately and use the last synced accounts if present.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT advertiser_id, name, shop, currency, status
+              FROM tk_ads_accounts
+             WHERE COALESCE(advertiser_id, '') != ''
+             ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+                      name COLLATE NOCASE,
+                      advertiser_id
+             LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(r) for r in rows]
+
+
+def _ads_pack_candidates(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT id, display_name, status FROM packs ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "id": int(r["id"]),
+            "name": r["display_name"] or f"卡包 #{r['id']}",
+            "status": r["status"],
+        }
+        for r in rows
+    ]
+
+
+def _ads_experiment_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT e.id, e.advertiser_id, e.promote_type, e.promote_ref_id,
+               e.pack_id, e.tiktok_campaign_id, e.objective,
+               e.per_adgroup_budget, e.currency, e.status,
+               e.decision_summary, e.created_at, e.started_at, e.ended_at,
+               p.display_name AS pack_name,
+               COALESCE(gc.adgroup_count, 0) AS adgroup_count
+          FROM tk_ad_experiments e
+     LEFT JOIN packs p ON p.id = e.pack_id
+     LEFT JOIN (
+            SELECT experiment_id, COUNT(*) AS adgroup_count
+              FROM tk_ad_groups
+             GROUP BY experiment_id
+        ) gc ON gc.experiment_id = e.id
+         ORDER BY e.id DESC
+        """,
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["pack_name"] = d.get("pack_name") or (f"卡包 #{d['pack_id']}" if d.get("pack_id") else "—")
+        d["created_human"] = _fmt_ts(d.get("created_at"))
+        d["started_human"] = _fmt_ts(d.get("started_at")) if d.get("started_at") else ""
+        d["ended_human"] = _fmt_ts(d.get("ended_at")) if d.get("ended_at") else ""
+        out.append(d)
+    return out
+
+
+@router.get("/ads/auth")
+def v2_ads_auth_start(request: Request):
+    """Begin TikTok Marketing OAuth: fetch the authorize URL from the middle
+    layer and redirect the operator's browser to it. After consent TikTok
+    redirects back to /v2/ads/auth/callback?auth_code=..."""
+    try:
+        from src.services.tiktok.tiktok_ads_service import get_tiktok_ads_service
+        auth_url = get_tiktok_ads_service().get_auth_url()
+    except Exception as e:
+        logger.warning("ads get_auth_url failed: %s", e)
+        return RedirectResponse(
+            url=_append_query(
+                "/v2/ads/experiments",
+                {"error": f"获取授权链接失败：{str(e)[:160]}"},
+            ),
+            status_code=303,
+        )
+    return RedirectResponse(url=auth_url, status_code=302)
+
+
+@router.get("/ads/auth/callback")
+def v2_ads_auth_callback(
+    request: Request,
+    auth_code: str | None = None,
+    code: str | None = None,
+):
+    """OAuth redirect target. Forward the auth_code to the middle layer, which
+    exchanges it for an advertiser token and returns the authorized
+    advertisers (upserted into tk_ads_accounts)."""
+    ac = (auth_code or code or "").strip()
+    if not ac:
+        return RedirectResponse(
+            url=_append_query(
+                "/v2/ads/experiments", {"error": "授权回调缺少 auth_code"},
+            ),
+            status_code=303,
+        )
+    try:
+        from src.services.tiktok.tiktok_ads_service import get_tiktok_ads_service
+        advertisers = get_tiktok_ads_service().handle_auth_callback(ac)
+    except Exception as e:
+        logger.warning("ads auth callback failed: %s", e)
+        return RedirectResponse(
+            url=_append_query(
+                "/v2/ads/experiments", {"error": f"授权失败：{str(e)[:160]}"},
+            ),
+            status_code=303,
+        )
+    n = len(advertisers or [])
+    return RedirectResponse(
+        url=_append_query("/v2/ads/experiments", {"ok": f"授权成功，同步 {n} 个广告主"}),
+        status_code=303,
+    )
+
+
+@router.get("/ads/experiments", response_class=HTMLResponse)
+def v2_ads_experiments(request: Request):
+    """List all audience experiments + a 新建实验 form."""
+    conn = _open_db()
+    try:
+        try:
+            experiments = _ads_experiment_rows(conn)
+        except sqlite3.OperationalError:
+            # Migration 020 not applied yet — degrade gracefully.
+            experiments = []
+        packs = _ads_pack_candidates(conn)
+        advertisers = _ads_cached_advertisers(conn)
+    finally:
+        conn.close()
+
+    advertiser_hint = "" if advertisers else "广告主列表正在加载；若长时间为空，请检查 multi-channel-api。"
+    identities: list[dict[str, Any]] = []
+    identity_hint = "视频投放所需的 Spark 身份会在页面打开后异步加载。"
+    videos: list[dict[str, Any]] = []
+    video_hint = "已发布视频列表会在页面打开后异步加载。"
+
+    flash_ok = request.query_params.get("created") or request.query_params.get("ok")
+    flash_err = request.query_params.get("error")
+    preview_json = request.query_params.get("preview") or ""
+
+    return templates.TemplateResponse(
+        "v2_ads_experiments.html",
+        {
+            "request": request,
+            "page_title": "人群测试实验",
+            "experiments": experiments,
+            "packs": packs,
+            "advertisers": advertisers,
+            "advertiser_hint": advertiser_hint,
+            "identities": identities,
+            "identity_hint": identity_hint,
+            "videos": videos,
+            "video_hint": video_hint,
+            "flash_ok": flash_ok,
+            "flash_err": flash_err,
+            "preview_json": preview_json,
+        },
+    )
+
+
+@router.get("/ads/experiments/form-options")
+def v2_ads_experiments_form_options(pack_id: int | None = None):
+    """Async options for the new-experiment form.
+
+    Keeping remote Marketing API calls out of the HTML route prevents a slow or
+    unavailable middle layer from blocking the experiments list page.
+    """
+    advertisers, advertiser_hint = _ads_list_advertisers()
+    if not advertisers:
+        conn = _open_db()
+        try:
+            cached = _ads_cached_advertisers(conn)
+        finally:
+            conn.close()
+        if cached:
+            advertisers = cached
+            advertiser_hint = (
+                f"{advertiser_hint} 已使用本地缓存。"
+                if advertiser_hint else "已使用本地缓存广告主。"
+            )
+
+    identities, identity_hint = _ads_list_identities()
+    videos, video_hint = _ads_list_promotable_videos(pack_id=pack_id)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "advertisers": advertisers,
+            "advertiser_hint": advertiser_hint,
+            "identities": identities,
+            "identity_hint": identity_hint,
+            "videos": videos,
+            "video_hint": video_hint,
+        }
+    )
+
+
+@router.get("/ads/experiments/{experiment_id:int}", response_class=HTMLResponse)
+def v2_ads_experiment_detail(request: Request, experiment_id: int):
+    """Experiment detail: adgroups + per-audience latest metrics."""
+    conn = _open_db()
+    try:
+        try:
+            exp_row = conn.execute(
+                """
+                SELECT e.*, p.display_name AS pack_name
+                  FROM tk_ad_experiments e
+             LEFT JOIN packs p ON p.id = e.pack_id
+                 WHERE e.id = ?
+                """,
+                (experiment_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            raise HTTPException(status_code=404, detail="实验表尚未初始化（请先执行 migration 020）")
+        if not exp_row:
+            raise HTTPException(status_code=404, detail="实验不存在")
+        experiment = dict(exp_row)
+        experiment["pack_name"] = (
+            experiment.get("pack_name")
+            or (f"卡包 #{experiment['pack_id']}" if experiment.get("pack_id") else "—")
+        )
+        experiment["created_human"] = _fmt_ts(experiment.get("created_at"))
+        experiment["started_human"] = _fmt_ts(experiment.get("started_at")) if experiment.get("started_at") else ""
+        experiment["ended_human"] = _fmt_ts(experiment.get("ended_at")) if experiment.get("ended_at") else ""
+
+        # adgroups joined with audience + the latest metrics snapshot for that
+        # adgroup (max stat_date). Metrics are upserted per (adgroup, day).
+        # Phase-2 metric columns (migration 021) may not exist yet on older DBs;
+        # select them defensively and fall back to the Phase-1 column set.
+        _base_metric_cols = (
+            "m.stat_date, m.spend, m.impressions, m.clicks, m.ctr, "
+            "m.conversions, m.orders, m.gmv, m.cpa, m.roas, m.currency, "
+            "m.fetched_at"
+        )
+        _p2_metric_cols = (
+            ", m.video_views, m.video_2s, m.video_6s, m.video_p100, "
+            "m.avg_video_play, m.profile_visits, m.follows, m.engagements, "
+            "m.reach, m.frequency"
+        )
+
+        def _group_sql(metric_cols: str) -> str:
+            return f"""
+            SELECT g.id, g.tiktok_adgroup_id, g.budget, g.status AS group_status,
+                   a.id AS audience_id, a.name AS audience_name,
+                   a.hypothesis, a.status AS audience_status,
+                   {metric_cols}
+              FROM tk_ad_groups g
+         LEFT JOIN tk_ad_audiences a ON a.id = g.audience_id
+         LEFT JOIN tk_ad_metrics_snapshots m
+                ON m.tiktok_adgroup_id = g.tiktok_adgroup_id
+               AND m.stat_date = (
+                   SELECT MAX(stat_date) FROM tk_ad_metrics_snapshots m2
+                    WHERE m2.tiktok_adgroup_id = g.tiktok_adgroup_id
+               )
+             WHERE g.experiment_id = ?
+             ORDER BY g.id ASC
+            """
+
+        try:
+            group_rows = conn.execute(
+                _group_sql(_base_metric_cols + _p2_metric_cols),
+                (experiment_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Migration 021 not applied — degrade to Phase-1 columns.
+            group_rows = conn.execute(
+                _group_sql(_base_metric_cols),
+                (experiment_id,),
+            ).fetchall()
+        adgroups = []
+        for r in group_rows:
+            d = dict(r)
+            d["audience_name"] = d.get("audience_name") or "—"
+            d["fetched_human"] = _fmt_ts(d.get("fetched_at")) if d.get("fetched_at") else ""
+            adgroups.append(d)
+    finally:
+        conn.close()
+
+    flash_ok = request.query_params.get("ok")
+    flash_err = request.query_params.get("error")
+
+    return templates.TemplateResponse(
+        "v2_ads_experiments.html",
+        {
+            "request": request,
+            "page_title": f"实验 #{experiment_id} 详情",
+            "detail_mode": True,
+            "experiment": experiment,
+            "adgroups": adgroups,
+            "flash_ok": flash_ok,
+            "flash_err": flash_err,
+        },
+    )
+
+
+@router.post("/ads/experiments/new")
+async def v2_ads_experiment_new(request: Request):
+    """Generate audience candidates (if needed) then preview an experiment.
+
+    Per the contract we always run create_experiment(dry_run=True) here so the
+    operator sees the planned campaign/adgroup structure before any real spend;
+    real投放 (dry_run=False) is a separate, explicit step owned by the backend.
+    """
+    form = await request.form()
+    try:
+        pack_id = int(form.get("pack_id") or 0)
+    except (TypeError, ValueError):
+        pack_id = 0
+    advertiser_id = (form.get("advertiser_id") or "").strip()
+    promote_type = (form.get("promote_type") or "shop_product").strip()
+    objective = (form.get("objective") or "").strip().upper()
+    identity_id = (form.get("identity_id") or "").strip()
+    # promote_ref_id source depends on promote_type:
+    #   video        → the selected posted video's tiktok_video_id
+    #   shop_product → the typed product id (existing behaviour)
+    promote_ref_id = (form.get("promote_ref_id") or "").strip()
+    video_ref_id = (form.get("video_ref_id") or "").strip()
+    try:
+        budget = float(form.get("per_adgroup_budget") or 0)
+    except (TypeError, ValueError):
+        budget = 0.0
+    try:
+        n = int(form.get("audience_count") or 3)
+    except (TypeError, ValueError):
+        n = 3
+
+    def _back(**extra: Any) -> RedirectResponse:
+        return RedirectResponse(
+            url=_append_query("/v2/ads/experiments", extra),
+            status_code=303,
+        )
+
+    # Constrain objective by promote_type (and default it sensibly).
+    _ALLOWED_OBJ = {
+        "video": {"VIDEO_VIEWS", "ENGAGEMENT"},
+        "shop_product": {"PRODUCT_SALES"},
+    }
+    if promote_type not in _ALLOWED_OBJ:
+        return _back(error="无效的推广类型")
+    if promote_type == "shop_product":
+        objective = "PRODUCT_SALES"
+    if objective not in _ALLOWED_OBJ[promote_type]:
+        return _back(error="该推广类型不支持所选投放目标")
+
+    if not pack_id:
+        return _back(error="请选择卡包")
+    if not advertiser_id:
+        return _back(error="请选择广告主（需先完成授权）")
+    if budget <= 0:
+        return _back(error="单组预算需大于 0")
+
+    if promote_type == "video":
+        # Spark: identity + posted video are required; ref_id = tiktok_video_id.
+        promote_ref_id = video_ref_id
+        if not identity_id:
+            return _back(error="投视频需选择广告身份（Spark）")
+        if not promote_ref_id:
+            return _back(error="投视频需选择一条已发布视频")
+    else:
+        # Shop product: no Spark identity.
+        identity_id = ""
+
+    try:
+        from src.services.tiktok.ads_experiment_service import (
+            get_ads_experiment_service,
+        )
+    except Exception as e:
+        logger.warning("ads_experiment_service import failed: %s", e)
+        return _back(error="广告实验服务尚未就绪（后端开发中）")
+
+    try:
+        svc = get_ads_experiment_service()
+        # Generate fresh AI audience candidates for the pack, then use their ids.
+        candidates = svc.generate_audience_candidates(pack_id, n=n) or []
+        audience_ids = [int(c["id"]) for c in candidates if c.get("id") is not None]
+        if not audience_ids:
+            return _back(error="未能生成人群候选，请稍后重试")
+        _create_kwargs = dict(
+            advertiser_id=advertiser_id,
+            promote_type=promote_type,
+            promote_ref_id=promote_ref_id,
+            pack_id=pack_id,
+            audience_ids=audience_ids,
+            per_adgroup_budget=budget,
+            objective=objective,
+            creative={},
+            identity_id=identity_id,
+            dry_run=True,
+        )
+        try:
+            result = svc.create_experiment(**_create_kwargs)
+        except TypeError:
+            # Track B may not have shipped the `identity_id` kwarg yet — retry
+            # without it so video Spark experiments still preview during
+            # parallel development.
+            _create_kwargs.pop("identity_id", None)
+            result = svc.create_experiment(**_create_kwargs)
+    except Exception as e:
+        logger.warning("create_experiment(dry_run) failed: %s", e)
+        return _back(error=f"创建预演失败：{str(e)[:160]}")
+
+    preview = result.get("preview") if isinstance(result, dict) else None
+    return _back(
+        created=1,
+        preview=_json.dumps(preview, ensure_ascii=False)[:4000] if preview else "",
+    )
+
+
+def _ads_call_and_redirect(experiment_id: int, method: str) -> RedirectResponse:
+    target = f"/v2/ads/experiments/{experiment_id}"
+    try:
+        from src.services.tiktok.ads_experiment_service import (
+            get_ads_experiment_service,
+        )
+    except Exception as e:
+        logger.warning("ads_experiment_service import failed: %s", e)
+        return RedirectResponse(
+            url=_append_query(target, {"error": "广告实验服务尚未就绪（后端开发中）"}),
+            status_code=303,
+        )
+    try:
+        svc = get_ads_experiment_service()
+        getattr(svc, method)(experiment_id)
+    except Exception as e:
+        logger.warning("ads %s(%s) failed: %s", method, experiment_id, e)
+        return RedirectResponse(
+            url=_append_query(target, {"error": str(e)[:160]}),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=_append_query(target, {"ok": 1}),
+        status_code=303,
+    )
+
+
+@router.post("/ads/experiments/{experiment_id:int}/refresh")
+async def v2_ads_experiment_refresh(request: Request, experiment_id: int):
+    return _ads_call_and_redirect(experiment_id, "refresh_metrics")
+
+
+@router.post("/ads/experiments/{experiment_id:int}/evaluate")
+async def v2_ads_experiment_evaluate(request: Request, experiment_id: int):
+    return _ads_call_and_redirect(experiment_id, "evaluate_experiment")
+
+
+@router.post("/ads/experiments/{experiment_id:int}/kill")
+async def v2_ads_experiment_kill(request: Request, experiment_id: int):
+    return _ads_call_and_redirect(experiment_id, "kill_experiment")
+
+
+@router.get("/ads/audiences", response_class=HTMLResponse)
+def v2_ads_audiences(request: Request, pack_id: int | None = None):
+    """Audience leaderboard ordered by roas desc; ?pack_id= filters; winning
+    rows are visually highlighted."""
+    rows: list[dict[str, Any]] = []
+    hint = ""
+    try:
+        from src.services.tiktok.ads_experiment_service import (
+            get_ads_experiment_service,
+        )
+    except Exception as e:
+        logger.warning("ads_experiment_service import failed: %s", e)
+        hint = "广告实验服务尚未就绪（后端开发中）。"
+    else:
+        try:
+            svc = get_ads_experiment_service()
+            rows = list(svc.audience_leaderboard(pack_id=pack_id) or [])
+        except Exception as e:
+            logger.warning("audience_leaderboard failed: %s", e)
+            hint = f"无法加载人群库：{str(e)[:140]}"
+
+    # The service already orders rows by each objective's KPI direction
+    # (e.g. ROAS desc for PRODUCT_SALES, CPV asc for VIDEO_VIEWS). Only re-sort
+    # defensively when NO row carries an objective (pre-Phase-2 service), where
+    # roas-desc is the right generic order.
+    if rows and not any(r.get("objective") for r in rows):
+        def _roas(r: dict[str, Any]) -> float:
+            try:
+                return float(r.get("roas") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        rows = sorted(rows, key=_roas, reverse=True)
+
+    # Pack filter dropdown options.
+    conn = _open_db()
+    try:
+        packs = _ads_pack_candidates(conn)
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(
+        "v2_ads_audiences.html",
+        {
+            "request": request,
+            "page_title": "优质人群库",
+            "audiences": rows,
+            "packs": packs,
+            "pack_id_filter": pack_id,
+            "hint": hint,
+        },
+    )

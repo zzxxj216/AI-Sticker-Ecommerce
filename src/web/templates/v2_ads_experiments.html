@@ -1,0 +1,402 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .ads-page { padding-top: 14px; }
+  .ads-table { width:100%; font-size:13px; border-collapse:collapse; }
+  .ads-table th { text-align:left; color:var(--text-muted); font-size:11px; font-weight:600; padding:8px 12px; text-transform:uppercase; letter-spacing:.04em; background:var(--bg-subtle); }
+  .ads-table td { padding:10px 12px; border-top:1px solid var(--line-soft); vertical-align:top; }
+  .ads-table th.num, .ads-table td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .ads-link { color:var(--text); font-weight:700; text-decoration:none; }
+  .ads-link:hover { color:var(--accent); }
+  .ads-flash { padding:10px 14px; border-radius:var(--radius-md); margin-bottom:12px; font-size:13px; }
+  .ads-flash.ok { background:rgba(16,185,129,.10); color:var(--success); border:1px solid rgba(16,185,129,.3); }
+  .ads-flash.err { background:rgba(239,68,68,.10); color:var(--danger); border:1px solid rgba(239,68,68,.3); }
+  .ads-empty { padding:36px 24px; text-align:center; color:var(--text-muted); }
+  .ads-form-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:12px; align-items:end; }
+  .ads-preview { background:var(--bg-subtle); border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; max-height:280px; overflow:auto; }
+  @media (max-width: 860px) { .ads-form-grid { grid-template-columns: 1fr; } }
+</style>
+
+<div class="ads-page">
+
+{% if flash_ok %}<div class="ads-flash ok">{% if flash_ok != '1' %}{{ flash_ok }}{% else %}操作成功。{% endif %}</div>{% endif %}
+{% if flash_err %}<div class="ads-flash err">{{ flash_err }}</div>{% endif %}
+
+{% if detail_mode %}
+{# ───────────────────────── 实验详情 ───────────────────────── #}
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">Ads · 实验详情</p>
+      <h1>实验 #{{ experiment.id }} · {{ experiment.pack_name }}</h1>
+      <p class="page-subtitle">
+        同素材、同出价，只变人群 — 每个广告组归因到一个人群。
+        <a href="/v2/ads/experiments" class="text-link">← 返回实验列表</a>
+      </p>
+    </div>
+  </section>
+
+  <section class="panel" style="padding:18px;margin-bottom:14px;">
+    <div class="v2-stat-strip">
+      <div class="v2-mini-stat"><span>状态</span><strong><span class="v2-status-pill {{ ads_exp_status_pill(experiment.status) }}">{{ ads_exp_status_label(experiment.status) }}</span></strong></div>
+      <div class="v2-mini-stat"><span>广告主</span><strong style="font-size:13px;">{{ experiment.advertiser_id or '—' }}</strong></div>
+      <div class="v2-mini-stat"><span>目标</span><strong style="font-size:13px;">{{ ads_objective_label(experiment.objective) }}{% if experiment.objective %} <span class="muted" style="font-weight:400;">({{ experiment.objective }})</span>{% endif %}</strong></div>
+      <div class="v2-mini-stat"><span>单组预算</span><strong>{{ experiment.per_adgroup_budget or 0 }} {{ experiment.currency }}</strong></div>
+    </div>
+    <div class="v2-stat-strip" style="margin-top:10px;">
+      <div class="v2-mini-stat"><span>推广类型</span><strong style="font-size:13px;">{% if experiment.promote_type == 'video' %}视频 (Spark){% elif experiment.promote_type == 'shop_product' %}店铺商品{% else %}{{ experiment.promote_type or '—' }}{% endif %}</strong></div>
+      <div class="v2-mini-stat"><span>推广对象</span><strong style="font-size:13px;">{{ experiment.promote_ref_id or '—' }}</strong></div>
+      {% if experiment.promote_type == 'video' %}<div class="v2-mini-stat"><span>身份</span><strong style="font-size:13px;">{{ experiment.identity_id or '—' }}</strong></div>{% endif %}
+      <div class="v2-mini-stat"><span>Campaign</span><strong style="font-size:13px;">{{ experiment.tiktok_campaign_id or '（预演）' }}</strong></div>
+      <div class="v2-mini-stat"><span>创建时间</span><strong style="font-size:13px;">{{ experiment.created_human or '—' }}</strong></div>
+    </div>
+
+    <div class="v2-action-row" style="margin-top:14px;">
+      <form method="post" action="/v2/ads/experiments/{{ experiment.id }}/refresh" style="display:inline;">
+        <button type="submit" class="button-secondary">刷新报表</button>
+      </form>
+      <form method="post" action="/v2/ads/experiments/{{ experiment.id }}/evaluate" style="display:inline;">
+        <button type="submit" class="button-secondary">评估晋级</button>
+      </form>
+      <form method="post" action="/v2/ads/experiments/{{ experiment.id }}/kill" style="display:inline;"
+            onsubmit="return confirm('确定要暂停该实验的全部广告组吗？');">
+        <button type="submit" class="button v2-button-danger">停投全部</button>
+      </form>
+    </div>
+
+    {% if experiment.decision_summary %}
+    <div class="v2-async-note" style="margin-top:14px;">
+      <strong>评估结论：</strong>{{ experiment.decision_summary }}
+    </div>
+    {% endif %}
+  </section>
+
+  {% set metric_cols = ads_metric_columns(experiment.objective) %}
+  <section class="panel" style="padding:0;">
+    <div style="padding:12px 16px 0;">
+      <p class="muted" style="font-size:12px;margin:0;">指标列随投放目标变化（当前：{{ ads_objective_label(experiment.objective) }}）。主 KPI 列已加粗。</p>
+    </div>
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table class="ads-table">
+        <thead>
+          <tr>
+            <th>人群</th>
+            <th>假设</th>
+            <th>组状态</th>
+            <th class="num">花费</th>
+            <th class="num">展示</th>
+            <th class="num">点击</th>
+            {% for col in metric_cols %}
+            <th class="num">{% if col.fmt == 'kpi' %}{{ ads_kpi_label(experiment.objective) }}{% else %}{{ col.label }}{% endif %}</th>
+            {% endfor %}
+            <th>最近报表</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in adgroups %}
+          <tr>
+            <td>
+              <div style="font-weight:600;">{{ g.audience_name }}</div>
+              <div class="muted" style="font-size:11px;">
+                <span class="v2-status-pill {{ ads_audience_status_pill(g.audience_status) }}">{{ ads_audience_status_label(g.audience_status) }}</span>
+              </div>
+            </td>
+            <td class="muted" style="font-size:12px;max-width:260px;">{{ g.hypothesis or '—' }}</td>
+            <td><span class="v2-status-pill {{ ads_group_status_pill(g.group_status) }}">{{ g.group_status or '—' }}</span></td>
+            <td class="num">{{ '%.2f'|format(g.spend or 0) }}</td>
+            <td class="num">{{ '{:,}'.format(g.impressions or 0) }}</td>
+            <td class="num">{{ '{:,}'.format(g.clicks or 0) }}</td>
+            {% for col in metric_cols %}
+            <td class="num">{% if col.fmt == 'kpi' %}<strong>{{ ads_cell_value(g, col, experiment.objective) }}</strong>{% else %}{{ ads_cell_value(g, col) }}{% endif %}</td>
+            {% endfor %}
+            <td class="muted" style="font-size:11px;">{{ g.stat_date or '尚无数据' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="{{ 7 + metric_cols|length }}" class="ads-empty">该实验暂无广告组数据。预演（dry_run）实验不会真实建组；执行真实投放后报表会出现在这里。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+{% else %}
+{# ───────────────────────── 实验列表 + 新建 ───────────────────────── #}
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">Ads · 人群测试</p>
+      <h1>人群测试实验</h1>
+      <p class="page-subtitle">小预算投放造数据 → 按广告组拉报表 → 判定优质人群 → 沉淀进 <a href="/v2/ads/audiences" class="text-link">人群库</a> 复用。每次实验 = 1 个 campaign + N 个广告组，同素材同出价、只变人群。</p>
+    </div>
+  </section>
+
+  {% if preview_json %}
+  <section class="panel" style="padding:16px;margin-bottom:14px;">
+    <h3 style="margin:0 0 8px;font-size:14px;">预演结果（dry_run）</h3>
+    <p class="muted" style="font-size:12px;margin:0 0 8px;">以下为将创建的 campaign/广告组结构预览，未真实投放。</p>
+    <div class="ads-preview">{{ preview_json }}</div>
+  </section>
+  {% endif %}
+
+  <section class="panel" style="padding:18px;margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;">
+      <h3 style="margin:0;font-size:15px;">新建实验</h3>
+    </div>
+    {# 授权完全由 multi-channel-api 持有（其 .env 里的 TIKTOK_ADS_* token）。
+       本页不做前端 OAuth —— 广告主拉不到时只提示去中间层检查，不引导授权。 #}
+    <div class="v2-async-note" id="ads-options-note" style="margin-bottom:12px;{% if not advertiser_hint %}display:none;{% endif %}">
+      {{ advertiser_hint }}
+    </div>
+    {# Step 1: 推广类型 + 目标 → progressive disclosure of the type-specific
+       fields (video Spark identity+video, vs shop product id). #}
+    <form method="post" action="/v2/ads/experiments/new" id="ads-new-form">
+      <div class="ads-form-grid">
+        <div class="v2-field">
+          <label>卡包</label>
+          <select name="pack_id" class="v2-select" required>
+            <option value="">— 选择卡包 —</option>
+            {% for p in packs %}
+            <option value="{{ p.id }}">#{{ p.id }} {{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="v2-field">
+          <label>广告主</label>
+          <select name="advertiser_id" id="ads-advertiser" class="v2-select" {% if not advertisers %}disabled{% endif %} required>
+            <option value="">{% if advertisers %}— 选择广告主 —{% else %}— 正在加载广告主 —{% endif %}</option>
+            {% for a in advertisers %}
+            <option value="{{ a.advertiser_id }}">{{ a.name or a.advertiser_id }}{% if a.currency %} ({{ a.currency }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="v2-field">
+          <label>① 推广类型</label>
+          <select name="promote_type" id="ads-promote-type" class="v2-select">
+            <option value="shop_product">店铺商品</option>
+            <option value="video">视频 (Spark)</option>
+          </select>
+        </div>
+        <div class="v2-field">
+          <label>② 投放目标</label>
+          <select name="objective" id="ads-objective" class="v2-select">
+            {# Options are filtered by promote_type in JS; data-type marks
+               which type each belongs to. #}
+            <option value="PRODUCT_SALES" data-type="shop_product">商品销售 PRODUCT_SALES</option>
+            <option value="VIDEO_VIEWS" data-type="video">视频播放 VIDEO_VIEWS</option>
+            <option value="ENGAGEMENT" data-type="video">互动涨粉 ENGAGEMENT</option>
+          </select>
+        </div>
+      </div>
+
+      {# ── shop_product sub-fields ── #}
+      <div class="ads-form-grid" id="ads-block-shop" style="margin-top:12px;">
+        <div class="v2-field" style="grid-column:1 / -1;">
+          <label>店铺商品 ID（tiktok_product_id）</label>
+          <input type="text" name="promote_ref_id" id="ads-product-id" class="v2-input" placeholder="可留空，预演用">
+        </div>
+      </div>
+
+      {# ── video (Spark) sub-fields ── #}
+      <div class="ads-form-grid" id="ads-block-video" style="margin-top:12px;display:none;">
+        <div class="v2-field">
+          <label>广告身份（Spark）</label>
+          <select name="identity_id" id="ads-identity" class="v2-select">
+            <option value="">{% if identities %}— 选择身份 —{% else %}— 正在加载身份 —{% endif %}</option>
+            {% for it in identities %}
+            <option value="{{ it.identity_id }}">{{ it.display_name or it.identity_id }}{% if it.identity_type %} ({{ it.identity_type }}){% endif %}</option>
+            {% endfor %}
+          </select>
+          <p class="muted" id="ads-identity-hint" style="font-size:11px;margin-top:4px;">{{ identity_hint or '' }}</p>
+        </div>
+        <div class="v2-field" style="grid-column:2 / -1;">
+          <label>已发布视频</label>
+          <select name="video_ref_id" id="ads-video" class="v2-select">
+            <option value="">{% if videos %}— 选择已发布视频 —{% else %}— 正在加载已发布视频 —{% endif %}</option>
+            {% for v in videos %}
+            <option value="{{ v.tiktok_video_id }}">{{ v.one_liner or v.title or ('视频 ' ~ v.tiktok_video_id) }} · {{ v.tiktok_video_id }}</option>
+            {% endfor %}
+          </select>
+          <p class="muted" id="ads-video-hint" style="font-size:11px;margin-top:4px;">{{ video_hint or '' }}</p>
+        </div>
+      </div>
+
+      <div class="ads-form-grid" style="margin-top:12px;">
+        <div class="v2-field">
+          <label>单组预算</label>
+          <input type="number" name="per_adgroup_budget" class="v2-input" min="1" step="0.01" value="20" required>
+        </div>
+        <div class="v2-field">
+          <label>人群数量（AI 生成）</label>
+          <input type="number" name="audience_count" class="v2-input" min="1" max="10" value="3">
+        </div>
+        <div class="v2-field" style="align-self:end;">
+          <label>&nbsp;</label>
+          <button type="submit" id="ads-submit" class="button v2-button-full" {% if not advertisers %}disabled{% endif %}>生成人群并预演</button>
+        </div>
+      </div>
+      <p class="muted" style="font-size:11px;margin-top:8px;">提交后会先用 AI 为该卡包生成人群候选，再以 dry_run 预演实验结构（不会真实花钱）。真实投放需后端显式开启。</p>
+    </form>
+  </section>
+
+  <script>
+  (function () {
+    var typeSel = document.getElementById('ads-promote-type');
+    var objSel  = document.getElementById('ads-objective');
+    var blockShop = document.getElementById('ads-block-shop');
+    var blockVideo = document.getElementById('ads-block-video');
+    var submit = document.getElementById('ads-submit');
+    var advertiserSel = document.getElementById('ads-advertiser');
+    var identitySel = document.getElementById('ads-identity');
+    var videoSel = document.getElementById('ads-video');
+    var optionsNote = document.getElementById('ads-options-note');
+    var identityHint = document.getElementById('ads-identity-hint');
+    var videoHint = document.getElementById('ads-video-hint');
+    if (!typeSel || !objSel) return;
+
+    var hasIdentities = {{ 'true' if identities else 'false' }};
+    var hasVideos = {{ 'true' if videos else 'false' }};
+    var hasAdvertisers = {{ 'true' if advertisers else 'false' }};
+    var optionsLoaded = false;
+
+    function setNote(text) {
+      if (!optionsNote) return;
+      optionsNote.textContent = text || '';
+      optionsNote.style.display = text ? '' : 'none';
+    }
+
+    function replaceOptions(select, placeholder, rows, valueKey, labelFn) {
+      if (!select) return;
+      var current = select.value;
+      select.innerHTML = '';
+      var empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = placeholder;
+      select.appendChild(empty);
+      rows.forEach(function (row) {
+        var value = row[valueKey];
+        if (!value) return;
+        var opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = labelFn(row);
+        select.appendChild(opt);
+      });
+      if (current) select.value = current;
+      if (select.value !== current) select.value = '';
+    }
+
+    function syncObjectives(type) {
+      var firstVisible = null;
+      for (var i = 0; i < objSel.options.length; i++) {
+        var opt = objSel.options[i];
+        var match = opt.getAttribute('data-type') === type;
+        opt.hidden = !match;
+        opt.disabled = !match;
+        if (match && firstVisible === null) firstVisible = opt;
+      }
+      // If current selection is now hidden, jump to the first valid option.
+      var cur = objSel.options[objSel.selectedIndex];
+      if (!cur || cur.hidden) { if (firstVisible) firstVisible.selected = true; }
+    }
+
+    function syncBlocks() {
+      var type = typeSel.value;
+      var isVideo = type === 'video';
+      if (blockShop) blockShop.style.display = isVideo ? 'none' : '';
+      if (blockVideo) blockVideo.style.display = isVideo ? '' : 'none';
+      syncObjectives(type);
+      // Disable submit when video prerequisites are missing.
+      var ok = hasAdvertisers;
+      if (isVideo) ok = ok && hasIdentities && hasVideos;
+      if (submit) submit.disabled = !ok;
+      if (advertiserSel) advertiserSel.disabled = !hasAdvertisers;
+      if (identitySel) identitySel.disabled = !hasIdentities;
+      if (videoSel) videoSel.disabled = !hasVideos;
+    }
+
+    typeSel.addEventListener('change', syncBlocks);
+    syncBlocks();
+
+    function loadOptions() {
+      fetch('/v2/ads/experiments/form-options', { headers: { 'Accept': 'application/json' } })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          return resp.json();
+        })
+        .then(function (data) {
+          var advertisers = data.advertisers || [];
+          var identities = data.identities || [];
+          var videos = data.videos || [];
+          hasAdvertisers = advertisers.length > 0;
+          hasIdentities = identities.length > 0;
+          hasVideos = videos.length > 0;
+          optionsLoaded = true;
+
+          replaceOptions(advertiserSel, hasAdvertisers ? '— 选择广告主 —' : '— 暂无广告主 —', advertisers, 'advertiser_id', function (a) {
+            return (a.name || a.advertiser_id) + (a.currency ? ' (' + a.currency + ')' : '');
+          });
+          replaceOptions(identitySel, hasIdentities ? '— 选择身份 —' : '— 暂无可用身份 —', identities, 'identity_id', function (it) {
+            return (it.display_name || it.identity_id) + (it.identity_type ? ' (' + it.identity_type + ')' : '');
+          });
+          replaceOptions(videoSel, hasVideos ? '— 选择已发布视频 —' : '— 暂无已发布视频 —', videos, 'tiktok_video_id', function (v) {
+            return (v.one_liner || v.title || ('视频 ' + v.tiktok_video_id)) + ' · ' + v.tiktok_video_id;
+          });
+
+          var hints = [data.advertiser_hint, data.identity_hint, data.video_hint].filter(Boolean);
+          setNote(hints.join(' '));
+          if (identityHint) identityHint.textContent = data.identity_hint || '';
+          if (videoHint) videoHint.textContent = data.video_hint || '';
+          syncBlocks();
+        })
+        .catch(function () {
+          optionsLoaded = true;
+          setNote('广告表单选项加载失败；可刷新页面或检查 multi-channel-api。');
+          hasIdentities = false;
+          hasVideos = false;
+          syncBlocks();
+        });
+    }
+
+    loadOptions();
+  })();
+  </script>
+
+  <section class="panel" style="padding:0;">
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table class="ads-table">
+        <thead>
+          <tr>
+            <th style="width:60px;">#</th>
+            <th>卡包</th>
+            <th>广告主</th>
+            <th>目标</th>
+            <th class="num">组数</th>
+            <th class="num">单组预算</th>
+            <th>状态</th>
+            <th>创建时间</th>
+            <th class="num">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in experiments %}
+          <tr>
+            <td><a class="ads-link" href="/v2/ads/experiments/{{ e.id }}">{{ e.id }}</a></td>
+            <td><a class="ads-link" href="/v2/ads/experiments/{{ e.id }}">{{ e.pack_name }}</a></td>
+            <td class="muted" style="font-size:12px;">{{ e.advertiser_id or '—' }}</td>
+            <td class="muted" style="font-size:12px;">{{ e.objective or '—' }}</td>
+            <td class="num">{{ e.adgroup_count or 0 }}</td>
+            <td class="num">{{ e.per_adgroup_budget or 0 }} {{ e.currency }}</td>
+            <td><span class="v2-status-pill {{ ads_exp_status_pill(e.status) }}">{{ ads_exp_status_label(e.status) }}</span></td>
+            <td class="muted" style="font-size:11px;">{{ e.created_human or '—' }}</td>
+            <td class="num"><a class="text-link" href="/v2/ads/experiments/{{ e.id }}">详情 →</a></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="ads-empty">暂无实验。用上方表单新建第一个人群测试实验。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+{% endif %}
+
+</div>
+{% endblock %}

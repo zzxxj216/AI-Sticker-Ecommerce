@@ -1,6 +1,9 @@
 {% extends 'v2_base.html' %}
 {% block content %}
 
+{% if flash_ok %}<div style="padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;background:rgba(16,185,129,.10);color:var(--success);border:1px solid rgba(16,185,129,.3);">{{ flash_ok }}</div>{% endif %}
+{% if flash_err %}<div style="padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;background:rgba(239,68,68,.10);color:var(--danger);border:1px solid rgba(239,68,68,.3);">{{ flash_err }}</div>{% endif %}
+
 <section class="page-header">
   <div>
     <p class="eyebrow">C · Product Detail</p>
@@ -21,6 +24,11 @@
     <form method="post" action="/v2/products/{{ product.id }}/update_on_platform" style="margin:0;"
           onsubmit="return confirm('把当前本地的标题/描述/图片推送到 TikTok（覆盖平台数据，product_id={{ product.tiktok_product_id }}）。继续?');">
       <button type="submit" style="padding:8px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">📤 推送更新到 TikTok</button>
+    </form>
+    <form method="post" action="/v2/products/{{ product.id }}/fix-rejection" style="margin:0;"
+          onsubmit="return confirm('从 TikTok 拉审核拒绝原因 → AI 改 listing 字段 → 自动推送回去重新审核。可重试最多 2 轮。继续?');"
+          title="审核被拒时一键修复并重新提交">
+      <button type="submit" style="padding:8px 14px;background:linear-gradient(90deg,#f97316,#ec4899);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">🛠 修复审核拒绝</button>
     </form>
     {% endif %}
     {# Cross-shop publishing now lives on the master detail page so the
@@ -250,7 +258,7 @@
     <div class="ai-modal-form">
       <div>
         <label for="ai-count">总数量（含 1 张主图）</label>
-        <input id="ai-count" type="number" min="1" max="8" value="4" step="1">
+        <input id="ai-count" type="number" min="1" max="8" value="5" step="1">
       </div>
       <div>
         <label for="ai-language">目标市场风格</label>
@@ -269,10 +277,16 @@
         </select>
       </div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
-      <p style="margin:0;font-size:11px;color:var(--text-muted);">⚠ 会替换已有 AI 生成的图（手动上传的图保留）。</p>
-      <button type="button" id="ai-gen-go"
-              style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 开始生成</button>
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+      <p style="margin:0;font-size:11px;color:var(--text-muted);">⚠ 只会替换被选中范围内已有 AI 生成的图（手动上传保留）。</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="ai-gen-go" data-mode="main"
+                style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🖼 只生成主图</button>
+        <button type="button" class="ai-gen-go" data-mode="secondary"
+                style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🎞 只生成附图</button>
+        <button type="button" class="ai-gen-go" data-mode="all" id="ai-gen-go"
+                style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 主图+附图</button>
+      </div>
     </div>
     <div id="ai-gen-status" style="margin-top:12px;font-size:12px;color:var(--text-muted);"></div>
     <div id="ai-result-grid" class="ai-result-grid" style="display:none;"></div>
@@ -383,9 +397,13 @@
       const data = await r.json();
       if (!data || !data.ok || !data.running) return;
       // Task is in-flight: flip the modal into polling mode immediately.
-      const goBtn = document.getElementById('ai-gen-go');
-      goBtn.disabled = true;
-      goBtn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+      // Lock all three mode buttons while a previous task is still in flight.
+      document.querySelectorAll('.ai-gen-go').forEach(b => {
+        b.disabled = true;
+        if (b.id === 'ai-gen-go') {
+          b.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+        }
+      });
       document.getElementById('ai-gen-status').innerHTML =
         `🟢 检测到正在运行的任务，恢复跟踪…`;
       stopPolling();
@@ -458,49 +476,59 @@
         status.textContent = `✓ 完成 — 共 ${data.images.length} 张 AI 生成图。点击图片可切换勾选，下方决定保留哪些。`;
         document.getElementById('ai-keep-all').style.display = 'inline-block';
         document.getElementById('ai-keep-picked').style.display = 'inline-block';
-        const goBtn = document.getElementById('ai-gen-go');
-        goBtn.disabled = false;
-        goBtn.textContent = '🚀 重新生成';
+        // Re-enable all three buttons so the operator can pick a new mode.
+        document.querySelectorAll('.ai-gen-go').forEach(b => {
+          b.disabled = false;
+          const m = b.dataset.mode || 'all';
+          b.textContent = m === 'main' ? '🖼 只生成主图'
+                         : m === 'secondary' ? '🎞 只生成附图'
+                         : '🚀 主图+附图（重新）';
+        });
       }
     } catch (e) { /* keep polling */ }
   }
 
-  document.getElementById('ai-gen-go').addEventListener('click', async (e) => {
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="v2-button-spinner"></span>启动中…';
-    document.getElementById('ai-gen-status').textContent = '⏳ 正在启动后台任务…';
-    document.getElementById('ai-result-grid').style.display = 'none';
-    document.getElementById('ai-keep-all').style.display = 'none';
-    document.getElementById('ai-keep-picked').style.display = 'none';
-    try {
-      const body = {
-        count:    parseInt(document.getElementById('ai-count').value, 10) || 4,
-        language: document.getElementById('ai-language').value,
-        size:     document.getElementById('ai-size').value,
-      };
-      const r = await fetch(`/v2/products/${PRODUCT_ID}/auto_design_images_sync`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body),
-      });
-      const data = await r.json();
-      if (!data.ok) {
-        document.getElementById('ai-gen-status').textContent = '❌ ' + (data.error || '启动失败');
-        btn.disabled = false; btn.textContent = '🚀 开始生成';
-        return;
+  // Three mode buttons share one click handler; mode is on the button itself.
+  const _listingGenBtns = Array.from(document.querySelectorAll('.ai-gen-go'));
+  const _listingOrigLabels = new Map(_listingGenBtns.map(b => [b, b.textContent]));
+  _listingGenBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.mode || 'all';
+      _listingGenBtns.forEach(b => { b.disabled = true; });
+      btn.innerHTML = '<span class="v2-button-spinner"></span>启动中…';
+      document.getElementById('ai-gen-status').textContent = '⏳ 正在启动后台任务…';
+      document.getElementById('ai-result-grid').style.display = 'none';
+      document.getElementById('ai-keep-all').style.display = 'none';
+      document.getElementById('ai-keep-picked').style.display = 'none';
+      try {
+        const body = {
+          count:    parseInt(document.getElementById('ai-count').value, 10) || 5,
+          language: document.getElementById('ai-language').value,
+          size:     document.getElementById('ai-size').value,
+          mode:     mode,
+        };
+        const r = await fetch(`/v2/products/${PRODUCT_ID}/auto_design_images_sync`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          document.getElementById('ai-gen-status').textContent = '❌ ' + (data.error || '启动失败');
+          _listingGenBtns.forEach(b => { b.disabled = false; b.textContent = _listingOrigLabels.get(b); });
+          return;
+        }
+        btn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
+        const modeText = mode === 'main' ? '主图' : mode === 'secondary' ? '附图' : '主图+附图';
+        document.getElementById('ai-gen-status').innerHTML =
+          `🟢 [${modeText}] ${data.message}<br><small style="color:var(--text-muted)">task_id: <code>${data.task_id}</code></small>`;
+        stopPolling();
+        pollTimer = setInterval(pollStatus, 4000);
+        setTimeout(pollStatus, 1500);
+      } catch (err) {
+        document.getElementById('ai-gen-status').textContent = '❌ ' + err.message;
+        _listingGenBtns.forEach(b => { b.disabled = false; b.textContent = _listingOrigLabels.get(b); });
       }
-      btn.innerHTML = '<span class="v2-button-spinner"></span>后台生成中（可关闭）';
-      document.getElementById('ai-gen-status').innerHTML =
-        `🟢 ${data.message}<br><small style="color:var(--text-muted)">task_id: <code>${data.task_id}</code></small>`;
-      // Begin polling every 4s
-      stopPolling();
-      pollTimer = setInterval(pollStatus, 4000);
-      // First poll fast
-      setTimeout(pollStatus, 1500);
-    } catch (err) {
-      document.getElementById('ai-gen-status').textContent = '❌ ' + err.message;
-      btn.disabled = false; btn.textContent = '🚀 开始生成';
-    }
+    });
   });
 
   // Stop polling when modal closes (task itself keeps running on server)
@@ -605,6 +633,32 @@
     <span style="color:var(--text);font-size:12px;">该状态下不提供平台操作。检查上方「最近一次发布失败」详情或先「🔄 同步平台状态」。</span>
     {% endif %}
   </div>
+
+  {% if product.tiktok_product_id %}
+  <div style="padding:0 24px 18px;border-top:1px solid var(--line-soft);padding-top:14px;">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <strong style="font-size:13px;">🏷 自动折扣</strong>
+      {% if product.discount_status == 'applied' %}
+        <span class="v2-status-pill ok">已应用 {{ product.discount_percent|int }}%{% if product.discount_activity_id %} · 活动 {{ product.discount_activity_id }}{% endif %}</span>
+      {% elif product.discount_status == 'failed' %}
+        <span class="v2-status-pill error">折扣失败，可重试</span>
+      {% elif product.discount_status == 'pending' %}
+        <span class="v2-status-pill running">处理中…</span>
+      {% else %}
+        <span class="v2-status-pill pending">尚未应用</span>
+      {% endif %}
+      <form method="post" action="/v2/products/{{ product.id }}/apply-discount" style="display:inline-flex;gap:6px;align-items:center;margin:0;">
+        <input type="number" name="percent" min="1" max="99" step="1" placeholder="40"
+               title="留空用默认 40%"
+               style="width:64px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px;">
+        <button type="submit"
+                onclick="return confirm('给该商品创建/更新折扣活动（走中间层 → TikTok 促销）。继续?');"
+                style="padding:6px 14px;background:linear-gradient(90deg,#f97316,#ec4899);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">应用折扣</button>
+      </form>
+    </div>
+    <p style="margin:6px 0 0;font-size:11px;color:var(--text-muted);">发布成功后自动按默认 40% 上折扣；失败或想改力度时可在此手动重试。需中间层实现 <code>/discount</code> 端点（见 docs/tiktok_product_shipping_discount_contract.md）。</p>
+  </div>
+  {% endif %}
 
   {% if product.publish_status == 'publishing' %}
   <div id="publishing-banner" style="margin:0 24px 14px;padding:12px 14px;border-radius:8px;background:linear-gradient(90deg,rgba(99,102,241,.10),rgba(14,165,233,.06));border:1px solid rgba(99,102,241,.3);font-size:13px;display:flex;align-items:center;gap:12px;">

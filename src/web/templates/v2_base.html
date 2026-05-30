@@ -424,6 +424,21 @@
             </div>
           </div>
 
+          <!-- 📣 广告投放 -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/ads') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 11-5.8-1.6"/></svg>
+                📣 广告投放
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/ads/experiments') %}active{% endif %}" href="/v2/ads/experiments">人群实验</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/ads/audiences') %}active{% endif %}" href="/v2/ads/audiences">优质人群库</a>
+            </div>
+          </div>
+
           <!-- 🧪 实验室 -->
           <div class="nav-group {% if not request.url.path.startswith('/v2/lab') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
