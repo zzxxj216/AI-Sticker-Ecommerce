@@ -16,6 +16,47 @@
   .ads-form-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:12px; align-items:end; }
   .ads-preview { background:var(--bg-subtle); border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:12px; font-family:monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; max-height:280px; overflow:auto; }
   @media (max-width: 860px) { .ads-form-grid { grid-template-columns: 1fr; } }
+  /* 视频多选弹窗 */
+  /* ── 视频多选弹窗（精致版）── */
+  .ads-modal { position:fixed; inset:0; background:rgba(15,23,42,.55); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); display:none; align-items:center; justify-content:center; z-index:9999; animation:adsFade .15s ease; }
+  .ads-modal.open { display:flex; }
+  @keyframes adsFade { from{opacity:0} to{opacity:1} }
+  @keyframes adsPop { from{opacity:0; transform:translateY(8px) scale(.98)} to{opacity:1; transform:none} }
+  .ads-modal-box { background:var(--bg,#fff); border-radius:16px; width:90%; max-width:380px; box-shadow:0 24px 60px -12px rgba(0,0,0,.45); overflow:hidden; display:flex; flex-direction:column; max-height:86vh; animation:adsPop .18s cubic-bezier(.2,.8,.2,1); }
+  .ads-modal-box-wide { max-width:600px; }
+  .ads-modal-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 20px; border-bottom:1px solid var(--line-soft); }
+  .ads-modal-head strong { font-size:15px; }
+  #ads-modal-count { background:var(--bg-subtle); padding:3px 10px; border-radius:999px; font-weight:600; white-space:nowrap; }
+  .ads-modal-list { flex:1 1 auto; overflow:auto; padding:6px; }
+  .ads-modal-list::-webkit-scrollbar { width:8px; }
+  .ads-modal-list::-webkit-scrollbar-thumb { background:var(--line-soft); border-radius:8px; }
+  .ads-modal-actions { display:flex; gap:10px; justify-content:flex-end; padding:14px 20px; border-top:1px solid var(--line-soft); background:var(--bg-subtle); }
+  .ads-modal-actions .button, .ads-modal-actions .button-secondary { padding:9px 18px; border-radius:10px; }
+  /* 视频行 */
+  .ads-vrow { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:12px; cursor:pointer; transition:background .12s, box-shadow .12s; position:relative; }
+  .ads-vrow + .ads-vrow { margin-top:2px; }
+  .ads-vrow:hover { background:var(--bg-subtle); }
+  .ads-vrow.selected { background:rgba(59,130,246,.10); box-shadow:inset 3px 0 0 var(--accent,#3b82f6); }
+  .ads-vrow input[type=checkbox] { width:18px; height:18px; flex:0 0 auto; accent-color:var(--accent,#3b82f6); cursor:pointer; }
+  .ads-vthumb { position:relative; width:48px; height:84px; flex:0 0 auto; border-radius:10px; overflow:hidden;
+    background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); box-shadow:0 2px 8px rgba(0,0,0,.15); }
+  .ads-vthumb img { width:100%; height:100%; object-fit:cover; display:block; transition:transform .2s; }
+  .ads-vthumb img.ads-img-broken { display:none; }   /* 封面加载失败 → 露出渐变占位，不显黑块 */
+  .ads-vrow:hover .ads-vthumb img { transform:scale(1.06); }
+  .ads-vthumb .ads-vplay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:14px; }
+  .ads-vthumb .ads-vplay::before { content:''; position:absolute; width:24px; height:24px; background:rgba(0,0,0,.32); border-radius:50%; }
+  .ads-vthumb .ads-vplay span { position:relative; padding-left:2px; }
+  .ads-vmeta { flex:1 1 auto; min-width:0; }
+  .ads-vmeta .ads-vtext { font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ads-vmeta .ads-vsub { font-size:11px; color:var(--text-muted); margin-top:2px; }
+  /* 行内播放器（点缩略图展开） */
+  .ads-vplayer { padding:2px 12px 12px 76px; }
+  .ads-vplayer video { width:220px; max-width:100%; border-radius:12px; background:#000; box-shadow:0 4px 14px rgba(0,0,0,.25); }
+  .ads-modal-empty { text-align:center; color:var(--text-muted); font-size:13px; padding:40px 24px; }
+  /* 选择视频触发按钮 */
+  .ads-video-trigger { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 14px; border:1px solid var(--line-soft); border-radius:10px; background:var(--bg,#fff); color:var(--text); font-size:13px; cursor:pointer; transition:border-color .12s, box-shadow .12s; }
+  .ads-video-trigger:hover { border-color:var(--accent,#3b82f6); box-shadow:0 0 0 3px rgba(59,130,246,.12); }
+  .ads-video-trigger .ads-video-trigger-ic { color:var(--text-muted); flex:0 0 auto; }
 </style>
 
 <div class="ads-page">
@@ -39,7 +80,7 @@
   <section class="panel" style="padding:18px;margin-bottom:14px;">
     <div class="v2-stat-strip">
       <div class="v2-mini-stat"><span>状态</span><strong><span class="v2-status-pill {{ ads_exp_status_pill(experiment.status) }}">{{ ads_exp_status_label(experiment.status) }}</span></strong></div>
-      <div class="v2-mini-stat"><span>广告主</span><strong style="font-size:13px;">{{ experiment.advertiser_id or '—' }}</strong></div>
+      <div class="v2-mini-stat"><span>广告主</span><strong style="font-size:13px;">{{ ads_advertiser_name(experiment.advertiser_id) }}</strong></div>
       <div class="v2-mini-stat"><span>目标</span><strong style="font-size:13px;">{{ ads_objective_label(experiment.objective) }}{% if experiment.objective %} <span class="muted" style="font-weight:400;">({{ experiment.objective }})</span>{% endif %}</strong></div>
       <div class="v2-mini-stat"><span>单组预算</span><strong>{{ experiment.per_adgroup_budget or 0 }} {{ experiment.currency }}</strong></div>
     </div>
@@ -52,6 +93,19 @@
     </div>
 
     <div class="v2-action-row" style="margin-top:14px;">
+      {% if experiment.status == 'draft' %}
+      <form method="post" action="/v2/ads/experiments/{{ experiment.id }}/launch" style="display:inline;"
+            onsubmit="return confirm('⚠️ 真实投放：将在 TikTok 真建 1 campaign + {{ adgroups|length }} 个广告组（创建后默认暂停，不会立刻花钱）。\n\n确认创建?');">
+        <button type="submit" class="button" style="background:var(--success);color:#fff;border:none;">🚀 真实投放（建广告，暂停态）</button>
+      </form>
+      {% endif %}
+      {% if experiment.status == 'running' and experiment.tiktok_campaign_id %}
+      {# Launched: adgroups exist but were created paused. This flips them live → real spend starts. #}
+      <form method="post" action="/v2/ads/experiments/{{ experiment.id }}/enable" style="display:inline;"
+            onsubmit="return confirm('▶️ 开始投放：启用全部广告组，TikTok 将开始真实花钱（单组日预算 {{ experiment.per_adgroup_budget }} {{ experiment.currency }}）。\n\nTikTok 视频广告单组最低日预算约 $20，无法限制到 $1；如需小额验证请尽快用「停投全部」。\n\n确认开始投放?');">
+        <button type="submit" class="button" style="background:var(--success);color:#fff;border:none;">▶️ 开始投放（真实花钱）</button>
+      </form>
+      {% endif %}
       <form method="post" action="/v2/ads/experiments/{{ experiment.id }}/refresh" style="display:inline;">
         <button type="submit" class="button-secondary">刷新报表</button>
       </form>
@@ -164,7 +218,7 @@
           <select name="advertiser_id" id="ads-advertiser" class="v2-select" {% if not advertisers %}disabled{% endif %} required>
             <option value="">{% if advertisers %}— 选择广告主 —{% else %}— 正在加载广告主 —{% endif %}</option>
             {% for a in advertisers %}
-            <option value="{{ a.advertiser_id }}">{{ a.name or a.advertiser_id }}{% if a.currency %} ({{ a.currency }}){% endif %}</option>
+            <option value="{{ a.advertiser_id }}">{{ a.advertiser_name or a.name or a.advertiser_id }}{% if a.currency %} ({{ a.currency }}){% endif %}</option>
             {% endfor %}
           </select>
         </div>
@@ -208,13 +262,13 @@
           <p class="muted" id="ads-identity-hint" style="font-size:11px;margin-top:4px;">{{ identity_hint or '' }}</p>
         </div>
         <div class="v2-field" style="grid-column:2 / -1;">
-          <label>已发布视频</label>
-          <select name="video_ref_id" id="ads-video" class="v2-select">
-            <option value="">{% if videos %}— 选择已发布视频 —{% else %}— 正在加载已发布视频 —{% endif %}</option>
-            {% for v in videos %}
-            <option value="{{ v.tiktok_video_id }}">{{ v.one_liner or v.title or ('视频 ' ~ v.tiktok_video_id) }} · {{ v.tiktok_video_id }}</option>
-            {% endfor %}
-          </select>
+          <label>已发布视频（可多选，每条视频 × 每个人群各建一个广告组）</label>
+          {# 提交值：逗号分隔的多个 tiktok_video_id #}
+          <input type="hidden" name="video_ref_ids" id="ads-video">
+          <button type="button" id="ads-video-open" class="ads-video-trigger">
+            <span id="ads-video-label">选择视频…</span>
+            <span class="ads-video-trigger-ic">&#9776;</span>
+          </button>
           <p class="muted" id="ads-video-hint" style="font-size:11px;margin-top:4px;">{{ video_hint or '' }}</p>
         </div>
       </div>
@@ -237,6 +291,21 @@
     </form>
   </section>
 
+  {# 视频多选弹窗：复选列表 + 行内播放 #}
+  <div id="ads-video-modal" class="ads-modal">
+    <div class="ads-modal-box ads-modal-box-wide">
+      <div class="ads-modal-head">
+        <strong>选择要投放的视频（可多选）</strong>
+        <span class="muted" id="ads-modal-count" style="font-size:12px;">已选 0</span>
+      </div>
+      <div id="ads-modal-list" class="ads-modal-list"></div>
+      <div class="ads-modal-actions">
+        <button type="button" class="button-secondary" id="ads-modal-close">取消</button>
+        <button type="button" class="button" id="ads-modal-confirm" style="background:var(--accent,#3b82f6);color:#fff;border:none;">确认选择</button>
+      </div>
+    </div>
+  </div>
+
   <script>
   (function () {
     var typeSel = document.getElementById('ads-promote-type');
@@ -246,11 +315,120 @@
     var submit = document.getElementById('ads-submit');
     var advertiserSel = document.getElementById('ads-advertiser');
     var identitySel = document.getElementById('ads-identity');
-    var videoSel = document.getElementById('ads-video');
+    var videoSel = document.getElementById('ads-video');          // hidden input (comma-joined ids)
+    var videoOpenBtn = document.getElementById('ads-video-open'); // 「选择视频」按钮
+    var videoLabel = document.getElementById('ads-video-label');  // 按钮上的文字
     var optionsNote = document.getElementById('ads-options-note');
     var identityHint = document.getElementById('ads-identity-hint');
     var videoHint = document.getElementById('ads-video-hint');
+    // multi-select modal
+    var vModal = document.getElementById('ads-video-modal');
+    // 关键：.ads-page 祖先带 transform，会让 position:fixed 相对它而非视口定位
+    // （弹窗偏位、遮罩盖不满屏）。把弹窗移到 <body> 直接子级即可恢复全屏居中。
+    if (vModal && vModal.parentElement !== document.body) document.body.appendChild(vModal);
+    var vModalList = document.getElementById('ads-modal-list');
+    var vModalCount = document.getElementById('ads-modal-count');
+    var vModalClose = document.getElementById('ads-modal-close');
+    var vModalConfirm = document.getElementById('ads-modal-confirm');
+    var _videoRows = [];                 // last-loaded video rows
+    var _selected = {};                  // item_id -> true (committed selection)
+    var _draft = {};                     // selection being edited in the modal
     if (!typeSel || !objSel) return;
+
+    function _esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+    function updateVideoLabel() {
+      var ids = Object.keys(_selected);
+      if (videoSel) videoSel.value = ids.join(',');
+      if (videoLabel) videoLabel.textContent = ids.length ? ('已选 ' + ids.length + ' 条视频') : '选择视频…';
+      // sync identity from the first selected video (all share one identity)
+      if (ids.length && identitySel) {
+        for (var i = 0; i < _videoRows.length; i++) {
+          if (_videoRows[i].tiktok_video_id === ids[0] && _videoRows[i].identity_id) {
+            identitySel.value = _videoRows[i].identity_id; break;
+          }
+        }
+      }
+      if (typeof syncBlocks === 'function') syncBlocks();
+    }
+
+    function renderModalList() {
+      if (!vModalList) return;
+      vModalList.innerHTML = '';
+      if (!_videoRows.length) {
+        vModalList.innerHTML = optionsLoaded
+          ? '<div class="ads-modal-empty">暂无可投放视频（刷新或稍后重试）</div>'
+          : '<div class="ads-modal-empty">正在从 TikTok 加载视频，请稍候…</div>';
+        return;
+      }
+      _videoRows.forEach(function (v) {
+        var id = v.tiktok_video_id;
+        var dur = v.duration ? (Math.round(v.duration) + 's') : '';
+        var row = document.createElement('div');
+        row.className = 'ads-vrow' + (_draft[id] ? ' selected' : '');
+        row.innerHTML =
+          '<input type="checkbox" ' + (_draft[id] ? 'checked' : '') + '>' +
+          '<div class="ads-vthumb">' + (v.cover_url ? '<img loading="lazy" src="' + _esc(v.cover_url) + '" onerror="this.classList.add(\'ads-img-broken\')">' : '') +
+            '<div class="ads-vplay"><span>&#9658;</span></div></div>' +
+          '<div class="ads-vmeta"><div class="ads-vtext">' + _esc(v.one_liner || id) + '</div>' +
+            '<div class="ads-vsub">' + _esc(id) + (dur ? ' · ' + dur : '') + '</div></div>';
+        var cb = row.querySelector('input');
+        function toggle() {
+          if (_draft[id]) { delete _draft[id]; } else { _draft[id] = true; }
+          cb.checked = !!_draft[id];
+          row.classList.toggle('selected', !!_draft[id]);
+          if (vModalCount) vModalCount.textContent = '已选 ' + Object.keys(_draft).length;
+        }
+        // checkbox toggles selection; clicking the thumbnail plays inline
+        cb.addEventListener('click', function (e) { e.stopPropagation(); toggle(); });
+        row.addEventListener('click', function (e) {
+          if (e.target.closest('.ads-vthumb')) {
+            // inline play
+            var existing = row.nextSibling;
+            if (existing && existing.classList && existing.classList.contains('ads-vplayer')) {
+              existing.querySelector('video').pause(); existing.remove(); return;
+            }
+            var pl = document.createElement('div');
+            pl.className = 'ads-vplayer';
+            pl.innerHTML = '<video controls playsinline preload="metadata" poster="' + _esc(v.cover_url || '') + '" src="' + _esc(v.play_url || '') + '"></video>';
+            row.parentNode.insertBefore(pl, row.nextSibling);
+            return;
+          }
+          toggle();
+        });
+        vModalList.appendChild(row);
+      });
+      if (vModalCount) vModalCount.textContent = '已选 ' + Object.keys(_draft).length;
+    }
+
+    function openModal() {
+      _draft = {}; Object.keys(_selected).forEach(function (k) { _draft[k] = true; });
+      renderModalList();
+      if (vModal) vModal.classList.add('open');
+    }
+    function closeModal() {
+      // stop any inline players
+      if (vModalList) { var vs = vModalList.querySelectorAll('video'); for (var i=0;i<vs.length;i++) vs[i].pause(); }
+      if (vModal) vModal.classList.remove('open');
+    }
+    if (videoOpenBtn) videoOpenBtn.addEventListener('click', openModal);
+    if (vModalClose) vModalClose.addEventListener('click', closeModal);
+    if (vModal) vModal.addEventListener('click', function (e) { if (e.target === vModal) closeModal(); });
+    if (vModalConfirm) vModalConfirm.addEventListener('click', function () {
+      _selected = {}; Object.keys(_draft).forEach(function (k) { _selected[k] = true; });
+      updateVideoLabel(); closeModal();
+    });
+
+    function renderVideoGrid(rows) {   // name kept; now just stores rows for the modal
+      _videoRows = rows || [];
+      // drop any committed selections that are no longer available
+      Object.keys(_selected).forEach(function (id) {
+        if (!_videoRows.some(function (v) { return v.tiktok_video_id === id; })) delete _selected[id];
+      });
+      updateVideoLabel();
+      // 若用户已打开弹窗（趁数据还在加载），数据到了就立即刷新列表。
+      if (vModal && vModal.classList.contains('open')) renderModalList();
+    }
 
     var hasIdentities = {{ 'true' if identities else 'false' }};
     var hasVideos = {{ 'true' if videos else 'false' }};
@@ -277,6 +455,9 @@
         var opt = document.createElement('option');
         opt.value = value;
         opt.textContent = labelFn(row);
+        // Stash the owning identity on video options so picking a video can
+        // auto-select its identity (a video can only run under its own identity).
+        if (row.identity_id) opt.setAttribute('data-identity-id', row.identity_id);
         select.appendChild(opt);
       });
       if (current) select.value = current;
@@ -309,10 +490,10 @@
       if (submit) submit.disabled = !ok;
       if (advertiserSel) advertiserSel.disabled = !hasAdvertisers;
       if (identitySel) identitySel.disabled = !hasIdentities;
-      if (videoSel) videoSel.disabled = !hasVideos;
     }
 
     typeSel.addEventListener('change', syncBlocks);
+    // (video→identity sync now handled in selectVideo when a card is chosen.)
     syncBlocks();
 
     function loadOptions() {
@@ -331,14 +512,12 @@
           optionsLoaded = true;
 
           replaceOptions(advertiserSel, hasAdvertisers ? '— 选择广告主 —' : '— 暂无广告主 —', advertisers, 'advertiser_id', function (a) {
-            return (a.name || a.advertiser_id) + (a.currency ? ' (' + a.currency + ')' : '');
+            return (a.advertiser_name || a.name || a.advertiser_id) + (a.currency ? ' (' + a.currency + ')' : '');
           });
           replaceOptions(identitySel, hasIdentities ? '— 选择身份 —' : '— 暂无可用身份 —', identities, 'identity_id', function (it) {
             return (it.display_name || it.identity_id) + (it.identity_type ? ' (' + it.identity_type + ')' : '');
           });
-          replaceOptions(videoSel, hasVideos ? '— 选择已发布视频 —' : '— 暂无已发布视频 —', videos, 'tiktok_video_id', function (v) {
-            return (v.one_liner || v.title || ('视频 ' + v.tiktok_video_id)) + ' · ' + v.tiktok_video_id;
-          });
+          renderVideoGrid(videos);
 
           var hints = [data.advertiser_hint, data.identity_hint, data.video_hint].filter(Boolean);
           setNote(hints.join(' '));
@@ -351,6 +530,7 @@
           setNote('广告表单选项加载失败；可刷新页面或检查 multi-channel-api。');
           hasIdentities = false;
           hasVideos = false;
+          renderVideoGrid([]);
           syncBlocks();
         });
     }
@@ -380,7 +560,7 @@
           <tr>
             <td><a class="ads-link" href="/v2/ads/experiments/{{ e.id }}">{{ e.id }}</a></td>
             <td><a class="ads-link" href="/v2/ads/experiments/{{ e.id }}">{{ e.pack_name }}</a></td>
-            <td class="muted" style="font-size:12px;">{{ e.advertiser_id or '—' }}</td>
+            <td class="muted" style="font-size:12px;">{{ ads_advertiser_name(e.advertiser_id) }}</td>
             <td class="muted" style="font-size:12px;">{{ e.objective or '—' }}</td>
             <td class="num">{{ e.adgroup_count or 0 }}</td>
             <td class="num">{{ e.per_adgroup_budget or 0 }} {{ e.currency }}</td>

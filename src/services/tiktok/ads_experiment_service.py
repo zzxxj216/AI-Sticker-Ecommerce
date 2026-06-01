@@ -252,6 +252,62 @@ class AdsExperimentService:
             except Exception:
                 pass
 
+        # ── 额外真实信号（有则用、无则略），让 AI 不止靠卡贴主题凭空猜人群 ──
+        video_signals: list[str] = []   # 视频文案/hashtags + 真实流量
+        product_signals: list[str] = [] # 商品卖点/关键词
+        try:
+            with _open_db(self.db_path) as conn:
+                # 1) 该 pack 已发视频的文案 + hashtags + 真实流量（join 快照取最新）
+                vrows = conn.execute(
+                    """
+                    SELECT v.tiktok_video_id, v.video_one_liner, v.caption, v.hashtags,
+                           (SELECT s.view_count FROM tk_display_video_snapshots s
+                             WHERE s.tiktok_video_id = v.tiktok_video_id
+                             ORDER BY s.fetched_at DESC LIMIT 1)    AS views,
+                           (SELECT s.like_count FROM tk_display_video_snapshots s
+                             WHERE s.tiktok_video_id = v.tiktok_video_id
+                             ORDER BY s.fetched_at DESC LIMIT 1)    AS likes,
+                           (SELECT s.comment_count FROM tk_display_video_snapshots s
+                             WHERE s.tiktok_video_id = v.tiktok_video_id
+                             ORDER BY s.fetched_at DESC LIMIT 1)    AS comments
+                      FROM tk_videos v
+                     WHERE v.pack_id = ?
+                     ORDER BY v.id DESC LIMIT 8
+                    """,
+                    (pack_id,),
+                ).fetchall()
+                for v in vrows:
+                    tags = ""
+                    try:
+                        tags = " ".join(json.loads(v["hashtags"] or "[]"))
+                    except Exception:
+                        tags = str(v["hashtags"] or "")
+                    desc = _clean(v["video_one_liner"] or v["caption"] or "", max_len=120)
+                    perf = ""
+                    if v["views"] is not None:
+                        perf = f" [真实表现: {v['views']}播放/{v['likes'] or 0}赞/{v['comments'] or 0}评]"
+                    line = (desc + " " + _clean(tags, max_len=120)).strip() + perf
+                    if line.strip():
+                        video_signals.append(line[:220])
+                # 2) 该 pack 已上架商品的卖点 + 关键词
+                prows = conn.execute(
+                    "SELECT selling_points, keywords FROM tkshop_products "
+                    "WHERE pack_id = ? ORDER BY id DESC LIMIT 3",
+                    (pack_id,),
+                ).fetchall()
+                for p in prows:
+                    for fld in ("selling_points", "keywords"):
+                        try:
+                            items = json.loads(p[fld] or "[]")
+                        except Exception:
+                            items = []
+                        for it in items[:8]:
+                            t = _clean(str(it), max_len=80)
+                            if t and t not in product_signals:
+                                product_signals.append(t)
+        except Exception as e:
+            logger.warning("collect extra signals failed for pack %d: %s", pack_id, e)
+
         return {
             "pack_id": pack_id,
             "display_name": _clean(row["display_name"] or "", max_len=120),
@@ -260,6 +316,8 @@ class AdsExperimentService:
             "palette": _clean(row["palette"] or "", max_len=140),
             "total_stickers": row["total_stickers"] or 0,
             "briefs_sample": briefs[:18],
+            "video_signals": video_signals[:8],
+            "product_signals": product_signals[:16],
         }
 
     def generate_audience_candidates(
@@ -281,6 +339,8 @@ class AdsExperimentService:
             palette=ctx["palette"],
             total_stickers=ctx["total_stickers"],
             sticker_briefs_sample=ctx["briefs_sample"],
+            video_signals=ctx.get("video_signals") or [],
+            product_signals=ctx.get("product_signals") or [],
             n=n,
         )
         main_text = self.router.text_complete(
@@ -357,7 +417,8 @@ class AdsExperimentService:
         *,
         advertiser_id: str,
         promote_type: str,
-        promote_ref_id: str,
+        promote_ref_id: str = "",
+        promote_ref_ids: Optional[list[str]] = None,
         pack_id: int,
         audience_ids: list[int],
         per_adgroup_budget: float,
@@ -396,8 +457,24 @@ class AdsExperimentService:
                 "(promote_type='video') experiments",
                 service="tiktok_ads",
             )
+        # Resolve the list of videos to promote. Multi-video: each video × each
+        # audience = one adgroup. Back-compat: single promote_ref_id → 1-elem list.
+        videos = [str(v).strip() for v in (promote_ref_ids or []) if str(v).strip()]
+        if not videos and promote_ref_id:
+            videos = [str(promote_ref_id).strip()]
+        if is_spark and not videos:
+            raise APIError(
+                "create_experiment: at least one video (promote_ref_ids) is "
+                "required for Spark experiments",
+                service="tiktok_ads",
+            )
+        if not videos:
+            videos = [str(promote_ref_id or "")]  # shop_product / non-spark: single ref
+        # Primary ref kept on the experiment row for display/compat.
+        primary_ref = videos[0]
         per_adgroup_budget = float(per_adgroup_budget or 0)
-        n_adgroups = len(audience_ids)
+        # N×M adgroups: every (video × audience) pair.
+        n_adgroups = len(audience_ids) * len(videos)
         total_budget = per_adgroup_budget * n_adgroups
 
         guard = _guardrails()
@@ -423,7 +500,7 @@ class AdsExperimentService:
 
         # Load the selected audiences (name + targeting) for the payload.
         with _open_db(self.db_path) as conn:
-            ph = ",".join("?" * n_adgroups)
+            ph = ",".join("?" * len(audience_ids))
             arows = conn.execute(
                 f"""
                 SELECT id, name, targeting_json
@@ -457,47 +534,54 @@ class AdsExperimentService:
                 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, '', ?, ?)
                 """,
                 (
-                    str(advertiser_id), str(promote_type), str(promote_ref_id),
+                    str(advertiser_id), str(promote_type), str(primary_ref),
                     pack_id, str(objective), identity_id, identity_type,
                     per_adgroup_budget, currency,
                     exp_status, now, (None if dry_run else now),
                 ),
             )
             experiment_id = cur.lastrowid
-            adgroup_row_ids: dict[int, int] = {}  # audience_id -> tk_ad_groups.id
-            for aid in audience_ids:
-                ag_status = "preview" if dry_run else "pending"
-                agcur = conn.execute(
-                    """
-                    INSERT INTO tk_ad_groups
-                        (experiment_id, audience_id, tiktok_adgroup_id,
-                         budget, status, created_at)
-                    VALUES (?, ?, '', ?, ?, ?)
-                    """,
-                    (experiment_id, aid, per_adgroup_budget, ag_status, now),
-                )
-                adgroup_row_ids[aid] = agcur.lastrowid
+            # One adgroup row per (video × audience). Key by (video, audience).
+            adgroup_row_ids: dict[tuple[str, int], int] = {}
+            for vid in videos:
+                for aid in audience_ids:
+                    ag_status = "preview" if dry_run else "pending"
+                    agcur = conn.execute(
+                        """
+                        INSERT INTO tk_ad_groups
+                            (experiment_id, audience_id, tiktok_adgroup_id,
+                             budget, status, created_at, promote_ref_id, identity_id)
+                        VALUES (?, ?, '', ?, ?, ?, ?, ?)
+                        """,
+                        (experiment_id, aid, per_adgroup_budget, ag_status, now,
+                         vid, identity_id),
+                    )
+                    adgroup_row_ids[(vid, aid)] = agcur.lastrowid
             conn.commit()
 
-        # Build the middle-layer payload per the contract.
-        audiences_payload = []
+        # Build the middle-layer payload: one unit per (video × audience). Each
+        # unit carries its OWN promote (its video), so the middle layer creates
+        # an adgroup+ad per pair. ptype決定 promote 类型（video=Spark）。
+        ptype = "video" if is_spark else str(promote_type)
+        _targeting_cache: dict[int, dict[str, Any]] = {}
         for aid in audience_ids:
-            r = aud_by_id[aid]
             try:
-                targeting = json.loads(r["targeting_json"] or "{}")
+                _targeting_cache[aid] = json.loads(aud_by_id[aid]["targeting_json"] or "{}")
             except Exception:
-                targeting = {}
-            audiences_payload.append({
-                "client_audience_id": aid,
-                "name": r["name"],
-                "targeting": targeting,
-            })
-        # Spark video → promote {type:"video", ref_id:<tiktok_video_id>}; the ad
-        # is built from identity_id + identity_type + the posted item, no upload.
-        promote = {
-            "type": ("video" if is_spark else str(promote_type)),
-            "ref_id": str(promote_ref_id),
-        }
+                _targeting_cache[aid] = {}
+        audiences_payload = []
+        for vid in videos:
+            for aid in audience_ids:
+                audiences_payload.append({
+                    "client_audience_id": aid,
+                    "name": aud_by_id[aid]["name"],
+                    "targeting": _targeting_cache[aid],
+                    # 每单元自己的视频；中间层用它建该 adgroup 的 Spark ad。
+                    "promote": {"type": ptype, "ref_id": vid},
+                    "_video_ref_id": vid,  # 仅供本地回填映射（中间层忽略未知键）
+                })
+        # 顶层 promote 作为兜底（中间层单元无 promote 时回退），用首条视频。
+        promote = {"type": ptype, "ref_id": str(primary_ref)}
         payload = {
             "advertiser_id": str(advertiser_id),
             "objective": str(objective),
@@ -537,6 +621,7 @@ class AdsExperimentService:
                     "UPDATE tk_ad_experiments SET tiktok_campaign_id = ? WHERE id = ?",
                     (campaign_id, experiment_id),
                 )
+            _resp_idx = 0
             for ag in adgroups_resp:
                 client_aid = ag.get("client_audience_id")
                 tt_adgroup_id = str(ag.get("tiktok_adgroup_id") or "")
@@ -550,7 +635,16 @@ class AdsExperimentService:
                     local_ag_status = "paused"
                 else:
                     local_ag_status = "pending"
-                row_id = adgroup_row_ids.get(client_aid)
+                # Map response unit back to its (video, audience) local row. Prefer
+                # the echoed promote_ref_id; fall back to response order if absent.
+                resp_vid = str(ag.get("promote_ref_id") or "")
+                row_id = adgroup_row_ids.get((resp_vid, client_aid))
+                if row_id is None:
+                    # positional fallback (middle layer preserves request order)
+                    keys = list(adgroup_row_ids.keys())
+                    if _resp_idx < len(keys):
+                        row_id = adgroup_row_ids[keys[_resp_idx]]
+                _resp_idx += 1
                 if row_id is not None:
                     conn.execute(
                         "UPDATE tk_ad_groups SET tiktok_adgroup_id = ?, "
@@ -563,7 +657,7 @@ class AdsExperimentService:
                     )
             # Promote audiences from 'candidate' to 'testing' on a real launch.
             if not dry_run:
-                ph = ",".join("?" * n_adgroups)
+                ph = ",".join("?" * len(audience_ids))
                 conn.execute(
                     f"UPDATE tk_ad_audiences SET status = 'testing' "
                     f"WHERE id IN ({ph}) AND status = 'candidate'",
@@ -578,6 +672,180 @@ class AdsExperimentService:
             "status": exp_status if not dry_run else "draft",
             "adgroups": adgroups_resp,
             "preview": data.get("preview"),
+            "per_adgroup_budget": per_adgroup_budget,
+            "total_budget": total_budget,
+        }
+
+    # ------------------------------------------------------------------
+    # 2b. launch_experiment  (promote a dry-run draft to a REAL launch)
+    # ------------------------------------------------------------------
+
+    def launch_experiment(self, experiment_id: int) -> dict[str, Any]:
+        """Promote a previewed DRAFT experiment to a REAL launch (dry_run=False).
+
+        Reuses the existing experiment + adgroup rows (no duplicate). Enforces
+        the budget / concurrency guardrails, calls the middle layer with
+        dry_run=False to create the real campaign/adgroups/ads, backfills
+        platform ids and flips statuses draft -> running. On a remote failure
+        the experiment is marked 'failed' and the error re-raised.
+        """
+        with _open_db(self.db_path) as conn:
+            exp = conn.execute(
+                """
+                SELECT id, advertiser_id, promote_type, promote_ref_id, pack_id,
+                       objective, per_adgroup_budget, currency, status,
+                       tiktok_campaign_id, identity_id, identity_type
+                  FROM tk_ad_experiments WHERE id = ?
+                """,
+                (experiment_id,),
+            ).fetchone()
+            if not exp:
+                raise ValueError(f"experiment #{experiment_id} not found")
+            if exp["status"] != "draft":
+                raise APIError(
+                    f"experiment #{experiment_id} status is '{exp['status']}'; "
+                    "only a previewed draft can be launched",
+                    service="tiktok_ads",
+                )
+            if (exp["tiktok_campaign_id"] or "").strip():
+                raise APIError(
+                    f"experiment #{experiment_id} already has campaign "
+                    f"{exp['tiktok_campaign_id']} — refusing to double-launch",
+                    service="tiktok_ads",
+                )
+            ag_rows = conn.execute(
+                "SELECT id, audience_id, promote_ref_id, identity_id FROM tk_ad_groups "
+                "WHERE experiment_id = ? ORDER BY id",
+                (experiment_id,),
+            ).fetchall()
+
+        # Each row is one (video × audience) adgroup; do NOT dedup by audience.
+        ag_units = [dict(r) for r in ag_rows]
+        audience_ids = sorted({r["audience_id"] for r in ag_units})
+        if not ag_units:
+            raise APIError(f"experiment #{experiment_id} has no adgroups",
+                           service="tiktok_ads")
+
+        per_adgroup_budget = float(exp["per_adgroup_budget"] or 0)
+        n_adgroups = len(ag_units)
+        total_budget = per_adgroup_budget * n_adgroups
+
+        # Guardrails — enforced before any real spend.
+        guard = _guardrails()
+        if guard["max_experiment_budget"] > 0 and total_budget > guard["max_experiment_budget"]:
+            raise APIError(
+                f"launch_experiment: total budget {total_budget:.2f} exceeds "
+                f"TKADS_MAX_EXPERIMENT_BUDGET={guard['max_experiment_budget']:.2f}",
+                service="tiktok_ads",
+            )
+        if guard["max_concurrent_experiments"] > 0:
+            with _open_db(self.db_path) as conn:
+                running = conn.execute(
+                    "SELECT COUNT(*) AS n FROM tk_ad_experiments WHERE status = 'running'",
+                ).fetchone()["n"]
+            if running >= guard["max_concurrent_experiments"]:
+                raise APIError(
+                    f"launch_experiment: {running} experiment(s) already running, "
+                    f"TKADS_MAX_CONCURRENT_EXPERIMENTS={guard['max_concurrent_experiments']}",
+                    service="tiktok_ads",
+                )
+
+        with _open_db(self.db_path) as conn:
+            ph = ",".join("?" * len(audience_ids))
+            arows = conn.execute(
+                f"SELECT id, name, targeting_json FROM tk_ad_audiences WHERE id IN ({ph})",
+                tuple(audience_ids),
+            ).fetchall()
+        aud_by_id = {r["id"]: r for r in arows}
+        ptype = str(exp["promote_type"])
+
+        def _targ(aid: int) -> dict[str, Any]:
+            r = aud_by_id.get(aid)
+            try:
+                return json.loads(r["targeting_json"] or "{}") if r else {}
+            except Exception:
+                return {}
+
+        # One payload unit per stored adgroup row, each with its own video.
+        audiences_payload = []
+        for u in ag_units:
+            aid = u["audience_id"]
+            audiences_payload.append({
+                "client_audience_id": aid,
+                "name": (aud_by_id.get(aid) or {}).get("name") if aud_by_id.get(aid) else None,
+                "targeting": _targ(aid),
+                "promote": {"type": ptype, "ref_id": str(u["promote_ref_id"] or exp["promote_ref_id"] or "")},
+            })
+
+        payload = {
+            "advertiser_id": str(exp["advertiser_id"]),
+            "objective": str(exp["objective"]),
+            "identity_id": exp["identity_id"] or "",
+            "identity_type": exp["identity_type"] or "",
+            "promote": {"type": ptype, "ref_id": str(exp["promote_ref_id"])},
+            "per_adgroup_budget": per_adgroup_budget,
+            "currency": exp["currency"] or "USD",
+            "creative": {},
+            "audiences": audiences_payload,
+            "dry_run": False,
+        }
+
+        try:
+            data = self.ads.create_experiment_remote(payload)
+        except Exception as e:
+            with _open_db(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE tk_ad_experiments SET status = 'failed', "
+                    "decision_summary = ? WHERE id = ?",
+                    (f"launch failed: {e}"[:1000], experiment_id),
+                )
+                conn.commit()
+            raise
+
+        campaign_id = str(data.get("tiktok_campaign_id") or "")
+        adgroups_resp = data.get("adgroups") or []
+        now = int(time.time())
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                "UPDATE tk_ad_experiments SET status = 'running', started_at = ?, "
+                "tiktok_campaign_id = ? WHERE id = ?",
+                (now, campaign_id, experiment_id),
+            )
+            # Map response units back to local adgroup rows. Prefer matching by
+            # (promote_ref_id, audience_id); fall back to request order.
+            by_key = {(str(u["promote_ref_id"] or ""), u["audience_id"]): u["id"] for u in ag_units}
+            order_ids = [u["id"] for u in ag_units]
+            for idx, ag in enumerate(adgroups_resp):
+                client_aid = ag.get("client_audience_id")
+                tt_adgroup_id = str(ag.get("tiktok_adgroup_id") or "")
+                ag_status_raw = (ag.get("status") or "").upper()
+                local = ("running" if ag_status_raw == "ENABLE"
+                         else "paused" if ag_status_raw == "DISABLE" else "pending")
+                resp_vid = str(ag.get("promote_ref_id") or "")
+                row_id = by_key.get((resp_vid, client_aid))
+                if row_id is None and idx < len(order_ids):
+                    row_id = order_ids[idx]
+                if row_id is not None:
+                    conn.execute(
+                        "UPDATE tk_ad_groups SET tiktok_adgroup_id = ?, status = ?, "
+                        "budget = ? WHERE id = ?",
+                        (tt_adgroup_id, local,
+                         float(ag.get("budget") or per_adgroup_budget), row_id),
+                    )
+            ph = ",".join("?" * len(audience_ids))
+            conn.execute(
+                f"UPDATE tk_ad_audiences SET status = 'testing' "
+                f"WHERE id IN ({ph}) AND status IN ('candidate', 'preview')",
+                tuple(audience_ids),
+            )
+            conn.commit()
+
+        logger.info("launch_experiment: #%d campaign=%s adgroups=%d total=%.2f",
+                    experiment_id, campaign_id, len(adgroups_resp), total_budget)
+        return {
+            "experiment_id": experiment_id, "dry_run": False,
+            "tiktok_campaign_id": campaign_id, "status": "running",
+            "adgroups": adgroups_resp,
             "per_adgroup_budget": per_adgroup_budget,
             "total_budget": total_budget,
         }
@@ -942,6 +1210,63 @@ class AdsExperimentService:
             "errors": errors,
         }
 
+    def enable_experiment(self, experiment_id: int) -> dict[str, Any]:
+        """ENABLE every adgroup on the platform so a launched experiment starts
+        delivering (real spend). The launch step creates adgroups paused
+        (operation_status=DISABLE) as a safety default; this flips them live.
+
+        Mirrors kill_experiment but in the ENABLE direction. Best-effort per
+        adgroup. Requires the experiment to already be launched (has platform
+        adgroup ids); raises if there is nothing to enable.
+        """
+        with _open_db(self.db_path) as conn:
+            exp = conn.execute(
+                "SELECT id, advertiser_id, status FROM tk_ad_experiments WHERE id = ?",
+                (experiment_id,),
+            ).fetchone()
+            if not exp:
+                raise ValueError(f"experiment #{experiment_id} not found")
+            adgroups = self._experiment_adgroups(conn, experiment_id)
+
+        advertiser_id = str(exp["advertiser_id"])
+        live_ids = [(ag["tiktok_adgroup_id"] or "").strip() for ag in adgroups]
+        live_ids = [x for x in live_ids if x]
+        if not live_ids:
+            raise APIError(
+                f"experiment #{experiment_id} has no launched adgroups to enable "
+                "— run 真实投放 (launch) first",
+                service="tiktok_ads",
+            )
+
+        enabled = 0
+        errors: list[str] = []
+        for tt_id in live_ids:
+            try:
+                self.ads.set_adgroup_status(tt_id, advertiser_id, "ENABLE")
+                enabled += 1
+            except Exception as e:
+                errors.append(f"adgroup {tt_id}: {e}")
+                logger.warning("enable_experiment: enable %s failed: %s", tt_id, e)
+
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                "UPDATE tk_ad_experiments SET status = 'running' WHERE id = ?",
+                (experiment_id,),
+            )
+            conn.execute(
+                "UPDATE tk_ad_groups SET status = 'running' "
+                "WHERE experiment_id = ? AND tiktok_adgroup_id != ''",
+                (experiment_id,),
+            )
+            conn.commit()
+
+        return {
+            "experiment_id": experiment_id,
+            "status": "running",
+            "adgroups_enabled": enabled,
+            "errors": errors,
+        }
+
     # ------------------------------------------------------------------
     # 6. audience_leaderboard
     # ------------------------------------------------------------------
@@ -1058,42 +1383,54 @@ class AdsExperimentService:
         return self.ads.list_identities()
 
     def list_promotable_videos(
-        self, *, pack_id: Optional[int] = None,
+        self,
+        *,
+        pack_id: Optional[int] = None,
+        identity_id: Optional[str] = None,
+        identity_type: Optional[str] = None,
+        _identity_bc_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
-        """List already-posted TikTok videos usable as Spark ad sources, read
-        from ``tk_videos`` where ``tiktok_video_id != ''`` (the real TikTok
-        item_id). Optionally filtered by ``pack_id``.
+        """List videos REALLY promotable as Spark ads for a given ad identity.
 
-        Each row: ``video_id`` (local tk_videos.id), ``tiktok_video_id``,
-        ``pack_id``, ``one_liner``, ``caption``, ``publish_status``,
-        ``published_at``.
+        Source is TikTok's pull-mode catalog (middle-layer ``/promotable-videos``
+        → ``identity/video/get/``), NOT the local ``tk_videos`` table. For a
+        ``can_pull_video`` identity (e.g. an owned BC-linked account) this is the
+        account's full posted-video list, directly promotable with no per-video
+        Spark auth code. Showing the local table here was the old bug: those
+        videos aren't necessarily authorized for ads, so launches failed.
+
+        ``identity_id`` selects which ad identity's videos to list. If omitted,
+        the first identity with ``can_pull_video`` is used. ``pack_id`` is
+        accepted for signature compat but no longer filters (TikTok side has no
+        pack linkage).
+
+        Each row: ``tiktok_video_id`` (= item_id), ``one_liner``, ``cover_url``,
+        ``status``, ``identity_id``, ``identity_type``.
         """
-        sql = """
-            SELECT id, pack_id, tiktok_video_id, video_one_liner, caption,
-                   publish_status, published_at, local_video_path
-              FROM tk_videos
-             WHERE COALESCE(tiktok_video_id, '') != ''
-        """
-        params: list[Any] = []
-        if pack_id is not None:
-            sql += " AND pack_id = ?"
-            params.append(pack_id)
-        sql += " ORDER BY COALESCE(published_at, 0) DESC, id DESC"
-        with _open_db(self.db_path) as conn:
-            rows = conn.execute(sql, tuple(params)).fetchall()
-        out: list[dict[str, Any]] = []
-        for r in rows:
-            out.append({
-                "video_id": r["id"],
-                "tiktok_video_id": str(r["tiktok_video_id"] or ""),
-                "pack_id": r["pack_id"],
-                "one_liner": str(r["video_one_liner"] or ""),
-                "caption": str(r["caption"] or ""),
-                "publish_status": str(r["publish_status"] or ""),
-                "published_at": r["published_at"],
-                "local_video_path": str(r["local_video_path"] or ""),
-            })
-        return out
+        # Fast path: caller already resolved the identity (id+type+bc) → skip the
+        # extra list_identities round-trip (saves ~2s on the UI form-options call).
+        if identity_id and identity_type and _identity_bc_id is not None:
+            chosen = {"identity_id": identity_id, "identity_type": identity_type,
+                      "identity_authorized_bc_id": _identity_bc_id}
+        else:
+            idents = self.ads.list_identities()
+            if not idents:
+                return []
+            chosen = None
+            if identity_id:
+                chosen = next((i for i in idents if i.get("identity_id") == identity_id), None)
+            if chosen is None:
+                # default: first pull-capable identity, else first identity
+                chosen = next((i for i in idents if i.get("can_pull_video")), idents[0])
+        itype = identity_type or chosen.get("identity_type") or "BC_AUTH_TT"
+        bc_id = chosen.get("identity_authorized_bc_id") or ""
+        vids = self.ads.list_promotable_videos(
+            chosen["identity_id"], itype, bc_id,
+        )
+        for v in vids:
+            v["identity_id"] = chosen["identity_id"]
+            v["identity_type"] = itype
+        return vids
 
 
 _svc: Optional[AdsExperimentService] = None

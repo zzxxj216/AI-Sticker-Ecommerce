@@ -269,6 +269,54 @@ class TikTokAdsService:
                     it.get("display_name") or it.get("name") or ""
                 ).strip(),
                 "can_pull_video": bool(it.get("can_pull_video")),
+                "identity_authorized_bc_id": str(
+                    it.get("identity_authorized_bc_id") or ""
+                ).strip(),
+            })
+        return out
+
+    def list_promotable_videos(
+        self,
+        identity_id: str,
+        identity_type: str = "BC_AUTH_TT",
+        identity_authorized_bc_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """List videos directly promotable (pull mode) under an identity.
+
+        Calls middle-layer ``/promotable-videos`` (→ ``identity/video/get/``):
+        for a ``can_pull_video`` identity this returns the account's ENTIRE
+        posted-video catalog with no per-video Spark auth code needed. Each row
+        normalized to ``tiktok_video_id`` (= item_id), ``one_liner`` (= text),
+        ``cover_url``, ``status`` — keys the UI already consumes.
+        """
+        params: dict[str, Any] = {
+            "identity_id": identity_id,
+            "identity_type": identity_type,
+        }
+        if identity_authorized_bc_id:
+            params["identity_authorized_bc_id"] = identity_authorized_bc_id
+        data = self._get("/promotable-videos", params=params,
+                         action="list_promotable_videos")
+        if isinstance(data, dict):
+            raw = data.get("videos") or data.get("list") or []
+        elif isinstance(data, list):
+            raw = data
+        else:
+            raw = []
+        out: list[dict[str, Any]] = []
+        for v in raw:
+            if not isinstance(v, dict):
+                continue
+            item_id = str(v.get("item_id") or v.get("tiktok_video_id") or "").strip()
+            if not item_id:
+                continue
+            out.append({
+                "tiktok_video_id": item_id,
+                "one_liner": str(v.get("text") or v.get("one_liner") or "").strip(),
+                "cover_url": str(v.get("cover_url") or "").strip(),
+                "play_url": str(v.get("play_url") or "").strip(),
+                "duration": v.get("duration"),
+                "status": str(v.get("status") or "").strip(),
             })
         return out
 

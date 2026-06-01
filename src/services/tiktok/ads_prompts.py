@@ -61,13 +61,38 @@ def build_audience_main_prompt(
     palette: str,
     total_stickers: int,
     sticker_briefs_sample: list[str],
+    video_signals: list[str] | None = None,
+    product_signals: list[str] | None = None,
     n: int = 3,
 ) -> str:
-    """Markdown plan: N audience hypotheses with name / hypothesis / targeting."""
+    """Markdown plan: N audience hypotheses with name / hypothesis / targeting.
+
+    Beyond the pack's static theme, this now folds in REAL signals when present:
+    the pack's published-video captions/hashtags + actual view/like/comment
+    performance, and its shop product selling points/keywords — so the model can
+    ground audiences in what already resonated instead of guessing from art alone.
+    """
     sample_lines = (
         "\n".join(f"- {b}" for b in sticker_briefs_sample[:14])
         or "- (no sample available)"
     )
+    # Optional real-signal sections (omitted entirely if the pack has none).
+    video_block = ""
+    if video_signals:
+        vlines = "\n".join(f"- {s}" for s in video_signals[:8])
+        video_block = (
+            "\n### This pack's published videos (captions + hashtags + REAL performance)\n"
+            "Higher views/likes = this content/angle already resonated; let it inform\n"
+            "which audiences to target.\n" + vlines + "\n"
+        )
+    product_block = ""
+    if product_signals:
+        plines = "\n".join(f"- {s}" for s in product_signals[:16])
+        product_block = (
+            "\n### This pack's shop listing — selling points & keywords\n"
+            "These were written to convert real buyers; use them as buyer-intent hints.\n"
+            + plines + "\n"
+        )
     age_vocab = ", ".join(AGE_GROUP_VOCAB)
     loc_hint = ", ".join(
         f"{name} = {gid}" for name, gid in LOCATION_HINTS.items()
@@ -83,7 +108,7 @@ def build_audience_main_prompt(
 
 ### Sample sticker contents
 {sample_lines}
-
+{video_block}{product_block}
 ### What we are doing
 We run a small-budget experiment: one campaign, {n} ad groups, SAME creative
 and bid, varying ONLY the audience. Each ad group's performance then attributes

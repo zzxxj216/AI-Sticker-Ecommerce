@@ -6085,6 +6085,28 @@ def _ads_cell_value(row: Any, col: dict[str, str], objective: Any = None) -> str
         return "0.00"
 
 
+def _ads_advertiser_name(advertiser_id: Any) -> str:
+    """Map an advertiser_id to its display name (tk_ads_accounts.name).
+
+    Falls back to the raw id only if no name is on record. Used so the UI
+    shows '广告主名称' instead of the numeric id.
+    """
+    aid = str(advertiser_id or "").strip()
+    if not aid:
+        return "—"
+    try:
+        with _open_db() as conn:
+            row = conn.execute(
+                "SELECT name FROM tk_ads_accounts WHERE advertiser_id = ?",
+                (aid,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    name = (row["name"] if row else "") or ""
+    return name.strip() or aid
+
+
+templates.env.globals["ads_advertiser_name"] = _ads_advertiser_name
 templates.env.globals["ads_exp_status_label"] = _ads_exp_status_label
 templates.env.globals["ads_exp_status_pill"] = _ads_exp_status_pill
 templates.env.globals["ads_audience_status_label"] = _ads_audience_status_label
@@ -6144,11 +6166,19 @@ def _ads_list_identities() -> tuple[list[dict[str, Any]], str]:
     return [dict(x) for x in identities], ""
 
 
-def _ads_list_promotable_videos(pack_id: int | None = None) -> tuple[list[dict[str, Any]], str]:
-    """Best-effort fetch of already-posted videos usable for Spark promotion.
+def _ads_list_promotable_videos(
+    pack_id: int | None = None,
+    identity_id: str | None = None,
+    identity_type: str | None = None,
+    identity_bc_id: str | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """Best-effort fetch of videos REALLY promotable as Spark ads.
 
-    Rows carry at least `tiktok_video_id` (used as promote_ref_id) + a
-    human one_liner. Degrades gracefully.
+    Source is TikTok's pull-mode catalog (the owned/linked ad identity's full
+    posted-video list) — not the local tk_videos table — so every row is
+    actually launchable. Each row carries `tiktok_video_id` (= promote_ref_id),
+    `one_liner`, `cover_url`, and the `identity_id`/`identity_type` it belongs
+    to. Degrades gracefully.
     """
     try:
         from src.services.tiktok.ads_experiment_service import (
@@ -6161,16 +6191,23 @@ def _ads_list_promotable_videos(pack_id: int | None = None) -> tuple[list[dict[s
         fn = getattr(svc, "list_promotable_videos", None)
         if fn is None:
             return [], "已发布视频接口尚未就绪（后端开发中）。"
-        videos = fn(pack_id=pack_id) or []
+        kw: dict[str, Any] = {"pack_id": pack_id}
+        if identity_id:
+            kw.update(identity_id=identity_id, identity_type=identity_type,
+                      _identity_bc_id=identity_bc_id)
+        videos = fn(**kw) or []
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("ads list_promotable_videos failed: %s", e)
-        return [], "无法获取已发布视频列表。"
+        return [], "无法获取可投放视频列表，请确认 multi-channel-api 正在运行。"
     if not videos:
-        return [], "暂无已发布到 TikTok 的视频，投视频（Spark）需要已发帖的视频。"
+        return [], (
+            "暂无可投放视频：广告身份需具备『可拉取视频』权限（can_pull_video），"
+            "或该账号尚未发布视频。"
+        )
     return [dict(v) for v in videos], ""
 
 
-def _ads_cached_advertisers(conn: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]]:
+def _ads_advertisers_from_db(conn: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]]:
     """Fast local fallback for the new-experiment form.
 
     The remote advertiser list can be slow or unavailable; the list page should
@@ -6305,7 +6342,7 @@ def v2_ads_experiments(request: Request):
             # Migration 020 not applied yet — degrade gracefully.
             experiments = []
         packs = _ads_pack_candidates(conn)
-        advertisers = _ads_cached_advertisers(conn)
+        advertisers = _ads_advertisers_from_db(conn)
     finally:
         conn.close()
 
@@ -6350,7 +6387,7 @@ def v2_ads_experiments_form_options(pack_id: int | None = None):
     if not advertisers:
         conn = _open_db()
         try:
-            cached = _ads_cached_advertisers(conn)
+            cached = _ads_advertisers_from_db(conn)
         finally:
             conn.close()
         if cached:
@@ -6361,7 +6398,18 @@ def v2_ads_experiments_form_options(pack_id: int | None = None):
             )
 
     identities, identity_hint = _ads_list_identities()
-    videos, video_hint = _ads_list_promotable_videos(pack_id=pack_id)
+    # Reuse the identity we already fetched (pick the pull-capable one) so the
+    # videos lookup doesn't re-call list_identities — saves a slow round-trip.
+    _id = next((i for i in identities if i.get("can_pull_video")), (identities[0] if identities else None))
+    if _id:
+        videos, video_hint = _ads_list_promotable_videos(
+            pack_id=pack_id,
+            identity_id=_id.get("identity_id"),
+            identity_type=_id.get("identity_type"),
+            identity_bc_id=_id.get("identity_authorized_bc_id") or "",
+        )
+    else:
+        videos, video_hint = [], "无可用广告身份，无法列出可投视频。"
 
     return JSONResponse(
         {
@@ -6492,10 +6540,13 @@ async def v2_ads_experiment_new(request: Request):
     objective = (form.get("objective") or "").strip().upper()
     identity_id = (form.get("identity_id") or "").strip()
     # promote_ref_id source depends on promote_type:
-    #   video        → the selected posted video's tiktok_video_id
+    #   video        → selected posted videos' tiktok_video_id(s) — now MULTI
     #   shop_product → the typed product id (existing behaviour)
     promote_ref_id = (form.get("promote_ref_id") or "").strip()
-    video_ref_id = (form.get("video_ref_id") or "").strip()
+    # Multi-video: UI submits comma-joined ids in `video_ref_ids` (falls back to
+    # the legacy single `video_ref_id`).
+    _vids_raw = (form.get("video_ref_ids") or form.get("video_ref_id") or "")
+    video_ref_ids = [v.strip() for v in str(_vids_raw).split(",") if v.strip()]
     try:
         budget = float(form.get("per_adgroup_budget") or 0)
     except (TypeError, ValueError):
@@ -6531,15 +6582,16 @@ async def v2_ads_experiment_new(request: Request):
         return _back(error="单组预算需大于 0")
 
     if promote_type == "video":
-        # Spark: identity + posted video are required; ref_id = tiktok_video_id.
-        promote_ref_id = video_ref_id
+        # Spark: identity + at least one posted video required.
         if not identity_id:
             return _back(error="投视频需选择广告身份（Spark）")
-        if not promote_ref_id:
-            return _back(error="投视频需选择一条已发布视频")
+        if not video_ref_ids:
+            return _back(error="投视频需至少选择一条已发布视频")
+        promote_ref_id = video_ref_ids[0]  # primary (compat)
     else:
-        # Shop product: no Spark identity.
+        # Shop product: single typed id, no Spark identity.
         identity_id = ""
+        video_ref_ids = [promote_ref_id] if promote_ref_id else []
 
     try:
         from src.services.tiktok.ads_experiment_service import (
@@ -6560,6 +6612,7 @@ async def v2_ads_experiment_new(request: Request):
             advertiser_id=advertiser_id,
             promote_type=promote_type,
             promote_ref_id=promote_ref_id,
+            promote_ref_ids=video_ref_ids,
             pack_id=pack_id,
             audience_ids=audience_ids,
             per_adgroup_budget=budget,
@@ -6622,6 +6675,18 @@ async def v2_ads_experiment_refresh(request: Request, experiment_id: int):
 @router.post("/ads/experiments/{experiment_id:int}/evaluate")
 async def v2_ads_experiment_evaluate(request: Request, experiment_id: int):
     return _ads_call_and_redirect(experiment_id, "evaluate_experiment")
+
+
+@router.post("/ads/experiments/{experiment_id:int}/launch")
+async def v2_ads_experiment_launch(request: Request, experiment_id: int):
+    """REAL launch (dry_run=False): promote a previewed draft to live ads."""
+    return _ads_call_and_redirect(experiment_id, "launch_experiment")
+
+
+@router.post("/ads/experiments/{experiment_id:int}/enable")
+async def v2_ads_experiment_enable(request: Request, experiment_id: int):
+    """ENABLE a launched experiment's adgroups so they start delivering."""
+    return _ads_call_and_redirect(experiment_id, "enable_experiment")
 
 
 @router.post("/ads/experiments/{experiment_id:int}/kill")
