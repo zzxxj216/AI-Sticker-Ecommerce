@@ -9,25 +9,35 @@ shipping」、也不再手动加折扣。希望上传即默认包邮，并自动
 
 ---
 
-## 1. 默认包邮（free shipping）
+## 1. 默认包邮（free shipping）— SHIPPING_DISCOUNT 促销
 
-> ⚠️ **API 调研结论(2026-05，需 repo B 用 seller 账号最终确认)**：TikTok Shop 的
-> Create Product API（`POST /product/202309/products`）**没有** `free_shipping`
-> 布尔字段。商品的包邮由 **运费模板(shipping template / freight template)** 或
-> **免邮促销(free shipping promotion，storewide 门槛 / 指定商品)** 决定，主要在
-> 卖家后台或经 Shipping Template 配置。用户看到的「Default free shipping」开关属于
-> 这一层，**不是创建商品的一个参数**。
+**结论(2026-06-01)：包邮可以自动化**,机制 = TikTok Promotion API 的
+`SHIPPING_DISCOUNT` 活动(与折扣同一套两步:建活动 → 挂商品)。Create Product API
+本身没有 free_shipping 字段(这点之前结论正确),但**免邮促销有 API**。
 
-**现状：repo A 已撤掉 `free_shipping` 字段**（2026-05-30）。因为它不是 TikTok 原生
-产品字段，传了也没用、反而误导。包邮先搁置，待确认 TikTok 是否有可用的免邮促销 /
-运费模板 API 后再做。
+合法 activity_type 实测枚举:`[FIXED_PRICE, DIRECT_DISCOUNT, FLASHSALE,
+SHIPPING_DISCOUNT, BUM_MORE_SAVE_MORE]`。
 
-**将来要做时（repo B 先确认 TikTok 能力，三选一）**：
-1. 给店铺预建一个「免邮」运费模板，创建商品时把该模板挂上去；或
-2. 调免邮促销接口把商品加入 storewide / targeted free-shipping promotion；或
-3. 若都无公开 API → 结论为**只能卖家后台手动**。
+**已实现(best-effort 接线)**:
+- repo B `promotions.create_product_free_shipping()` + 路由
+  `POST /api/v1/tiktok/products/{id}/free-shipping`(SHIPPING_DISCOUNT,
+  product_level=PRODUCT)。
+- repo A `tkshop.apply_free_shipping()`,`publish()` 成功后自动调用(env
+  `TKSHOP_DEFAULT_FREE_SHIPPING` 默认开;失败 best-effort 不影响上架)。
 
-确认有 API 后，再决定 repo A 怎么表达意图（payload 字段 or 独立端点）。
+**唯一未决卡点**:create SHIPPING_DISCOUNT 活动需要 `discount_threshold` 配置,否则
+报 `17029268: Discount threshold type not supported`。其**确切 JSON 字段名/结构**在
+官方文档(JS 渲染抓不到)里;~28 次盲探未命中(TikTok 静默丢弃未知字段);店里无现成
+SHIPPING_DISCOUNT 活动可 introspect。已隔离到 `promotions.py` 的
+`_FREE_SHIPPING_THRESHOLD` 常量,确认后填一处即通。
+
+**卖家后台语义(已查官方教程确认)**:Seller Center > Marketing > Promotions >
+Shipping fee discount。指定商品(Specific Products)时**门槛(threshold)= None
+(无门槛)**;Discount 只有 "Free shipping" 一个选项;Inventory = seller-fulfilled。
+即我们要的 body 语义 = 无门槛 + 免邮 + 卖家自配送。
+
+**最快解锁**:在卖家后台手动建一个免邮促销 → `GET /promotion/202309/activities/
+{id}?activity_id=` introspect 出真实 threshold 结构 → 填进 `_FREE_SHIPPING_THRESHOLD`。
 
 ---
 

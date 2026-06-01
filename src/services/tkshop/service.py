@@ -122,6 +122,14 @@ except (TypeError, ValueError):
     TKSHOP_DISCOUNT_WINDOW_DAYS = 89
 TKSHOP_DISCOUNT_ACTIVITY_TYPE = os.getenv("TKSHOP_DISCOUNT_ACTIVITY_TYPE", "DIRECT_DISCOUNT")
 
+# Free shipping is handled at the SHOP level by a default free-shipping freight
+# template (set once in Seller Center → applies to every product automatically),
+# so per-product automation is NOT needed and is OFF by default. The
+# SHIPPING_DISCOUNT promotion path (apply_free_shipping) stays available for
+# targeted free-shipping promos — opt in with TKSHOP_DEFAULT_FREE_SHIPPING=1.
+_fs = (os.getenv("TKSHOP_DEFAULT_FREE_SHIPPING") or "0").strip().lower()
+TKSHOP_DEFAULT_FREE_SHIPPING = _fs in ("1", "true", "yes", "on")
+
 # Per-shop seller_sku prefix. Format: ``shopA:INK1,shopB:INK2``. When a shop
 # isn't listed, prefix derives from the shop's index in TKSHOP_SHOPS:
 # first shop → INK1, second → INK2, etc. This keeps SKUs on different shops
@@ -2306,11 +2314,15 @@ class TKShopService:
                 )
             conn.commit()
 
-        # After a successful create, auto-apply the standing discount. This is
-        # best-effort and never flips a successful publish to failed.
+        # After a successful create, auto-apply the standing discount + default
+        # free shipping. Both best-effort — never flip a successful publish to
+        # failed.
         discount_result = None
+        free_shipping_result = None
         if success and tiktok_product_id:
             discount_result = self.apply_discount(product_id)
+            if TKSHOP_DEFAULT_FREE_SHIPPING:
+                free_shipping_result = self.apply_free_shipping(product_id)
 
         return {
             "ok": success,
@@ -2322,7 +2334,52 @@ class TKShopService:
             "field_hints": field_hints,
             "attempt_idx": attempt_idx,
             "discount": discount_result,
+            "free_shipping": free_shipping_result,
         }
+
+    def apply_free_shipping(self, product_id: int) -> dict[str, Any]:
+        """Best-effort: put a published product on a SHIPPING_DISCOUNT (免邮)
+        promotion via the middle layer. NEVER raises on a remote failure (the
+        listing stays live); only raises if the product row is missing.
+
+        NOTE: the middle layer's SHIPPING_DISCOUNT create currently needs the
+        discount_threshold schema confirmed (see mca promotions.py); until then
+        this returns {applied: False, reason: 'rejected'} and logs the TikTok
+        error — publish is unaffected.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tiktok_product_id, title, shop FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+        if not row:
+            raise ValueError(f"product #{product_id} not found")
+        tt_id = (row["tiktok_product_id"] or "").strip()
+        if not tt_id:
+            return {"applied": False, "reason": "not_on_platform"}
+        shop = row["shop"] or TKSHOP_DEFAULT_SHOP
+        endpoint = (
+            f"{TKSHOP_SERVER_URL.rstrip('/')}"
+            f"/api/v1/tiktok/products/{tt_id}/free-shipping"
+        )
+        try:
+            resp = requests.post(endpoint, json={}, params={"shop": shop},
+                                 timeout=TKSHOP_SERVER_TIMEOUT)
+            rj = resp.json() if resp.text else {}
+        except requests.RequestException as e:
+            logger.warning("free-shipping network error for product #%s: %s", product_id, e)
+            return {"applied": False, "reason": "network", "error": str(e)[:200]}
+        except Exception as e:
+            return {"applied": False, "reason": "internal", "error": f"{type(e).__name__}: {e}"[:200]}
+        if isinstance(rj, dict) and isinstance(rj.get("data"), dict) and "ok" in rj["data"]:
+            rj = rj["data"]
+        if rj.get("ok") is True or rj.get("success") is True:
+            logger.info("free-shipping applied: product #%s tiktok=%s activity=%s",
+                        product_id, tt_id, rj.get("activity_id") or "")
+            return {"applied": True, "activity_id": rj.get("activity_id") or ""}
+        msg = str(rj.get("error_message") or rj.get("message") or "")
+        logger.warning("free-shipping rejected for product #%s: %s", product_id, msg[:200])
+        return {"applied": False, "reason": "rejected", "error": msg[:200]}
 
     def _create_product_discount_remote(
         self,
