@@ -14,7 +14,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "ops_workbench.db"
 # Default shops for export script (internal registry keys).
-DEFAULT_SHOPS = ("main", "inkelligentstudio")  # UI: 2店 sticker, 3店 studio
+DEFAULT_SHOPS = ("inkelligentsticker", "inkelligentstudio")
+DEFAULT_SALE_PRICE = "16.99"
+DEFAULT_DISCOUNT_PRICE = ""
+DEFAULT_STOCK = "100"
+
+
+def _parse_keywords(raw: str) -> list[str]:
+    try:
+        v = json.loads(raw or "[]")
+        return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def _search_keywords(keywords: list[str]) -> str:
+    parts = [k.strip().lstrip("#") for k in keywords if k.strip()]
+    return ", ".join(parts)[:500]
 
 
 def _path_to_v2_url(disk_path: str) -> str:
@@ -89,12 +105,17 @@ def export_rows(pack_ids: list[int], shops: tuple[str, ...]) -> list[dict]:
                 "cover_url": "",
                 "cover_public_url": "",
                 "publish_status": "pack_not_found",
+                "keywords": "",
+                "search_keywords": "",
+                "sale_price": "",
+                "discount_price": "",
+                "stock": "",
             })
             continue
         listings = conn.execute(
             """
             SELECT id, shop, title, seller_sku, tiktok_product_id,
-                   tiktok_sku_id, publish_status
+                   tiktok_sku_id, publish_status, keywords
               FROM tkshop_products
              WHERE pack_id = ?
              ORDER BY shop, id
@@ -118,8 +139,14 @@ def export_rows(pack_ids: list[int], shops: tuple[str, ...]) -> list[dict]:
                     "cover_url": "",
                     "cover_public_url": "",
                     "publish_status": "no_listing",
+                    "keywords": "",
+                    "search_keywords": "",
+                    "sale_price": "",
+                    "discount_price": "",
+                    "stock": "",
                 })
                 continue
+            kws = _parse_keywords(row["keywords"] or "[]")
             cover = _resolve_cover(conn, pack_id=pack_id, listing_id=row["id"])
             rel = _path_to_v2_url(cover)
             out.append({
@@ -135,6 +162,11 @@ def export_rows(pack_ids: list[int], shops: tuple[str, ...]) -> list[dict]:
                 "cover_url": rel,
                 "cover_public_url": (base + rel) if base and rel else "",
                 "publish_status": row["publish_status"] or "",
+                "keywords": ", ".join(kws),
+                "search_keywords": _search_keywords(kws),
+                "sale_price": DEFAULT_SALE_PRICE,
+                "discount_price": DEFAULT_DISCOUNT_PRICE,
+                "stock": DEFAULT_STOCK,
             })
     conn.close()
     return out
@@ -157,6 +189,7 @@ def pivot_wide(rows: list[dict], shops: tuple[str, ...]) -> list[dict]:
         for key in (
             "title", "seller_sku", "tiktok_product_id", "tiktok_sku_id",
             "cover_path", "cover_url", "cover_public_url", "publish_status",
+            "keywords", "search_keywords", "sale_price", "discount_price", "stock",
         ):
             base[f"{prefix}_{key}"] = r.get(key) or ""
     wide: list[dict] = []
@@ -178,6 +211,7 @@ def _wide_fieldnames(shops: tuple[str, ...]) -> list[str]:
         for key in (
             "title", "seller_sku", "tiktok_product_id", "tiktok_sku_id",
             "cover_public_url", "cover_url", "cover_path", "publish_status",
+            "keywords", "search_keywords", "sale_price", "discount_price", "stock",
         ):
             fields.append(f"{shop}_{key}")
     return fields
@@ -208,6 +242,7 @@ def write_xlsx(
         "pack_id", "pack_uid", "pack_name", "shop", "title",
         "seller_sku", "tiktok_product_id", "tiktok_sku_id",
         "cover_path", "cover_url", "cover_public_url", "publish_status",
+        "keywords", "search_keywords", "sale_price", "discount_price", "stock",
     ]
     ws_long.append(long_fields)
     for cell in ws_long[1]:
@@ -241,6 +276,7 @@ def main() -> int:
         "pack_id", "pack_uid", "pack_name", "shop", "title",
         "seller_sku", "tiktok_product_id", "tiktok_sku_id",
         "cover_path", "cover_url", "cover_public_url", "publish_status",
+        "keywords", "search_keywords", "sale_price", "discount_price", "stock",
     ]
     with out_path.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=_wide_fieldnames(shops))

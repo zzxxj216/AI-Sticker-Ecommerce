@@ -12,7 +12,7 @@
       pack <a href="/v2/packs/{{ product.pack_id }}" style="color:var(--accent);">#{{ product.pack_id }}</a>
       · pack_uid <code>{{ product.pack_uid }}</code>
       {% if tkshop_shops|length > 1 %}
-      · 🏪 店铺 <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-weight:700;">{{ shop_label(product.shop or 'main') }}</span>
+      · 🏪 店铺 <span style="display:inline-block;padding:2px 8px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-weight:700;">{{ shop_label(product.shop or tkshop_default_shop) }}</span>
       {% endif %}
       · <span class="v2-status-pill {{ status_pill_cls(product.publish_status) }}">{{ status_label_zh(product.publish_status) }}</span>
       {% if product.tiktok_product_id %}· tiktok_id: <code>{{ product.tiktok_product_id }}</code>{% endif %}
@@ -283,7 +283,7 @@
         <button type="button" class="ai-gen-go" data-mode="main"
                 style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🖼 只生成主图</button>
         <button type="button" class="ai-gen-go" data-mode="secondary"
-                style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🎞 只生成附图</button>
+                style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🎞 追加 hand-hold 附图</button>
         <button type="button" class="ai-gen-go" data-mode="all" id="ai-gen-go"
                 style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 主图+附图</button>
       </div>
@@ -481,7 +481,7 @@
           b.disabled = false;
           const m = b.dataset.mode || 'all';
           b.textContent = m === 'main' ? '🖼 只生成主图'
-                         : m === 'secondary' ? '🎞 只生成附图'
+                         : m === 'secondary' ? '🎞 追加 hand-hold 附图'
                          : '🚀 主图+附图（重新）';
         });
       }

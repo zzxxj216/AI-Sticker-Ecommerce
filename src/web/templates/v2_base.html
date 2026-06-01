@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="V2 数据链工作台 — 热点 / 卡包 / 视频 / 产品" />
   <title>{{ page_title or 'V2 数据链工作台' }}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  {# System font stack in app.css — skip Google Fonts (blocks first paint on slow/blocked CDN). #}
   <link rel="stylesheet" href="/static/app.css" />
   <script src="/static/common.js" defer></script>
   <style>

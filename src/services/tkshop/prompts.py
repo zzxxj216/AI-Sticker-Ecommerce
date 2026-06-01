@@ -6,6 +6,8 @@ in the system prompt to prevent the model from drifting into Chinese.
 
 from __future__ import annotations
 
+import os
+
 
 DETAIL_MAIN_SYSTEM_PROMPT = (
     "You write product listings for an overseas TikTok Shop sticker brand. "
@@ -274,6 +276,7 @@ menu key you chose.
 # role_type enum — keep in sync with IMAGE_DESIGN_ROLE_MENU keys.
 IMAGE_DESIGN_ROLE_TYPES = [
     "hero", "lifestyle", "in_use", "flat_lay", "full_set", "packaging", "scene",
+    "hand_hold",
 ]
 
 # Fixed prompt for the main "bundle" hero — the operator-approved style: every
@@ -295,6 +298,74 @@ MAIN_BUNDLE_PROMPT = (
     "sheet or one enlarged sticker. Preserve the source artwork style, colors, "
     "text, and quantity impression; do not invent unrelated new designs."
 )
+
+# Secondary: hand holding one sticker, rest of pack as blurred pile background
+# (reference style: sharp foreground sticker + shallow-DoF sticker sea behind).
+SECONDARY_HAND_HOLD_BUNDLE_BELOW_PROMPT = (
+    "Photorealistic e-commerce product photo in one continuous frame — NOT a split "
+    "layout. A hand enters from the lower-left corner, thumb and index finger "
+    "pinching ONE die-cut vinyl sticker at the center of the frame in sharp focus. "
+    "The ENTIRE background behind the hand is filled with a dense overlapping pile "
+    "of many different stickers from the same pack, scattered and layered like a "
+    "flat-lay sticker collection, softly blurred with shallow depth of field so "
+    "the held sticker pops. Bright even studio daylight, clean marketplace "
+    "product-photography look. Show the die-cut white border on the held sticker. "
+    "No envelope, no gift packaging, no kraft sleeve, no plain white empty zone, "
+    "no text overlay. "
+    + IMAGE_DESIGN_FIDELITY_CLAUSE
+)
+
+
+def hand_hold_secondary_spec() -> dict[str, str]:
+    """Fixed 5th-gallery image: hand holding one sticker + blurred pile background."""
+    return {
+        "concept": "hand_hold_pile",
+        "image_prompt": SECONDARY_HAND_HOLD_BUNDLE_BELOW_PROMPT,
+        "role_type": "hand_hold",
+    }
+
+
+def fifth_image_style_is_hand_hold() -> bool:
+    """When true, the 5th gallery slot uses hand_hold instead of GPT append."""
+    return os.getenv("TKSHOP_FIFTH_IMAGE_STYLE", "hand_hold").strip().lower() != "gpt"
+
+APPEND_SECONDARY_EXTRACT_SCHEMA = {
+    "type": "object",
+    "required": ["secondary"],
+    "properties": {
+        "secondary": {
+            "type": "object",
+            "required": ["concept", "image_prompt", "role_type"],
+            "properties": {
+                "concept":      {"type": "string", "maxLength": 100},
+                "image_prompt": {"type": "string", "maxLength": 900},
+                "role_type":    {"type": "string", "enum": IMAGE_DESIGN_ROLE_TYPES},
+            },
+        },
+    },
+}
+
+APPEND_SECONDARY_INSTRUCTIONS = f"""
+You are adding exactly ONE new secondary product image to an existing gallery.
+The gallery's current images and their generation prompts are listed — the new
+image MUST use a clearly different role_type, scene, props, camera angle, and
+background from every existing image.
+
+Rules:
+- Do NOT repeat an angle already covered (lifestyle desk/laptop, in-use peeling,
+  full-set grid, white-background bundle, etc.).
+- If the main is a white-background bundle/hero, do NOT use flat_lay or
+  full_set for the new secondary — prefer packaging or scene.
+- Pick the role_type from the menu that is LEAST represented in the gallery.
+{IMAGE_DESIGN_ROLE_MENU}
+
+The image_prompt must:
+- Be 1-3 English sentences, < 320 characters (before the fidelity clause).
+- Specify camera angle + lighting + surface/background for a real-world scene.
+- End with exactly this sentence: "{IMAGE_DESIGN_FIDELITY_CLAUSE}"
+
+Output ONLY a JSON object with a single "secondary" spec; no prose, no fences.
+""".strip()
 
 IMAGE_DESIGN_EXTRACT_SCHEMA = {
     "type": "object",
@@ -339,6 +410,7 @@ def build_image_design_prompt(
     secondary_count: int = 3,
     language: str = "en",
     selected_sticker_subjects: list[str] | None = None,
+    existing_gallery: list[dict[str, str]] | None = None,
 ) -> str:
     sample_lines = "\n".join(f"- {b}" for b in sticker_briefs_sample[:12]) or "- (no brief)"
     preview_lines = "\n".join(f"- {p[:200]}" for p in preview_prompt_samples[:6]) or "- (no preview prompt)"
@@ -357,6 +429,24 @@ def build_image_design_prompt(
               "props, slightly oversaturated.",
     }
     locale_hint = lang_lookup.get(language.lower(), lang_lookup["en"])
+    existing_block = ""
+    if existing_gallery:
+        lines = []
+        for g in existing_gallery[:12]:
+            role = (g.get("role") or "?").strip()
+            hint = (g.get("hint") or g.get("ai_prompt") or "").strip()[:140]
+            if not hint:
+                hint = "(existing image)"
+            lines.append(f"- {role}: {hint}")
+        existing_block = (
+            "\n### Existing gallery images (DO NOT duplicate these angles/scenes)\n"
+            + "\n".join(lines)
+            + "\n\nNew secondary images MUST look clearly different from every image "
+            "above — different background, props, camera angle, and lighting. "
+            "If a white-background bundle/hero main already exists, do NOT use "
+            "role_type flat_lay or full_set for new secondaries; prefer lifestyle, "
+            "in_use, scene, or packaging.\n"
+        )
     return f"""Design product images for this sticker pack listing.
 
 ### Pack
@@ -376,7 +466,7 @@ def build_image_design_prompt(
 
 ### Existing preview prompts (used to render the stickers themselves)
 {preview_lines}
-
+{existing_block}
 ### Output (JSON only)
 Produce one "main" image spec (role_type "hero") and {secondary_count}
 "secondary" image specs, each with a "concept" label, an English
@@ -387,6 +477,63 @@ pack's ACTUAL die-cut stickers as the visual reference, so the prompts must
 describe the SCENE / STAGING / CAMERA / LIGHTING and insist the sticker
 artwork is preserved — never describe or redraw the sticker design itself.
 Choose supporting angles that genuinely fit this pack; vary them.
+"""
+
+
+def build_append_secondary_prompt(
+    *,
+    pack_display_name: str,
+    pack_archetype: str,
+    style_anchor: str,
+    palette: str,
+    total_stickers: int,
+    sticker_briefs_sample: list[str],
+    existing_gallery: list[dict[str, str]],
+    language: str = "en",
+) -> str:
+    """Ask GPT for one new secondary angle distinct from existing gallery prompts."""
+    sample_lines = "\n".join(f"- {b}" for b in sticker_briefs_sample[:8]) or "- (no brief)"
+    gallery_lines = []
+    for g in existing_gallery[:8]:
+        role = (g.get("role") or "?").strip()
+        prompt = (g.get("ai_prompt") or g.get("hint") or "").strip()
+        if not prompt:
+            prompt = "(no prompt recorded)"
+        gallery_lines.append(f"- **{role}**: {prompt[:500]}")
+    gallery_block = "\n".join(gallery_lines) or "- (empty gallery)"
+    lang_lookup = {
+        "en": "Western e-commerce aesthetic — clean studio, natural daylight.",
+        "zh": "Asian e-commerce aesthetic — soft pastel, paper textures.",
+        "ja": "Japanese kawaii aesthetic — pastel, soft shadows.",
+    }
+    locale_hint = lang_lookup.get(language.lower(), lang_lookup["en"])
+    return f"""Design ONE additional secondary product image for this sticker pack.
+
+The listing already has images (prompts below). Your job is to propose exactly
+one NEW supporting angle that looks clearly different — not a variation of
+what already exists.
+
+### Pack
+- name: **{pack_display_name}**
+- archetype: `{pack_archetype or 'general'}`
+- {total_stickers} unique die-cut waterproof vinyl stickers
+- palette: {palette or 'multi-color'}
+- visual style: {style_anchor[:400] if style_anchor else '(general)'}
+
+### Locale
+- code: `{language}` — {locale_hint}
+
+### Sample sticker subjects
+{sample_lines}
+
+### Existing gallery (DO NOT duplicate these)
+{gallery_block}
+
+### Output (JSON only)
+Return one "secondary" spec with concept, image_prompt, and role_type.
+The image_prompt describes SCENE / STAGING / CAMERA / LIGHTING only — the
+image model uses an actual die-cut sticker as reference, so never redraw
+the sticker artwork itself.
 """
 
 

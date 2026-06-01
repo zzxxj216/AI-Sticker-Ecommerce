@@ -95,7 +95,7 @@ templates.env.globals["video_status_pill_cls"] = video_status_pill_cls
 templates.env.globals["tkshop_shops"] = TKSHOP_SHOPS
 templates.env.globals["tkshop_default_shop"] = TKSHOP_DEFAULT_SHOP
 # Sidebar nav + every page that surfaces a shop name uses this label.
-# Keeps "main" in env (multi-channel-api key) but renders "inkelligentsticker".
+# Keeps legacy env keys (main) mapped to display names but uses canonical keys in DB.
 templates.env.globals["shop_label"] = get_shop_label
 templates.env.globals["tkshop_shop_labels"] = get_shop_labels_map()
 
@@ -112,6 +112,19 @@ def _open_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DEFAULT_DB_PATH), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _auto_design_mode_params(
+    *, mode: str, count: int, existing_images: int,
+) -> tuple[bool, int]:
+    """Map UI mode to auto_design_images replace/append parameters."""
+    mode_norm = (mode or "all").strip().lower()
+    replace_existing_ai = True
+    secondary_count = max(0, count - 1)
+    if mode_norm == "secondary" and existing_images >= 1:
+        replace_existing_ai = False
+        secondary_count = 1
+    return replace_existing_ai, secondary_count
 
 
 def _fmt_ts(ts: int | None) -> str:
@@ -4203,7 +4216,17 @@ async def v2_local_product_auto_design_sync(request: Request, local_product_id: 
     mode = (str(payload.get("mode") or "all")).strip().lower()
     if mode not in {"all", "main", "secondary"}:
         mode = "all"
-    secondary_count = max(0, count - 1)
+    conn = _open_db()
+    try:
+        existing_images = conn.execute(
+            "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+            (local_product_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    replace_existing_ai, secondary_count = _auto_design_mode_params(
+        mode=mode, count=count, existing_images=int(existing_images or 0),
+    )
     task_id = f"tkshop_auto_design_local:{local_product_id}"
     try:
         started = run_async(
@@ -4212,7 +4235,7 @@ async def v2_local_product_auto_design_sync(request: Request, local_product_id: 
             shop=shop,
             secondary_count=secondary_count,
             language=language,
-            replace_existing_ai=True,
+            replace_existing_ai=replace_existing_ai,
             size=size,
             mode=mode,
             label=f"AI 主图设计 (master #{local_product_id}, mode={mode}, {count} 张, {language}, {size})",
@@ -4810,14 +4833,24 @@ async def v2_product_auto_design_images_sync(request: Request, product_id: int):
     mode = (str(payload.get("mode") or "all")).strip().lower()
     if mode not in {"all", "main", "secondary"}:
         mode = "all"
-    secondary_count = max(0, count - 1)
+    conn = _open_db()
+    try:
+        existing_images = conn.execute(
+            "SELECT COUNT(*) FROM tkshop_product_images WHERE product_id = ?",
+            (product_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    replace_existing_ai, secondary_count = _auto_design_mode_params(
+        mode=mode, count=count, existing_images=int(existing_images or 0),
+    )
     task_id = f"tkshop_auto_design:{product_id}"
     started = run_async(
         task_id,
         _run_listing_auto_design_bg, product_id,
         secondary_count=secondary_count,
         language=language,
-        replace_existing_ai=True,
+        replace_existing_ai=replace_existing_ai,
         size=size,
         mode=mode,
         label=f"AI 主图设计 (product #{product_id}, mode={mode}, {count} 张, {language}, {size})",

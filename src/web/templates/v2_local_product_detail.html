@@ -241,7 +241,7 @@
       <button type="button" class="ai-gen-go" data-mode="main"
               style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🖼 只生成主图</button>
       <button type="button" class="ai-gen-go" data-mode="secondary"
-              style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🎞 只生成附图</button>
+              style="padding:8px 14px;background:var(--surface);color:var(--accent-dark);border:1px solid var(--accent-glow);border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🎞 追加 hand-hold 附图</button>
       <button type="button" class="ai-gen-go" data-mode="all" id="ai-gen-go"
               style="padding:8px 16px;background:linear-gradient(90deg,#8b5cf6,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;">🚀 主图+附图</button>
     </div>
@@ -309,7 +309,7 @@
           // to reconstruct each button's text instead of guessing.
           const m = b.dataset.mode || 'all';
           b.textContent = m === 'main' ? '🖼 只生成主图'
-                         : m === 'secondary' ? '🎞 只生成附图'
+                         : m === 'secondary' ? '🎞 追加 hand-hold 附图'
                          : '🚀 主图+附图（重新）';
         });
       }

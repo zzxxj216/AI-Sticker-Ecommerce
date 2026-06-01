@@ -134,7 +134,7 @@
           {% if p.images and p.images[0] %}{% set cover = p.images[0].thumb_url or p.images[0].url or '' %}{% endif %}
           {% if not cover and p.main_images and p.main_images[0] %}{% set cover = p.main_images[0].thumb_url or p.main_images[0].url or '' %}{% endif %}
           <tr style="border-top:1px solid var(--line-soft);">
-            <td>{% if cover %}<img src="{{ cover }}" class="product-cover" referrerpolicy="no-referrer">{% endif %}</td>
+            <td>{% if cover %}<img src="{{ cover }}" class="product-cover" width="48" height="48" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="">{% endif %}</td>
             <td class="product-title-cell">
               {% if local %}
                 <a href="/v2/products/{{ local.id }}" title="本地 #{{ local.id }}">{{ (p.title or p.product_name or '(no title)')[:80] }}</a>

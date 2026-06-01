@@ -259,7 +259,7 @@
             </td>
             <td>
               {% if p.pack_cover_url %}
-              <img src="{{ p.pack_cover_url }}" class="product-cover">
+              <img src="{{ p.pack_cover_url }}" class="product-cover" width="48" height="48" loading="lazy" decoding="async" alt="">
               {% endif %}
             </td>
             <td class="product-title-cell">
@@ -286,7 +286,7 @@
               <a href="/v2/products/{{ p.id }}">{{ (p.title or '（未生成）')[:80] }}</a>
               <div class="pack">
                 listing #{{ p.id }} · {{ p.pack_name or '—' }}
-                · <span style="display:inline-block;padding:1px 6px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-size:10px;font-weight:700;">🏪 {{ shop_label(p.shop or 'main') }}</span>
+                · <span style="display:inline-block;padding:1px 6px;border-radius:4px;background:var(--accent-bg);color:var(--accent-dark);font-size:10px;font-weight:700;">🏪 {{ shop_label(p.shop or tkshop_default_shop) }}</span>
               </div>
               {% endif %}
             </td>

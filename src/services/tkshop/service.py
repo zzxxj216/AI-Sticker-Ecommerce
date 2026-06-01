@@ -31,6 +31,8 @@ from src.core.logger import get_logger
 from src.services.ai.router import AIRouter, get_router
 from src.services.storage.pack_store import PackStore, get_pack_store
 from src.services.tkshop.prompts import (
+    APPEND_SECONDARY_EXTRACT_SCHEMA,
+    APPEND_SECONDARY_INSTRUCTIONS,
     DETAIL_EXTRACT_INSTRUCTIONS,
     DETAIL_EXTRACT_SCHEMA,
     DETAIL_MAIN_SYSTEM_PROMPT,
@@ -38,9 +40,13 @@ from src.services.tkshop.prompts import (
     IMAGE_DESIGN_INSTRUCTIONS,
     IMAGE_DESIGN_SYSTEM_PROMPT,
     MAIN_BUNDLE_PROMPT,
+    SECONDARY_HAND_HOLD_BUNDLE_BELOW_PROMPT,
     SELF_HEAL_EXTRACT_SCHEMA,
     SELF_HEAL_INSTRUCTIONS,
     SELF_HEAL_SYSTEM_PROMPT,
+    build_append_secondary_prompt,
+    fifth_image_style_is_hand_hold,
+    hand_hold_secondary_spec,
     build_detail_main_prompt,
     build_image_design_prompt,
     build_self_heal_prompt,
@@ -82,6 +88,57 @@ def status_label_zh(status: str) -> str:
 def status_pill_cls(status: str) -> str:
     return STATUS_LABELS_ZH.get(status or "", ("", "pending"))[1]
 
+
+def _format_search_keywords(keywords: list[str]) -> str:
+    """TikTok Seller Center「后台关键词」— comma-separated, no hashtags."""
+    parts = [k.strip().lstrip("#") for k in keywords if (k or "").strip()]
+    return ", ".join(parts)[:500]
+
+
+def _sku_meta_from_platform_data(data: dict) -> dict[str, Any]:
+    """Extract price/stock from multi-channel-api product GET payload."""
+    skus = data.get("skus") or []
+    sku = skus[0] if skus else {}
+    price_obj = sku.get("price") or {}
+    sale = str(
+        price_obj.get("sale_price") or price_obj.get("amount") or ""
+    ).strip()
+    currency = str(price_obj.get("currency") or "USD").strip()
+    inv = sku.get("inventory") or []
+    stock = inv[0].get("quantity") if inv else None
+    # Promotional / strikethrough price when TikTok exposes it.
+    discount = str(
+        price_obj.get("original_price")
+        or price_obj.get("list_price")
+        or ""
+    ).strip()
+    return {
+        "sale_price": sale,
+        "discount_price": discount,
+        "currency": currency,
+        "stock": stock,
+    }
+
+
+def _price_from_default_template(raw: str) -> tuple[str, str]:
+    """Best-effort read sale/discount price from default_template_json."""
+    try:
+        tpl = json.loads(raw or "{}")
+    except Exception:
+        return "", ""
+    if not isinstance(tpl, dict):
+        return "", ""
+    skus = tpl.get("skus") or []
+    sku = skus[0] if skus else tpl
+    price = sku.get("price") if isinstance(sku, dict) else {}
+    if not isinstance(price, dict):
+        price = tpl.get("price") if isinstance(tpl.get("price"), dict) else {}
+    sale = str(price.get("amount") or price.get("sale_price") or "").strip()
+    discount = str(
+        price.get("original_price") or price.get("list_price") or ""
+    ).strip()
+    return sale, discount
+
 # multi-channel-api FastAPI service. Defaults to localhost:8000 because
 # both processes run on the same box during development.
 TKSHOP_SERVER_URL = os.getenv("TKSHOP_SERVER_URL", "http://localhost:8000")
@@ -97,11 +154,20 @@ TKSHOP_IMAGE_PUBLIC_BASE = os.getenv(
 ).rstrip("/")
 
 # Multi-shop support (matches multi-channel-api's TIKTOK_SHOPS_JSON registry).
-# Comma-separated list of shop names; the first one is the default for new
-# rows and UI dropdown selection. The wrapper falls back to its single-shop
-# .env when shop="main" is not present in TIKTOK_SHOPS_JSON.
-TKSHOP_SHOPS = [s.strip() for s in (os.getenv("TKSHOP_SHOPS") or "main").split(",") if s.strip()]
-TKSHOP_DEFAULT_SHOP = TKSHOP_SHOPS[0] if TKSHOP_SHOPS else "main"
+# Comma-separated canonical shop names; the first one is the default for new
+# rows and UI dropdown selection.
+TKSHOP_SHOPS = [
+    s.strip()
+    for s in (
+        os.getenv("TKSHOP_SHOPS") or "inkelligentsticker,inkelligentstudio"
+    ).split(",")
+    if s.strip()
+]
+# Default commerce fields for export / operator spreadsheets (TikTok Seller
+# Center bulk edit). Live listings override sale_price/stock via platform GET.
+TKSHOP_DEFAULT_SALE_PRICE = os.getenv("TKSHOP_DEFAULT_SALE_PRICE", "16.99")
+TKSHOP_DEFAULT_DISCOUNT_PRICE = (os.getenv("TKSHOP_DEFAULT_DISCOUNT_PRICE") or "").strip()
+TKSHOP_DEFAULT_QUANTITY = os.getenv("TKSHOP_DEFAULT_QUANTITY", "100")
 
 # Auto discount: after a successful publish, ask the middle layer to put the
 # product on a N% discount. 0 (or negative) disables it. Default 40 per the
@@ -160,9 +226,12 @@ def get_shop_sku_prefix(shop: str) -> str:
     index in ``TKSHOP_SHOPS`` (1-based, so the first shop → ``INK1``) →
     fallback ``INK`` for unknown shops.
     """
-    s = (shop or "").strip() or TKSHOP_DEFAULT_SHOP
+    s = canonical_shop_key(shop or TKSHOP_DEFAULT_SHOP)
     if s in _TKSHOP_SKU_PREFIX_OVERRIDES:
         return _TKSHOP_SKU_PREFIX_OVERRIDES[s]
+    legacy = (shop or "").strip()
+    if legacy in _TKSHOP_SKU_PREFIX_OVERRIDES:
+        return _TKSHOP_SKU_PREFIX_OVERRIDES[legacy]
     try:
         idx = TKSHOP_SHOPS.index(s) + 1
         return f"INK{idx}"
@@ -192,23 +261,50 @@ _TKSHOP_SHOP_LABEL_OVERRIDES = _parse_shop_labels(
 
 
 # ---------------------------------------------------------------------------
-# Shop registry — internal keys vs UI labels
+# Shop registry — canonical keys vs legacy aliases vs UI labels
 # ---------------------------------------------------------------------------
-# Internal ``shop`` values in tkshop_products / multi-channel-api must match
-# TIKTOK_SHOPS_JSON keys. The UI never shows raw keys like ``main`` or
-# ``second`` — always use ``get_shop_label()`` / ``shop_label`` in templates.
-#
-#   2店  inkelligentsticker  ← DB key ``main`` (SKU prefix INK / INK1)
-#   3店  inkelligentstudio   ← DB key ``inkelligentstudio`` (SKU prefix INK2)
-#   3店  inkelligentstudio   ← legacy DB key ``second`` (old registry name)
+# Canonical DB / env keys:
+#   inkelligentsticker  → 2店 · inkelligentsticker (SKU prefix INK / INK1)
+#   inkelligentstudio   → 3店 · inkelligentstudio  (SKU prefix INK2)
+# Legacy keys (read-only alias, never write new rows):
+#   main   → inkelligentsticker
+#   second → inkelligentstudio
 # ---------------------------------------------------------------------------
+
+_LEGACY_SHOP_ALIASES: dict[str, str] = {
+    "main": "inkelligentsticker",
+    "second": "inkelligentstudio",
+}
+
+
+def canonical_shop_key(shop: str) -> str:
+    """Normalize legacy registry keys to the canonical shop name."""
+    s = (shop or "").strip()
+    if not s:
+        return "inkelligentsticker"
+    return _LEGACY_SHOP_ALIASES.get(s, s)
+
+
+def normalize_tkshop_shop_list(shops: list[str]) -> list[str]:
+    """Dedupe after canonicalizing legacy keys."""
+    out: list[str] = []
+    for raw in shops:
+        key = canonical_shop_key(raw)
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
+TKSHOP_SHOPS = normalize_tkshop_shop_list(TKSHOP_SHOPS)
+TKSHOP_DEFAULT_SHOP = TKSHOP_SHOPS[0] if TKSHOP_SHOPS else "inkelligentsticker"
 
 _SHOP_UI_LABELS: dict[str, tuple[str, str]] = {
     # (店号, 店铺名)
-    "main": ("2店", "inkelligentsticker"),
     "inkelligentsticker": ("2店", "inkelligentsticker"),
     "inkelligentstudio": ("3店", "inkelligentstudio"),
-    "second": ("3店", "inkelligentstudio"),  # legacy key → same store as studio
+    # Legacy read-only aliases — same stores, never shown in UI as raw keys.
+    "main": ("2店", "inkelligentsticker"),
+    "second": ("3店", "inkelligentstudio"),
 }
 
 
@@ -247,7 +343,7 @@ def get_shop_number(shop: str) -> str:
 
 def is_legacy_shop_key(shop: str) -> bool:
     """True for registry keys that should not appear as new listing targets."""
-    return (shop or "").strip() in {"second"}
+    return (shop or "").strip() in _LEGACY_SHOP_ALIASES
 
 
 def get_shop_labels_map() -> dict[str, str]:
@@ -276,7 +372,7 @@ def _get_product_shop(db_path: Path, product_id: int) -> str:
         ).fetchone()
     if not row:
         return TKSHOP_DEFAULT_SHOP
-    return (row["shop"] or "").strip() or TKSHOP_DEFAULT_SHOP
+    return canonical_shop_key(row["shop"] or TKSHOP_DEFAULT_SHOP)
 
 # Self-heal toggles
 TKSHOP_PUBLISH_AUTO_FIX_DEFAULT = (
@@ -539,6 +635,27 @@ def _local_path_to_public_url(local_path: str) -> str:
         return ""
     rel = p[idx + len(marker):]
     return f"{TKSHOP_IMAGE_PUBLIC_BASE}/v2-outputs/{rel}"
+
+
+def _stage_path_for_mca(local_path: str) -> str:
+    """Copy to a no-space temp path so mca can read via image_paths (not URL)."""
+    import hashlib
+    import shutil
+    import tempfile
+
+    abs_path = local_path if os.path.isabs(local_path) else os.path.abspath(local_path)
+    if not os.path.isfile(abs_path) or not abs_path.isascii():
+        return ""
+    if " " not in abs_path:
+        return abs_path
+    digest = hashlib.md5(abs_path.encode()).hexdigest()[:12]
+    ext = os.path.splitext(abs_path)[1] or ".png"
+    stage_root = os.path.join(tempfile.gettempdir(), "tkshop_push_staging")
+    os.makedirs(stage_root, exist_ok=True)
+    staged = os.path.join(stage_root, f"{digest}{ext}")
+    if not os.path.isfile(staged) or os.path.getmtime(staged) < os.path.getmtime(abs_path):
+        shutil.copy2(abs_path, staged)
+    return staged
 
 
 class TKShopService:
@@ -1410,6 +1527,7 @@ class TKShopService:
         secondary_count: int = 3,
         language: str = "en",
         model: Optional[str] = None,
+        existing_gallery: Optional[list[dict[str, str]]] = None,
     ) -> dict[str, Any]:
         """Run gpt-5.4 (or override) on the design context to produce a
         structured ``{main, secondary[]}`` image-prompt spec.
@@ -1426,6 +1544,7 @@ class TKShopService:
             secondary_count=secondary_count,
             language=language,
             selected_sticker_subjects=ctx.get("selected_sticker_subjects") or [],
+            existing_gallery=existing_gallery,
         )
         chosen_model = model or os.getenv("TKSHOP_IMAGE_DESIGN_MODEL", "gpt-5.4")
         main_text = self.router.text_complete(
@@ -1453,10 +1572,200 @@ class TKShopService:
             "raw": main_text,
         }
 
+    def synthesize_append_secondary_spec(
+        self,
+        product_id: int,
+        *,
+        existing_gallery: list[dict[str, str]],
+        language: str = "en",
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """GPT: one new secondary spec that differs from existing gallery prompts."""
+        ctx = self.collect_pack_design_context(product_id)
+        prompt = build_append_secondary_prompt(
+            pack_display_name=ctx["display_name"],
+            pack_archetype=ctx["pack_archetype"],
+            style_anchor=ctx["style_anchor"],
+            palette=ctx["palette"],
+            total_stickers=ctx["total_stickers"],
+            sticker_briefs_sample=ctx["briefs_sample"],
+            existing_gallery=existing_gallery,
+            language=language,
+        )
+        chosen_model = model or os.getenv("TKSHOP_IMAGE_DESIGN_MODEL", "gpt-5.4")
+        main_text = self.router.text_complete(
+            prompt,
+            model=chosen_model,
+            system=IMAGE_DESIGN_SYSTEM_PROMPT,
+            temperature=0.7,
+            task="tkshop_image_design:append_secondary",
+            related_table="tkshop_products",
+            related_id=product_id,
+        )
+        spec = self.router.extract_json(
+            main_text,
+            schema=APPEND_SECONDARY_EXTRACT_SCHEMA,
+            instructions=APPEND_SECONDARY_INSTRUCTIONS,
+            model=chosen_model,
+            max_retries=1,
+            task="tkshop_image_design:append_extract",
+            related_table="tkshop_products",
+            related_id=product_id,
+        )
+        return {"spec": spec, "context": ctx, "raw": main_text}
+
+    def _collect_master_gallery_for_design(
+        self, product_id: int,
+    ) -> tuple[list[dict[str, str]], list[int], bool]:
+        """Gallery prompts + aHash fingerprints for dedup (master preferred)."""
+        from src.utils.image_utils import average_hash
+
+        asset_root = self.db_path.resolve().parent.parent
+        prompt_rows: list[dict[str, str]] = []
+        hashes: list[int] = []
+        has_main = False
+        seen_paths: set[str] = set()
+        with _open_db(self.db_path) as conn:
+            lp_row = conn.execute(
+                "SELECT local_product_id FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+            lp_id = lp_row["local_product_id"] if lp_row else None
+            if lp_id:
+                rows = conn.execute(
+                    """
+                    SELECT role, local_path, ai_prompt, sort_order
+                      FROM local_product_images
+                     WHERE local_product_id = ?
+                     ORDER BY CASE role WHEN 'main' THEN 0 ELSE 1 END,
+                              sort_order, id
+                    """,
+                    (lp_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT role, local_path, ai_prompt, sort_order
+                      FROM tkshop_product_images
+                     WHERE product_id = ?
+                     ORDER BY CASE role WHEN 'main' THEN 0 ELSE 1 END,
+                              sort_order, id
+                    """,
+                    (product_id,),
+                ).fetchall()
+        for r in rows:
+            role = (r["role"] or "secondary").strip()
+            if role == "main":
+                has_main = True
+            ai_prompt = (r["ai_prompt"] or "").strip()
+            prompt_rows.append({
+                "role": role,
+                "ai_prompt": ai_prompt,
+                "hint": ai_prompt[:200],
+            })
+            p = _resolve_disk_path(r["local_path"] or "", root=asset_root)
+            if not p.is_file():
+                continue
+            key = p.as_posix()
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            try:
+                hashes.append(average_hash(p.read_bytes()))
+            except Exception:
+                continue
+        return prompt_rows, hashes, has_main
+
+    @staticmethod
+    def _infer_role_from_prompt(prompt: str, role: str = "") -> str:
+        p = (prompt or "").lower()
+        if role == "main" or (
+            "main image" in p
+            or ("bundle" in p and "white background" in p)
+            or p.startswith("studio e-commerce main image")
+        ):
+            return "hero"
+        if "packaging" in p or "gift box" in p or "glassine" in p or "envelope" in p:
+            return "packaging"
+        if any(k in p for k in ("full-set", "full set", "whole sticker set", "tidy grid", "whole set")):
+            return "full_set"
+        if any(k in p for k in ("peeling", "in-use", "in use", "backing", "pressed onto")):
+            return "in_use"
+        if "flat lay" in p or "flat_lay" in p:
+            return "flat_lay"
+        if "scene" in p or "still-life" in p or "still life" in p:
+            return "scene"
+        return "lifestyle"
+
+    def _pick_unused_secondary_role(
+        self, existing_gallery: list[dict[str, str]], *, gallery_has_main: bool,
+    ) -> str:
+        used = {
+            self._infer_role_from_prompt(
+                g.get("ai_prompt") or g.get("hint") or "", g.get("role") or "",
+            )
+            for g in existing_gallery
+        }
+        preference = ["packaging", "scene", "lifestyle", "in_use", "flat_lay", "full_set"]
+        if gallery_has_main:
+            preference = ["packaging", "scene", "lifestyle", "in_use"]
+        for rt in preference:
+            if rt not in used:
+                return rt
+        return "packaging"
+
+    def _ensure_diverse_secondary(
+        self,
+        sec: dict[str, Any],
+        existing_gallery: list[dict[str, str]],
+        *,
+        gallery_has_main: bool,
+    ) -> dict[str, Any]:
+        """Remap variety/bundle angles when gallery already covers them."""
+        out = dict(sec)
+        rt = (out.get("role_type") or "lifestyle").strip().lower()
+        if rt == "hand_hold":
+            return out
+        used = {
+            self._infer_role_from_prompt(
+                g.get("ai_prompt") or g.get("hint") or "", g.get("role") or "",
+            )
+            for g in existing_gallery
+        }
+        if gallery_has_main and rt in self._VARIETY_ROLE_TYPES:
+            rt = self._pick_unused_secondary_role(
+                existing_gallery, gallery_has_main=True,
+            )
+            out["role_type"] = rt
+        elif rt in used:
+            rt = self._pick_unused_secondary_role(
+                existing_gallery, gallery_has_main=gallery_has_main,
+            )
+            out["role_type"] = rt
+        return out
+
     # Secondary angles that show the whole set benefit from a full SHEET as
     # the image-to-image reference; single-subject angles stage one clean
     # die-cut sticker better. role_type keys come from tkshop.prompts.
-    _VARIETY_ROLE_TYPES = {"hero", "flat_lay", "full_set"}
+    _VARIETY_ROLE_TYPES = {"hero", "flat_lay", "full_set", "hand_hold"}
+
+    @staticmethod
+    def _inject_hand_hold_fifth_secondary(
+        spec: dict[str, Any], secondary_count: int,
+    ) -> None:
+        """Last secondary in the batch becomes the fixed hand-hold 5th gallery image."""
+        if secondary_count < 1:
+            return
+        hh = hand_hold_secondary_spec()
+        secs = spec.get("secondary")
+        if not isinstance(secs, list):
+            spec["secondary"] = [hh]
+            return
+        padded = list(secs[:secondary_count])
+        while len(padded) < secondary_count:
+            padded.append({})
+        padded[secondary_count - 1] = hh
+        spec["secondary"] = padded
 
     def auto_design_images(
         self,
@@ -1500,11 +1809,62 @@ class TKShopService:
             compress_image_bytes_for_api,
         )
 
-        synth = self.synthesize_image_specs(
-            product_id, secondary_count=secondary_count, language=language,
+        gallery_prompts, gallery_hashes, gallery_has_main = (
+            self._collect_master_gallery_for_design(product_id)
         )
-        spec = synth["spec"]
-        ctx = synth["context"]
+        gallery_threshold = int(os.getenv("TKSHOP_IMAGE_GALLERY_AHASH_DIST", "12"))
+        qa_max_attempts = max(2, int(os.getenv("TKSHOP_IMAGE_QA_MAX_ATTEMPTS", "3")))
+
+        mode_norm_early = (mode or "all").strip().lower()
+        append_secondary = (
+            mode_norm_early in {"all", "secondary"}
+            and not replace_existing_ai
+            and bool(gallery_prompts)
+            and secondary_count == 1
+        )
+        use_hand_hold_fifth = fifth_image_style_is_hand_hold()
+        if append_secondary and use_hand_hold_fifth:
+            ctx = self.collect_pack_design_context(product_id)
+            spec = {"main": {}, "secondary": [hand_hold_secondary_spec()]}
+            synth = {"context": ctx, "spec": spec}
+        elif append_secondary:
+            synth = self.synthesize_append_secondary_spec(
+                product_id,
+                existing_gallery=gallery_prompts,
+                language=language,
+            )
+            sec_raw = synth["spec"].get("secondary") or {}
+            if not isinstance(sec_raw, dict):
+                raise ValueError("append secondary spec missing secondary object")
+            sec = self._ensure_diverse_secondary(
+                sec_raw, gallery_prompts, gallery_has_main=gallery_has_main,
+            )
+            spec = {"main": {}, "secondary": [sec]}
+            ctx = synth["context"]
+        else:
+            synth = self.synthesize_image_specs(
+                product_id,
+                secondary_count=secondary_count,
+                language=language,
+                existing_gallery=gallery_prompts or None,
+            )
+            spec = dict(synth["spec"])
+            ctx = synth["context"]
+            if (
+                use_hand_hold_fifth
+                and mode_norm_early in {"all", "secondary"}
+                and secondary_count >= 1
+                and isinstance(spec.get("secondary"), list)
+            ):
+                self._inject_hand_hold_fifth_secondary(spec, secondary_count)
+            if gallery_prompts and isinstance(spec.get("secondary"), list):
+                spec["secondary"] = [
+                    self._ensure_diverse_secondary(
+                        s, gallery_prompts, gallery_has_main=gallery_has_main,
+                    )
+                    if isinstance(s, dict) else s
+                    for s in spec["secondary"][:secondary_count]
+                ]
 
         asset_root = self.db_path.resolve().parent.parent
 
@@ -1675,12 +2035,39 @@ class TKShopService:
         # Bytes + aHash cache per reference path (read once, reused across calls).
         _ref_cache: dict[str, tuple[bytes, int]] = {}
 
-        def _ref_for(role_type: str, idx: int) -> tuple[str, bytes, int, bool]:
+        def _ref_for(
+            role_type: str, idx: int, *, slot_role: str = "secondary",
+        ) -> tuple[str, bytes, int, bool]:
             """Pick a reference for a concept. Returns (label, bytes, ahash,
             is_merged). Variety angles use the merged grid; single-subject
-            angles rotate through individual split stickers.
+            angles rotate through individual split stickers. When the gallery
+            already has a bundle main, new secondaries prefer single stickers
+            even for flat_lay/full_set so outputs look distinct.
             """
             rt = (role_type or "hero").strip().lower()
+            if rt == "hand_hold":
+                return (
+                    secondary_bundle_ref_label,
+                    secondary_merged_ref_bytes,
+                    secondary_merged_ref_hash,
+                    True,
+                )
+            prefer_single = bool(sticker_paths) and (
+                rt not in self._VARIETY_ROLE_TYPES
+                or (
+                    slot_role == "secondary"
+                    and gallery_has_main
+                    and rt in self._VARIETY_ROLE_TYPES
+                )
+            )
+            if prefer_single:
+                pick = sticker_paths[idx % len(sticker_paths)]
+                key = pick.as_posix()
+                if key not in _ref_cache:
+                    b = pick.read_bytes()
+                    _ref_cache[key] = (b, average_hash(b))
+                b, h = _ref_cache[key]
+                return key, b, h, False
             if rt in self._VARIETY_ROLE_TYPES or not sticker_paths:
                 if external_overview_paths and rt != "hero":
                     return (
@@ -1771,6 +2158,8 @@ class TKShopService:
             want: Optional[tuple[int, int]],
             check_noop: bool,
             single_source_guard: bool = False,
+            *,
+            slot_role: str = "secondary",
         ) -> Optional[str]:
             """Return None if the output passes QA, else a short reason.
 
@@ -1787,6 +2176,10 @@ class TKShopService:
             out_hash = average_hash(out_bytes)
             if check_noop and hash_distance(out_hash, ref_hash) <= noop_threshold:
                 return "near-identical to reference (no-op edit)"
+            if slot_role != "main" and gallery_hashes:
+                closest = min(hash_distance(out_hash, gh) for gh in gallery_hashes)
+                if closest <= gallery_threshold:
+                    return f"too similar to existing gallery (dist={closest})"
             if single_source_guard and single_source_hashes:
                 closest_label = ""
                 closest_dist = 999
@@ -1809,13 +2202,20 @@ class TKShopService:
             role_type = (c.get("role_type") or ("hero" if role == "main" else "")).strip()
             # The main/hero is the operator-approved white-bg bundle: use the
             # fixed bundle prompt over the merged grid, not the model's free-form
-            # scene prompt. Secondary angles keep their model-authored prompts.
-            base_prompt = MAIN_BUNDLE_PROMPT if role == "main" else (c.get("image_prompt") or "").strip()
+            # scene prompt. hand_hold uses a fixed pile-background prompt.
+            if role == "main":
+                base_prompt = MAIN_BUNDLE_PROMPT
+            elif role_type.lower() == "hand_hold":
+                base_prompt = SECONDARY_HAND_HOLD_BUNDLE_BELOW_PROMPT
+            else:
+                base_prompt = (c.get("image_prompt") or "").strip()
             if not base_prompt:
                 return {"idx": idx, "role": role, "ok": False,
                         "error": "empty image_prompt", "concept": concept_label}
 
-            ref_label, ref_bytes, ref_hash, is_merged = _ref_for(role_type, idx)
+            ref_label, ref_bytes, ref_hash, is_merged = _ref_for(
+                role_type, idx, slot_role=role,
+            )
             this_size = main_size if role == "main" else size
             this_quality = main_quality if role == "main" else secondary_quality
             want = _expected_wh(this_size)
@@ -1848,7 +2248,7 @@ class TKShopService:
                         "image_prompt": base_prompt,
                     }
 
-            attempts = 2  # initial + one retry on QA failure
+            attempts = qa_max_attempts
             last_reason = ""
             for attempt in range(1, attempts + 1):
                 prompt = base_prompt
@@ -1856,7 +2256,16 @@ class TKShopService:
                 # scene (their failure mode is a no-op echo of the sticker). For
                 # merged bundles, retry by emphasizing multi-source coverage.
                 if attempt > 1:
-                    if is_merged:
+                    if "gallery" in last_reason or "similar" in last_reason:
+                        prompt = (
+                            base_prompt
+                            + " IMPORTANT: The previous output looked too similar "
+                            "to an existing listing photo. Use a COMPLETELY different "
+                            "real-world scene — new props, surface, camera angle, "
+                            "and lighting (e.g. gift packaging, themed still-life, "
+                            "outdoor table) — not another white-background product pile."
+                        )
+                    elif is_merged:
                         prompt = (
                             base_prompt
                             + " IMPORTANT: the previous attempt used too little of "
@@ -1898,6 +2307,7 @@ class TKShopService:
                     out_bytes, ref_hash, want,
                     check_noop=not is_merged,
                     single_source_guard=(role == "main" and is_merged),
+                    slot_role=role,
                 )
                 if reason is None:
                     tmp = tmpdir / f"ai_{role}_{idx}_{int(time.time()*1000)}.png"
@@ -2004,10 +2414,21 @@ class TKShopService:
                 pass
 
         generated_ok_roles = {r["role"] for r in results if r.get("ok")}
+        new_image_ids = [
+            int(r["image_id"]) for r in results
+            if r.get("ok") and r.get("image_id")
+        ]
         if generated_ok_roles:
-            self.mirror_listing_ai_to_local_master(
-                product_id, roles=generated_ok_roles,
-            )
+            if append_secondary:
+                self.mirror_listing_ai_to_local_master(
+                    product_id,
+                    append_only=True,
+                    image_ids=new_image_ids or None,
+                )
+            else:
+                self.mirror_listing_ai_to_local_master(
+                    product_id, roles=generated_ok_roles,
+                )
 
         return {
             "product_id": product_id,
@@ -2780,12 +3201,13 @@ class TKShopService:
             # and it does not fall back to image_urls. Letting the wrapper
             # download via URL works for Unicode paths.
             abs_path = local if os.path.isabs(local) else os.path.abspath(local)
-            if os.path.isfile(abs_path) and abs_path.isascii():
-                image_paths.append(abs_path)
+            staged = _stage_path_for_mca(abs_path)
+            if staged and os.path.isfile(staged):
+                image_paths.append(staged)
 
         # Quantity: ship 100 per SKU by default. Operator can tune via
         # TKSHOP_DEFAULT_QUANTITY without touching code.
-        quantity = int(os.getenv("TKSHOP_DEFAULT_QUANTITY", "100"))
+        quantity = int(TKSHOP_DEFAULT_QUANTITY)
 
         seller_sku = pr["seller_sku"] or ""
         if not seller_sku:
@@ -3369,12 +3791,18 @@ class TKShopService:
         listing_id: int,
         *,
         roles: Optional[set[str]] = None,
+        append_only: bool = False,
+        image_ids: Optional[list[int]] = None,
     ) -> int:
         """Copy listing AI images into ``local_product_images``.
 
         When ``roles`` is omitted, sync every AI row on the listing (full
         repair). Otherwise only replace the given roles (``main`` /
         ``secondary``) before inserting the listing's AI rows.
+
+        When ``append_only`` is True, existing master rows are kept and only
+        the selected listing image rows are inserted (used for +1 append).
+
         Returns the number of rows inserted into the master gallery.
         """
         with _open_db(self.db_path) as conn:
@@ -3385,6 +3813,42 @@ class TKShopService:
             if not lp_id_row or lp_id_row["local_product_id"] is None:
                 return 0
             lp_id = int(lp_id_row["local_product_id"])
+            if append_only:
+                query = """
+                    SELECT role, source, local_path, sort_order, ai_prompt, created_at
+                      FROM tkshop_product_images
+                     WHERE product_id = ? AND source = 'ai'
+                """
+                params: list[Any] = [listing_id]
+                if image_ids:
+                    placeholders = ",".join("?" * len(image_ids))
+                    query += f" AND id IN ({placeholders})"
+                    params.extend(int(i) for i in image_ids)
+                rows = conn.execute(query, tuple(params)).fetchall()
+                inserted = 0
+                for r in rows:
+                    conn.execute(
+                        """
+                        INSERT INTO local_product_images
+                            (local_product_id, role, source, local_path,
+                             sort_order, ai_prompt, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            lp_id, r["role"], r["source"], r["local_path"],
+                            r["sort_order"], r["ai_prompt"], r["created_at"],
+                        ),
+                    )
+                    inserted += 1
+                if inserted and any(r["role"] == "main" for r in rows):
+                    self._sync_pack_cover_from_listing_main(listing_id, conn=conn)
+                if inserted:
+                    conn.execute(
+                        "UPDATE local_products SET updated_at = ? WHERE id = ?",
+                        (int(time.time()), lp_id),
+                    )
+                conn.commit()
+                return inserted
             sync_roles = roles
             if sync_roles is None:
                 sync_roles = {
@@ -3514,6 +3978,804 @@ class TKShopService:
             )
             conn.commit()
             return cur.rowcount
+
+    def pad_master_gallery_to_target(
+        self, local_product_id: int, *, target_total: int = 5,
+    ) -> int:
+        """Pad the master gallery to ``target_total`` by duplicating existing
+        secondary images (no AI). Returns rows inserted."""
+        target_total = max(2, int(target_total))
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, role, local_path, sort_order, ai_prompt
+                  FROM local_product_images
+                 WHERE local_product_id = ?
+                 ORDER BY role = 'main' DESC, sort_order ASC, id ASC
+                """,
+                (local_product_id,),
+            ).fetchall()
+            if len(rows) >= target_total:
+                return 0
+            secondaries = [
+                r for r in rows
+                if r["role"] == "secondary" and (r["local_path"] or "").strip()
+            ]
+            if not secondaries:
+                raise ValueError(
+                    f"local_product #{local_product_id} has no secondary image to duplicate"
+                )
+            now = int(time.time())
+            max_sort = max(int(r["sort_order"] or 0) for r in rows)
+            added = 0
+            idx = 0
+            while len(rows) + added < target_total:
+                src = secondaries[idx % len(secondaries)]
+                max_sort += 1
+                conn.execute(
+                    """
+                    INSERT INTO local_product_images
+                        (local_product_id, role, source, local_path,
+                         sort_order, ai_prompt, created_at)
+                    VALUES (?, 'secondary', 'duplicate', ?, ?, ?, ?)
+                    """,
+                    (
+                        local_product_id,
+                        src["local_path"],
+                        max_sort,
+                        src["ai_prompt"] or "",
+                        now,
+                    ),
+                )
+                added += 1
+                idx += 1
+            if added:
+                conn.execute(
+                    "UPDATE local_products SET updated_at = ? WHERE id = ?",
+                    (now, local_product_id),
+                )
+                conn.commit()
+            return added
+
+    def remove_duplicate_gallery_rows(
+        self, local_product_ids: Optional[list[int]] = None,
+    ) -> dict[str, int]:
+        """Drop ``source='duplicate'`` rows from master + listing galleries.
+
+        Does not unlink files on disk — duplicate rows point at the same
+        ``local_path`` as the originals they were copied from.
+        """
+        lp_ids = [int(x) for x in (local_product_ids or []) if int(x) > 0]
+        with _open_db(self.db_path) as conn:
+            if lp_ids:
+                ph = ",".join("?" * len(lp_ids))
+                master_rows = conn.execute(
+                    f"""
+                    SELECT id FROM local_product_images
+                     WHERE source = 'duplicate' AND local_product_id IN ({ph})
+                    """,
+                    tuple(lp_ids),
+                ).fetchall()
+                listing_rows = conn.execute(
+                    f"""
+                    SELECT ti.id FROM tkshop_product_images ti
+                      JOIN tkshop_products t ON t.id = ti.product_id
+                     WHERE ti.source = 'duplicate' AND t.local_product_id IN ({ph})
+                    """,
+                    tuple(lp_ids),
+                ).fetchall()
+            else:
+                master_rows = conn.execute(
+                    "SELECT id FROM local_product_images WHERE source = 'duplicate'",
+                ).fetchall()
+                listing_rows = conn.execute(
+                    "SELECT id FROM tkshop_product_images WHERE source = 'duplicate'",
+                ).fetchall()
+            for row in master_rows:
+                conn.execute(
+                    "DELETE FROM local_product_images WHERE id = ?", (row["id"],),
+                )
+            for row in listing_rows:
+                conn.execute(
+                    "DELETE FROM tkshop_product_images WHERE id = ?", (row["id"],),
+                )
+            if lp_ids:
+                now = int(time.time())
+                for lp_id in lp_ids:
+                    conn.execute(
+                        "UPDATE local_products SET updated_at = ? WHERE id = ?",
+                        (now, lp_id),
+                    )
+            conn.commit()
+        return {
+            "deleted_master": len(master_rows),
+            "deleted_listing": len(listing_rows),
+        }
+
+    @staticmethod
+    def _is_packaging_secondary_prompt(prompt: str) -> bool:
+        p = (prompt or "").lower()
+        return any(k in p for k in (
+            "envelope", "glassine", "kraft sleeve", "kraft paper sl",
+            "pack partly", "pack half", "partially tucked", "partly tucked",
+            "packaging photo", "glassine sleeve", "kraft pouch",
+        ))
+
+    def _merged_reference_bytes_for_product(
+        self, product_id: int, ctx: Optional[dict[str, Any]] = None,
+    ) -> tuple[bytes, str]:
+        from src.utils.image_utils import compose_reference_grid, compress_image_bytes_for_api
+
+        ctx = ctx or self.collect_pack_design_context(product_id)
+        asset_root = self.db_path.resolve().parent.parent
+
+        def _paths(key: str) -> list[Path]:
+            out: list[Path] = []
+            seen: set[str] = set()
+            for raw in ctx.get(key, []):
+                p = _resolve_disk_path(raw, root=asset_root)
+                if not p.is_file():
+                    continue
+                k = p.as_posix()
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(p)
+            return out
+
+        sheet_paths = _paths("preview_image_paths")
+        sticker_paths = _paths("sticker_image_paths")
+        preview_threshold = max(1, int(os.getenv("TKSHOP_MAIN_PREVIEW_MIN_COUNT", "3")))
+        if len(sheet_paths) >= preview_threshold:
+            bundle_paths, label = sheet_paths, "preview_sheets_merged_grid"
+        elif sticker_paths:
+            bundle_paths, label = sticker_paths, "split_stickers_merged_grid"
+        else:
+            bundle_paths, label = sheet_paths, "preview_sheets_merged_grid"
+        if not bundle_paths:
+            raise ValueError(f"product #{product_id}: no preview/sticker reference assets")
+        raw = compose_reference_grid(
+            [p.as_posix() for p in bundle_paths],
+            cell=384 if len(bundle_paths) >= 12 else 512,
+            max_side=int(os.getenv("TKSHOP_MAIN_MERGE_MAX_SIDE", "1536")),
+        )
+        compressed = compress_image_bytes_for_api(
+            raw,
+            max_side=int(os.getenv("TKSHOP_MAIN_REF_UPLOAD_MAX_SIDE", "1536")),
+            max_bytes=int(os.getenv("TKSHOP_MAIN_REF_MAX_BYTES", "1800000")),
+        )
+        return compressed, label
+
+    def delete_gallery_fifth_image(self, local_product_id: int) -> dict[str, Any]:
+        """Remove the 5th gallery image (highest sort_order secondary)."""
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, sort_order, local_path
+                  FROM local_product_images
+                 WHERE local_product_id = ? AND role = 'secondary'
+                 ORDER BY sort_order DESC, id DESC
+                """,
+                (local_product_id,),
+            ).fetchall()
+        if not rows:
+            return {"deleted": False, "reason": "no secondary rows"}
+        target = rows[0]
+        self.delete_local_product_image(int(target["id"]))
+        return {
+            "deleted": True,
+            "image_id": int(target["id"]),
+            "sort_order": int(target["sort_order"] or 0),
+            "local_path": target["local_path"] or "",
+        }
+
+    def delete_latest_packaging_secondary(self, local_product_id: int) -> dict[str, Any]:
+        """Remove the newest packaging/envelope secondary from the master gallery."""
+        with _open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, ai_prompt, sort_order
+                  FROM local_product_images
+                 WHERE local_product_id = ? AND role = 'secondary'
+                 ORDER BY sort_order DESC, id DESC
+                """,
+                (local_product_id,),
+            ).fetchall()
+        if not rows:
+            return {"deleted": False, "reason": "no secondary rows"}
+        packaging = [
+            r for r in rows
+            if self._is_packaging_secondary_prompt(r["ai_prompt"] or "")
+        ]
+        target = packaging[0] if packaging else rows[0]
+        self.delete_local_product_image(int(target["id"]))
+        return {
+            "deleted": True,
+            "image_id": int(target["id"]),
+            "sort_order": int(target["sort_order"] or 0),
+            "was_packaging": bool(packaging),
+        }
+
+    def generate_hand_hold_secondary_for_local(
+        self, local_product_id: int, *, sort_order: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Generate one hand-hold + pile-background secondary on the master gallery."""
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT p.pack_uid, t.id AS listing_id
+                  FROM local_products lp
+                  JOIN packs p ON p.id = lp.pack_id
+                  JOIN tkshop_products t ON t.local_product_id = lp.id
+                 WHERE lp.id = ?
+                 ORDER BY t.id
+                 LIMIT 1
+                """,
+                (local_product_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"local_product #{local_product_id} not found")
+            listing_id = int(row["listing_id"])
+            pack_uid = row["pack_uid"]
+
+        ref_bytes, ref_label = self._merged_reference_bytes_for_product(listing_id)
+        out_bytes = self.router.image_edit(
+            ref_bytes,
+            hand_hold_secondary_spec()["image_prompt"],
+            size="1024x1024",
+            quality=os.getenv("TKSHOP_SECONDARY_IMAGE_QUALITY", "medium"),
+            task="tkshop_image_design:hand_hold_secondary",
+            related_table="local_products",
+            related_id=local_product_id,
+        )
+        filename = f"secondary_hand_hold_{int(time.time() * 1000)}.png"
+        dest = self.store.write_product_image(
+            pack_uid, f"draft_{listing_id}", filename, out_bytes,
+        )
+        hh_spec = hand_hold_secondary_spec()
+        img_id = self.add_local_product_image(
+            local_product_id,
+            local_path=dest.as_posix(),
+            role="secondary",
+            source="ai",
+            ai_prompt=hh_spec["image_prompt"],
+            sort_order=sort_order,
+        )
+        return {
+            "ok": True,
+            "local_product_id": local_product_id,
+            "image_id": img_id,
+            "local_path": dest.as_posix(),
+            "reference": ref_label,
+        }
+
+    def batch_replace_hand_hold_and_push(
+        self,
+        local_product_ids: list[int],
+        *,
+        workers: int = 3,
+        push: bool = True,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Replace packaging/envelope 5th secondaries with hand-hold pile shots.
+
+        Only touches the listed ``local_product_ids``. Master stays at 5 images
+        (delete one packaging secondary, add one hand-hold). Then syncs every
+        published listing for each master and optionally pushes to TikTok.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        ids = [int(x) for x in local_product_ids if int(x) > 0]
+        workers = max(1, min(int(workers), len(ids) or 1))
+        t0 = time.time()
+        replaced, synced, pushed, failed, skipped = [], [], [], [], []
+
+        if dry_run:
+            preview = []
+            for lp_id in ids:
+                with _open_db(self.db_path) as conn:
+                    total = conn.execute(
+                        "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+                        (lp_id,),
+                    ).fetchone()[0]
+                    listings = [
+                        dict(r) for r in conn.execute(
+                            """
+                            SELECT id, shop, tiktok_product_id
+                              FROM tkshop_products
+                             WHERE local_product_id = ?
+                               AND COALESCE(tiktok_product_id, '') != ''
+                             ORDER BY shop, id
+                            """,
+                            (lp_id,),
+                        ).fetchall()
+                    ]
+                preview.append({
+                    "local_product_id": lp_id,
+                    "master_total": total,
+                    "listings": listings,
+                })
+            return {
+                "dry_run": True,
+                "workers": workers,
+                "local_product_ids": ids,
+                "preview": preview,
+            }
+
+        def _one(lp_id: int) -> dict[str, Any]:
+            entry: dict[str, Any] = {"local_product_id": lp_id}
+            try:
+                deleted = self.delete_latest_packaging_secondary(lp_id)
+                entry["deleted"] = deleted
+                if not deleted.get("deleted"):
+                    return {**entry, "ok": False, "error": deleted.get("reason", "delete failed")}
+                gen = self.generate_hand_hold_secondary_for_local(
+                    lp_id, sort_order=deleted.get("sort_order"),
+                )
+                entry.update(gen)
+                return entry
+            except Exception as e:
+                return {**entry, "ok": False, "error": str(e)[:300]}
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hand-hold") as ex:
+            futures = {ex.submit(_one, lp_id): lp_id for lp_id in ids}
+            for fut in as_completed(futures):
+                lp_id = futures[fut]
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    result = {"local_product_id": lp_id, "ok": False, "error": str(e)[:300]}
+                if result.get("ok"):
+                    replaced.append(result)
+                else:
+                    failed.append(result)
+
+        for item in replaced:
+            lp_id = int(item["local_product_id"])
+            with _open_db(self.db_path) as conn:
+                listings = [
+                    dict(r) for r in conn.execute(
+                        """
+                        SELECT id, shop, tiktok_product_id
+                          FROM tkshop_products
+                         WHERE local_product_id = ?
+                           AND COALESCE(tiktok_product_id, '') != ''
+                         ORDER BY shop, id
+                        """,
+                        (lp_id,),
+                    ).fetchall()
+                ]
+            for listing in listings:
+                lid = int(listing["id"])
+                try:
+                    n = self.sync_master_images_to_listing(lp_id, lid, replace=True)
+                    synced.append({
+                        "local_product_id": lp_id,
+                        "listing_id": lid,
+                        "shop": listing["shop"],
+                        "images": n,
+                    })
+                    if push:
+                        res = self.update_on_platform(lid)
+                        rec = {
+                            "local_product_id": lp_id,
+                            "listing_id": lid,
+                            "shop": listing["shop"],
+                            "ok": bool(res.get("ok")),
+                            "error": res.get("error_message") or "",
+                        }
+                        (pushed if rec["ok"] else failed).append(rec)
+                except Exception as exc:
+                    failed.append({
+                        "local_product_id": lp_id,
+                        "listing_id": lid,
+                        "shop": listing.get("shop", ""),
+                        "ok": False,
+                        "error": str(exc)[:300],
+                    })
+
+        return {
+            "dry_run": False,
+            "workers": workers,
+            "local_product_ids": ids,
+            "replaced": replaced,
+            "synced": synced,
+            "pushed": pushed,
+            "skipped": skipped,
+            "failed": failed,
+            "elapsed_s": round(time.time() - t0, 1),
+        }
+
+    def batch_hand_hold_gallery_mixed(
+        self,
+        replace_fifth_ids: list[int],
+        append_fifth_ids: list[int],
+        *,
+        workers: int = 3,
+        push: bool = True,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Hand-hold 5th image: replace group deletes 5th first; append group adds when short."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        replace_ids = [int(x) for x in replace_fifth_ids if int(x) > 0]
+        append_ids = [int(x) for x in append_fifth_ids if int(x) > 0]
+        all_ids = replace_ids + append_ids
+        workers = max(1, min(int(workers), len(all_ids) or 1))
+        replace_set = set(replace_ids)
+        t0 = time.time()
+        generated, synced, pushed, failed = [], [], [], []
+
+        if dry_run:
+            preview = []
+            for lp_id in all_ids:
+                with _open_db(self.db_path) as conn:
+                    total = conn.execute(
+                        "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+                        (lp_id,),
+                    ).fetchone()[0]
+                    listings = [
+                        dict(r) for r in conn.execute(
+                            """
+                            SELECT id, shop, tiktok_product_id
+                              FROM tkshop_products
+                             WHERE local_product_id = ?
+                               AND COALESCE(tiktok_product_id, '') != ''
+                             ORDER BY shop, id
+                            """,
+                            (lp_id,),
+                        ).fetchall()
+                    ]
+                preview.append({
+                    "local_product_id": lp_id,
+                    "mode": "replace_fifth" if lp_id in replace_set else "append_fifth",
+                    "master_total": total,
+                    "listings": listings,
+                })
+            return {
+                "dry_run": True,
+                "workers": workers,
+                "replace_fifth_ids": replace_ids,
+                "append_fifth_ids": append_ids,
+                "preview": preview,
+            }
+
+        def _one(lp_id: int) -> dict[str, Any]:
+            entry: dict[str, Any] = {
+                "local_product_id": lp_id,
+                "mode": "replace_fifth" if lp_id in replace_set else "append_fifth",
+            }
+            try:
+                sort_order: Optional[int] = None
+                if lp_id in replace_set:
+                    deleted = self.delete_gallery_fifth_image(lp_id)
+                    entry["deleted"] = deleted
+                    if not deleted.get("deleted"):
+                        return {**entry, "ok": False, "error": deleted.get("reason", "delete failed")}
+                    sort_order = deleted.get("sort_order")
+                else:
+                    with _open_db(self.db_path) as conn:
+                        total = conn.execute(
+                            "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+                            (lp_id,),
+                        ).fetchone()[0]
+                    entry["master_total_before"] = int(total)
+                    if total >= 5:
+                        deleted = self.delete_gallery_fifth_image(lp_id)
+                        entry["deleted"] = deleted
+                        if deleted.get("deleted"):
+                            sort_order = deleted.get("sort_order")
+                    else:
+                        entry["deleted"] = {"deleted": False, "skipped": True}
+                gen = self.generate_hand_hold_secondary_for_local(lp_id, sort_order=sort_order)
+                entry.update(gen)
+                return entry
+            except Exception as e:
+                return {**entry, "ok": False, "error": str(e)[:300]}
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hand-hold") as ex:
+            futures = {ex.submit(_one, lp_id): lp_id for lp_id in all_ids}
+            for fut in as_completed(futures):
+                lp_id = futures[fut]
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    result = {"local_product_id": lp_id, "ok": False, "error": str(e)[:300]}
+                if result.get("ok"):
+                    generated.append(result)
+                else:
+                    failed.append(result)
+
+        for item in generated:
+            lp_id = int(item["local_product_id"])
+            with _open_db(self.db_path) as conn:
+                listings = [
+                    dict(r) for r in conn.execute(
+                        """
+                        SELECT id, shop, tiktok_product_id
+                          FROM tkshop_products
+                         WHERE local_product_id = ?
+                           AND COALESCE(tiktok_product_id, '') != ''
+                         ORDER BY shop, id
+                        """,
+                        (lp_id,),
+                    ).fetchall()
+                ]
+            for listing in listings:
+                lid = int(listing["id"])
+                try:
+                    n = self.sync_master_images_to_listing(lp_id, lid, replace=True)
+                    synced.append({
+                        "local_product_id": lp_id,
+                        "listing_id": lid,
+                        "shop": listing["shop"],
+                        "images": n,
+                    })
+                    if push:
+                        res = self.update_on_platform(lid)
+                        rec = {
+                            "local_product_id": lp_id,
+                            "listing_id": lid,
+                            "shop": listing["shop"],
+                            "ok": bool(res.get("ok")),
+                            "error": res.get("error_message") or "",
+                        }
+                        (pushed if rec["ok"] else failed).append(rec)
+                except Exception as exc:
+                    failed.append({
+                        "local_product_id": lp_id,
+                        "listing_id": lid,
+                        "shop": listing.get("shop", ""),
+                        "ok": False,
+                        "error": str(exc)[:300],
+                    })
+
+        return {
+            "dry_run": False,
+            "workers": workers,
+            "replace_fifth_ids": replace_ids,
+            "append_fifth_ids": append_ids,
+            "generated": generated,
+            "synced": synced,
+            "pushed": pushed,
+            "failed": failed,
+            "elapsed_s": round(time.time() - t0, 1),
+        }
+
+    def sync_master_images_to_listing(
+        self, local_product_id: int, listing_id: int, *, replace: bool = False,
+    ) -> int:
+        """Copy ``local_product_images`` rows onto a shop listing.
+
+        When ``replace`` is False, behaves like ``_snapshot_master_images_to_listing``
+        (no-op if the listing already has any image rows). When ``replace`` is True,
+        wipes the listing gallery and re-inserts from the master so every shop sees
+        the same 1 main + N secondary set before a platform update.
+        """
+        with _open_db(self.db_path) as conn:
+            lp_row = conn.execute(
+                "SELECT local_product_id FROM tkshop_products WHERE id = ?",
+                (listing_id,),
+            ).fetchone()
+            if not lp_row or int(lp_row["local_product_id"] or 0) != int(local_product_id):
+                raise ValueError(
+                    f"listing #{listing_id} is not linked to local_product #{local_product_id}"
+                )
+            if not replace:
+                return self._snapshot_master_images_to_listing(local_product_id, listing_id)
+            conn.execute(
+                "DELETE FROM tkshop_product_images WHERE product_id = ?",
+                (listing_id,),
+            )
+            now = int(time.time())
+            cur = conn.execute(
+                """
+                INSERT INTO tkshop_product_images
+                    (product_id, role, source, local_path,
+                     tiktok_image_uri, sort_order, ai_prompt, created_at)
+                SELECT ?, role, source, local_path,
+                       '', sort_order, ai_prompt, ?
+                  FROM local_product_images
+                 WHERE local_product_id = ?
+                 ORDER BY role = 'main' DESC, sort_order ASC, id ASC
+                """,
+                (listing_id, now, local_product_id),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def batch_fill_gallery_and_push(
+        self,
+        local_product_ids: Optional[list[int]] = None,
+        *,
+        target_total: int = 5,
+        target_secondary: int = 4,
+        dry_run: bool = False,
+        fill: bool = True,
+        push: bool = True,
+        fill_mode: str = "ai",
+    ) -> dict[str, Any]:
+        """Ensure master + published listings have ``target_total`` images
+        (1 main + ``target_secondary`` secondaries), then push updates.
+
+        ``fill_mode``:
+          - ``ai`` — generate missing images via AI (default)
+          - ``duplicate`` — pad by copying existing secondaries (no AI)
+          - ``ai_then_duplicate`` — AI first, duplicate pad if still short
+          - ``regenerate`` — delete duplicate rows, AI-generate replacements
+        """
+        fill_mode = (fill_mode or "ai").strip().lower()
+        if fill_mode not in {"ai", "duplicate", "ai_then_duplicate", "regenerate"}:
+            fill_mode = "ai"
+        target_total = max(2, int(target_total))
+        target_secondary = max(1, min(int(target_secondary), target_total - 1))
+        t0 = time.time()
+        filled, synced, pushed, skipped, failed = [], [], [], [], []
+
+        with _open_db(self.db_path) as conn:
+            if local_product_ids:
+                ids = [int(x) for x in local_product_ids]
+            else:
+                ids = [
+                    int(r[0])
+                    for r in conn.execute(
+                        """
+                        SELECT DISTINCT lp.id
+                          FROM local_products lp
+                          JOIN tkshop_products t ON t.local_product_id = lp.id
+                         WHERE COALESCE(t.tiktok_product_id, '') != ''
+                         ORDER BY lp.id
+                        """
+                    ).fetchall()
+                ]
+
+        removed_dupes: dict[str, int] = {}
+        if fill_mode == "regenerate" and fill and not dry_run:
+            removed_dupes = self.remove_duplicate_gallery_rows(ids)
+
+        for lp_id in ids:
+            with _open_db(self.db_path) as conn:
+                master_total = conn.execute(
+                    "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+                    (lp_id,),
+                ).fetchone()[0]
+                master_sec = conn.execute(
+                    "SELECT COUNT(*) FROM local_product_images "
+                    "WHERE local_product_id = ? AND role = 'secondary'",
+                    (lp_id,),
+                ).fetchone()[0]
+                dup_count = conn.execute(
+                    "SELECT COUNT(*) FROM local_product_images "
+                    "WHERE local_product_id = ? AND source = 'duplicate'",
+                    (lp_id,),
+                ).fetchone()[0]
+                has_main = conn.execute(
+                    "SELECT 1 FROM local_product_images "
+                    "WHERE local_product_id = ? AND role = 'main' LIMIT 1",
+                    (lp_id,),
+                ).fetchone() is not None
+                listings = [
+                    dict(r)
+                    for r in conn.execute(
+                        """
+                        SELECT id, shop, tiktok_product_id,
+                               (SELECT COUNT(*) FROM tkshop_product_images ti
+                                 WHERE ti.product_id = t.id) AS img_count
+                          FROM tkshop_products t
+                         WHERE t.local_product_id = ? AND COALESCE(t.tiktok_product_id, '') != ''
+                         ORDER BY t.shop, t.id
+                        """,
+                        (lp_id,),
+                    ).fetchall()
+                ]
+
+            need_sec = max(0, target_secondary - max(0, int(master_sec) - int(dup_count)))
+            need_main = not has_main
+            real_total = max(0, int(master_total) - int(dup_count))
+            needs_work = (
+                dup_count > 0
+                or real_total < target_total
+                or any(int(l["img_count"]) < target_total for l in listings)
+            )
+            push_only = push and not fill
+            if not needs_work and not push_only:
+                skipped.append({"local_product_id": lp_id, "reason": "already at target"})
+                continue
+
+            item = {
+                "local_product_id": lp_id,
+                "master_total": master_total,
+                "master_total_after_delete": real_total,
+                "duplicate_rows": int(dup_count),
+                "need_main": need_main,
+                "need_secondary": need_sec,
+                "listings": [
+                    {"id": l["id"], "shop": l["shop"], "img_count": l["img_count"]}
+                    for l in listings
+                ],
+            }
+            if dry_run:
+                filled.append(item)
+                continue
+
+            try:
+                if fill and (need_main or need_sec > 0 or master_total < target_total or dup_count > 0):
+                    if fill_mode in {"ai", "ai_then_duplicate", "regenerate"} and (need_main or need_sec > 0):
+                        if need_main:
+                            self.auto_design_images_for_local_product(
+                                lp_id, mode="main", replace_existing_ai=False,
+                            )
+                        if need_sec > 0:
+                            self.auto_design_images_for_local_product(
+                                lp_id,
+                                mode="secondary",
+                                secondary_count=need_sec,
+                                replace_existing_ai=False,
+                            )
+                    if fill_mode in {"duplicate", "ai_then_duplicate"}:
+                        with _open_db(self.db_path) as conn:
+                            cur_total = conn.execute(
+                                "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+                                (lp_id,),
+                            ).fetchone()[0]
+                        if cur_total < target_total:
+                            dup = self.pad_master_gallery_to_target(
+                                lp_id, target_total=target_total,
+                            )
+                            item["duplicated"] = dup
+                    with _open_db(self.db_path) as conn:
+                        item["master_total_after"] = conn.execute(
+                            "SELECT COUNT(*) FROM local_product_images WHERE local_product_id = ?",
+                            (lp_id,),
+                        ).fetchone()[0]
+                    filled.append(item)
+
+                for listing in listings:
+                    lid = int(listing["id"])
+                    try:
+                        n = self.sync_master_images_to_listing(
+                            lp_id, lid, replace=True,
+                        )
+                        synced.append(
+                            {"local_product_id": lp_id, "listing_id": lid,
+                             "shop": listing["shop"], "images": n}
+                        )
+                        if push:
+                            res = self.update_on_platform(lid)
+                            rec = {
+                                "local_product_id": lp_id,
+                                "listing_id": lid,
+                                "shop": listing["shop"],
+                                "ok": bool(res.get("ok")),
+                                "error": res.get("error_message") or "",
+                            }
+                            (pushed if rec["ok"] else failed).append(rec)
+                    except Exception as exc:
+                        failed.append({
+                            "local_product_id": lp_id,
+                            "listing_id": lid,
+                            "shop": listing["shop"],
+                            "error": str(exc)[:300],
+                        })
+            except Exception as exc:
+                failed.append({
+                    "local_product_id": lp_id,
+                    "error": str(exc)[:300],
+                })
+
+        return {
+            "dry_run": dry_run,
+            "fill_mode": fill_mode,
+            "removed_duplicates": removed_dupes,
+            "target_total": target_total,
+            "target_secondary": target_secondary,
+            "filled": filled,
+            "synced": synced,
+            "pushed": pushed,
+            "skipped": skipped,
+            "failed": failed,
+            "elapsed_s": round(time.time() - t0, 1),
+        }
 
     def batch_publish_to_shop(
         self,
@@ -4102,9 +5364,10 @@ class TKShopService:
         with _open_db(self.db_path) as conn:
             prods = conn.execute(
                 f"""
-                SELECT pr.id, pr.pack_id, pr.tiktok_product_id, pr.tiktok_sku_id,
+                SELECT pr.id, pr.pack_id, pr.shop, pr.tiktok_product_id, pr.tiktok_sku_id,
                        pr.seller_sku, pr.title, pr.description_html,
                        pr.selling_points, pr.keywords, pr.category_id,
+                       pr.default_template_json,
                        pr.publish_status, pr.created_at, pr.published_at,
                        p.display_name AS pack_name, p.pack_uid, p.total_stickers
                   FROM tkshop_products pr
@@ -4133,7 +5396,47 @@ class TKShopService:
                     pr["keywords_list"] = json.loads(pr["keywords"] or "[]")
                 except Exception:
                     pr["keywords_list"] = []
+        self._enrich_export_commerce_fields(prods)
         return prods
+
+    def _enrich_export_commerce_fields(self, rows: list[dict]) -> None:
+        """Fill sale/discount price, stock, and 后台关键词 for spreadsheet export."""
+        for pr in rows:
+            pr["search_keywords"] = _format_search_keywords(
+                pr.get("keywords_list") or [],
+            )
+            tpl_sale, tpl_discount = _price_from_default_template(
+                pr.get("default_template_json") or "{}",
+            )
+            pr["sale_price"] = tpl_sale or TKSHOP_DEFAULT_SALE_PRICE
+            pr["discount_price"] = (
+                tpl_discount or TKSHOP_DEFAULT_DISCOUNT_PRICE
+            )
+            pr["currency"] = "USD"
+            pr["stock"] = TKSHOP_DEFAULT_QUANTITY
+
+            tt_id = (pr.get("tiktok_product_id") or "").strip()
+            if not tt_id:
+                continue
+            shop = (pr.get("shop") or "").strip() or TKSHOP_DEFAULT_SHOP
+            try:
+                result = self.get_platform_product(tt_id, shop=shop)
+                if not result.get("ok"):
+                    continue
+                meta = _sku_meta_from_platform_data(result.get("data") or {})
+                if meta.get("sale_price"):
+                    pr["sale_price"] = meta["sale_price"]
+                if meta.get("discount_price"):
+                    pr["discount_price"] = meta["discount_price"]
+                if meta.get("currency"):
+                    pr["currency"] = meta["currency"]
+                if meta.get("stock") is not None:
+                    pr["stock"] = meta["stock"]
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    "export commerce fetch failed for #%s: %s",
+                    pr.get("id"), e,
+                )
 
     def export_products_xlsx(self, product_ids: list[int]) -> bytes:
         """XLSX with embedded main image + all metadata. One row per product."""
@@ -4152,6 +5455,7 @@ class TKShopService:
             "TikTok Product ID", "TikTok SKU ID", "Status",
             "Pack Name", "Pack UID", "Total Stickers",
             "Category ID", "Selling Points", "Keywords",
+            "后台关键词", "零售价", "折扣价", "货币", "库存",
             "Image Count", "All Image Paths",
             "Created", "Published",
         ]
@@ -4164,7 +5468,7 @@ class TKShopService:
         ws.row_dimensions[1].height = 22
 
         # Reasonable column widths
-        widths = [6, 22, 60, 22, 22, 22, 14, 32, 32, 12, 12, 60, 50, 8, 60, 18, 18]
+        widths = [6, 22, 60, 22, 22, 22, 14, 32, 32, 12, 12, 60, 50, 50, 10, 10, 8, 8, 8, 60, 18, 18]
         for i, w in enumerate(widths, start=1):
             ws.column_dimensions[chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)].width = w
 
@@ -4184,22 +5488,27 @@ class TKShopService:
                     value="\n".join(pr.get("selling_points_list") or []))
             ws.cell(row=r_idx, column=13,
                     value=", ".join(pr.get("keywords_list") or []))
+            ws.cell(row=r_idx, column=14, value=pr.get("search_keywords") or "")
+            ws.cell(row=r_idx, column=15, value=pr.get("sale_price") or "")
+            ws.cell(row=r_idx, column=16, value=pr.get("discount_price") or "")
+            ws.cell(row=r_idx, column=17, value=pr.get("currency") or "")
+            ws.cell(row=r_idx, column=18, value=pr.get("stock") or "")
             imgs = pr.get("images") or []
-            ws.cell(row=r_idx, column=14, value=len(imgs))
-            ws.cell(row=r_idx, column=15,
+            ws.cell(row=r_idx, column=19, value=len(imgs))
+            ws.cell(row=r_idx, column=20,
                     value="\n".join(i.get("local_path") or "" for i in imgs))
 
             # Created / Published timestamps as readable strings
             from datetime import datetime as _dt
             ts = pr.get("created_at")
-            ws.cell(row=r_idx, column=16,
+            ws.cell(row=r_idx, column=21,
                     value=_dt.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "")
             ts = pr.get("published_at")
-            ws.cell(row=r_idx, column=17,
+            ws.cell(row=r_idx, column=22,
                     value=_dt.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "")
 
             # Wrap text cells
-            for col in (3, 12, 13, 15):
+            for col in (3, 12, 13, 14, 20):
                 ws.cell(row=r_idx, column=col).alignment = Alignment(
                     wrap_text=True, vertical="top",
                 )
@@ -4251,7 +5560,8 @@ class TKShopService:
             writer.writerow([
                 "id", "title", "seller_sku", "tiktok_product_id", "tiktok_sku_id",
                 "publish_status", "pack_name", "pack_uid", "total_stickers",
-                "category_id", "selling_points", "keywords",
+                "category_id", "selling_points", "keywords", "search_keywords",
+                "sale_price", "discount_price", "currency", "stock",
                 "image_files", "created_at", "published_at",
             ])
             for pr in rows:
@@ -4282,6 +5592,11 @@ class TKShopService:
                     pr.get("category_id") or "",
                     " | ".join(pr.get("selling_points_list") or []),
                     ", ".join(pr.get("keywords_list") or []),
+                    pr.get("search_keywords") or "",
+                    pr.get("sale_price") or "",
+                    pr.get("discount_price") or "",
+                    pr.get("currency") or "",
+                    pr.get("stock") or "",
                     " | ".join(file_names),
                     pr.get("created_at") or "", pr.get("published_at") or "",
                 ])
@@ -4709,6 +6024,27 @@ class TKShopService:
         shop; once they're happy with the AI output they can publish from
         the listing page or the master detail page.
         """
+        replace_existing_ai = bool(kwargs.get("replace_existing_ai", True))
+        secondary_count = int(kwargs.get("secondary_count", 3))
+        mode = (kwargs.get("mode") or "all").strip().lower()
+        append_one = (
+            not replace_existing_ai
+            and secondary_count == 1
+            and mode in {"all", "secondary"}
+            and fifth_image_style_is_hand_hold()
+        )
+        if append_one:
+            gen = self.generate_hand_hold_secondary_for_local(local_product_id)
+            return {
+                "local_product_id": local_product_id,
+                "listing_id": None,
+                "shop": shop or TKSHOP_DEFAULT_SHOP,
+                "product_id": None,
+                "generated": 1 if gen.get("ok") else 0,
+                "failed": 0 if gen.get("ok") else 1,
+                "results": [gen],
+                "append_only": True,
+            }
         with _open_db(self.db_path) as conn:
             row = conn.execute(
                 "SELECT pack_id FROM local_products WHERE id = ?",

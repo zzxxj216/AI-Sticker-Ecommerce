@@ -21,7 +21,8 @@ echo "  等待穿透地址生成..."
 
 TUNNEL_URL=""
 for i in $(seq 1 15); do
-    TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' logs/tunnel.log 2>/dev/null | head -1)
+    # grep -a: macOS treats cloudflared logs as binary; plain grep prints "Binary file ... matches"
+    TUNNEL_URL=$(grep -a -oE 'https://[a-z0-9-]+\.trycloudflare\.com' logs/tunnel.log 2>/dev/null | head -1)
     if [ -n "$TUNNEL_URL" ]; then
         break
     fi
@@ -38,10 +39,20 @@ fi
 
 # 2) 更新 .env（Web 服务启动前写入，确保读到正确地址）
 echo "[2/3] 更新 .env 配置..."
+LOCAL_URL="http://127.0.0.1:8888"
 if [ -f .env ]; then
-    sed -i '' "s|^FEISHU_H5_BASE_URL=.*|FEISHU_H5_BASE_URL=${TUNNEL_URL}|" .env
-    sed -i '' "s|^FEISHU_H5_REDIRECT_URI=.*|FEISHU_H5_REDIRECT_URI=${TUNNEL_URL}/auth/feishu/callback|" .env
-    echo "  ✓ .env 已更新为: $TUNNEL_URL"
+    if grep -qE '^FEISHU_H5_AUTO_DEV=(1|true|yes)' .env 2>/dev/null; then
+        # Local dev skips Feishu login — keep localhost in .env so bookmarks
+        # and redirects stay on the fast local path, not the tunnel.
+        sed -i '' "s|^FEISHU_H5_BASE_URL=.*|FEISHU_H5_BASE_URL=${LOCAL_URL}|" .env
+        sed -i '' "s|^FEISHU_H5_REDIRECT_URI=.*|FEISHU_H5_REDIRECT_URI=${LOCAL_URL}/auth/feishu/callback|" .env
+        echo "  ✓ 本地开发: FEISHU 地址保持 ${LOCAL_URL}"
+        echo "  ✓ 穿透地址 (飞书后台用): ${TUNNEL_URL} → .tunnel_url"
+    else
+        sed -i '' "s|^FEISHU_H5_BASE_URL=.*|FEISHU_H5_BASE_URL=${TUNNEL_URL}|" .env
+        sed -i '' "s|^FEISHU_H5_REDIRECT_URI=.*|FEISHU_H5_REDIRECT_URI=${TUNNEL_URL}/auth/feishu/callback|" .env
+        echo "  ✓ .env 飞书地址已更新为: $TUNNEL_URL"
+    fi
 fi
 
 # 3) 启动 Web 服务（此时 .env 已包含正确的穿透地址）
@@ -63,8 +74,9 @@ echo "=========================================="
 echo "  启动成功！"
 echo "=========================================="
 echo ""
-echo "  公网地址: $TUNNEL_URL"
-echo "  局域网:   http://$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo localhost):8888"
+echo "  本地开发 (推荐): http://localhost:8888/v2"
+echo "  局域网:         http://$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo localhost):8888/v2"
+echo "  公网穿透 (较慢): $TUNNEL_URL"
 echo ""
 echo "  飞书配置 (复制以下地址):"
 echo "    桌面端主页:  $TUNNEL_URL"
