@@ -23,7 +23,6 @@ The pack_uid is per-series (one series → one future pack), set on first
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,9 +47,6 @@ DEFAULT_DB_PATH = Path("data/ops_workbench.db")
 DEFAULT_MAX_WORKERS = 2
 DEFAULT_RETRY_ON_ERROR = 3
 DEFAULT_IMAGE_SIZE = "1024x1024"
-STICKER_SPLIT_AI_FALLBACK = os.getenv("V2_STICKER_SPLIT_AI_FALLBACK", "0").strip().lower() in (
-    "1", "true", "yes", "on",
-)
 
 
 def _open_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -555,52 +551,131 @@ class PreviewGenService:
         )
         bg = np.median(border_pixels, axis=0)
         dist = np.linalg.norm(rgb.astype(np.int16) - bg.astype(np.int16), axis=2)
-        base_mask = ((dist > 22) & (alpha > 10)).astype(np.uint8) * 255
+        mask = ((dist > 22) & (alpha > 10)).astype(np.uint8) * 255
 
-        def boxes_for_kernel(kernel_divisor: int) -> list[tuple[int, int, int, int]]:
-            mask = base_mask.copy()
-            small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, small)
-            k = max(3, min(width, height) // kernel_divisor)
-            if k % 2 == 0:
-                k += 1
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-            mask = cv2.dilate(mask, kernel, iterations=1)
+        # Fine-grained components: only a light close so each sticker breaks
+        # into a handful of pieces (artwork + caption text) without bridging
+        # neighbouring stickers. Dense 7x7-style sheets fail with one big
+        # morphology kernel — neighbours merge long before captions attach.
+        small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, small)
+        k = max(3, min(width, height) // 300) | 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-            count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
-            min_area = width * height * 0.0015
-            found: list[tuple[int, int, int, int]] = []
-            for i in range(1, count):
-                x, y, w, h, area = (int(v) for v in stats[i])
-                if area < min_area or w < 12 or h < 12:
-                    continue
-                if w > width * 0.92 and h > height * 0.92:
-                    continue
-                pad = max(10, int(min(width, height) * 0.012))
-                x1 = max(0, x - pad)
-                y1 = max(0, y - pad)
-                x2 = min(width, x + w + pad)
-                y2 = min(height, y + h + pad)
-                found.append((x1, y1, x2, y2))
-            found.sort(key=lambda b: (b[1] // max(1, height // 8), b[0]))
-            return found
-
-        candidates = [boxes_for_kernel(divisor) for divisor in (80, 70, 60, 50, 40, 100)]
-        if expected_count > 0:
-            boxes = next((c for c in candidates if len(c) == expected_count), None)
-            if boxes is None:
-                boxes = min(candidates, key=lambda c: (abs(len(c) - expected_count), -len(c)))
-                logger.warning(
-                    "local sticker detection found %d regions; expected %d for %s",
-                    len(boxes),
-                    expected_count,
-                    preview_path,
-                )
-        else:
-            boxes = candidates[0]
-        if not boxes:
+        count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
+        tiny = width * height * 0.00005
+        fine: list[tuple[int, int, int, int]] = []
+        for i in range(1, count):
+            x, y, w, h, area = (int(v) for v in stats[i])
+            if area < tiny:
+                continue
+            if w > width * 0.92 and h > height * 0.92:
+                continue
+            fine.append((x, y, x + w, y + h))
+        if not fine:
             raise ValueError("local sticker detection found no regions")
+        if len(fine) > 1500:
+            fine.sort(key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
+            fine = fine[:1500]
+
+        def rect_gap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> int:
+            dx = max(a[0] - b[2], b[0] - a[2], 0)
+            dy = max(a[1] - b[3], b[1] - a[3], 0)
+            return max(dx, dy)
+
+        def union(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+            return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+        # Pre-merge touching/overlapping pieces (union-find on gap <= 1px).
+        parent = list(range(len(fine)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(len(fine)):
+            for j in range(i + 1, len(fine)):
+                if rect_gap(fine[i], fine[j]) <= 1:
+                    parent[find(i)] = find(j)
+        grouped: dict[int, tuple[int, int, int, int]] = {}
+        for i, box in enumerate(fine):
+            root = find(i)
+            grouped[root] = union(grouped[root], box) if root in grouped else box
+        clusters = list(grouped.values())
+
+        # Agglomerative merge: repeatedly join the cheapest pair (smallest
+        # gap, penalised when the merged box would balloon past the median
+        # sticker size) until exactly expected_count clusters remain. With no
+        # expected count, stop once the nearest pair is a real gutter apart.
+        max_gap_allowed = min(width, height) * 0.06
+        default_stop_gap = max(4.0, min(width, height) * 0.012)
+        target = expected_count if expected_count > 0 else 1
+        while len(clusters) > target:
+            dims = sorted(max(c[2] - c[0], c[3] - c[1]) for c in clusters)
+            med = dims[len(dims) // 2]
+            best_cost: float | None = None
+            best_gap = 0
+            bi = bj = -1
+            for i in range(len(clusters)):
+                for j in range(i + 1, len(clusters)):
+                    a, b = clusters[i], clusters[j]
+                    g = rect_gap(a, b)
+                    if g > max_gap_allowed:
+                        continue
+                    m = union(a, b)
+                    oversize = max(0, max(m[2] - m[0], m[3] - m[1]) - med * 1.35)
+                    cost = g + oversize * 0.6
+                    if best_cost is None or cost < best_cost:
+                        best_cost, best_gap, bi, bj = cost, g, i, j
+            if best_cost is None:
+                break
+            if expected_count <= 0 and best_gap > default_stop_gap:
+                break
+            merged = union(clusters[bi], clusters[bj])
+            clusters = [c for idx, c in enumerate(clusters) if idx not in (bi, bj)] + [merged]
+
+        boxes_raw = [c for c in clusters
+                     if (c[2] - c[0]) >= 12 and (c[3] - c[1]) >= 12]
+        if not boxes_raw:
+            raise ValueError("local sticker detection found no regions")
+        if expected_count > 0 and len(boxes_raw) != expected_count:
+            logger.warning(
+                "local sticker detection found %d regions; expected %d for %s",
+                len(boxes_raw),
+                expected_count,
+                preview_path,
+            )
+
+        # Reading order: cluster rows by y-centre (tolerance from median
+        # sticker height), then left-to-right inside each row — must match
+        # the AI analysis listing order so crops map to the right briefs.
+        heights = sorted(c[3] - c[1] for c in boxes_raw)
+        row_tol = max(8, int(heights[len(heights) // 2] * 0.6))
+        boxes_raw.sort(key=lambda c: (c[1] + c[3]) // 2)
+        rows: list[list[tuple[int, int, int, int]]] = []
+        row_centers: list[float] = []
+        for c in boxes_raw:
+            cy = (c[1] + c[3]) / 2
+            if rows and abs(cy - row_centers[-1]) <= row_tol:
+                rows[-1].append(c)
+                row_centers[-1] = sum((b[1] + b[3]) / 2 for b in rows[-1]) / len(rows[-1])
+            else:
+                rows.append([c])
+                row_centers.append(cy)
+
+        pad = max(10, int(min(width, height) * 0.012))
+        boxes: list[tuple[int, int, int, int]] = []
+        for row in rows:
+            for x1, y1, x2, y2 in sorted(row, key=lambda c: c[0]):
+                boxes.append((
+                    max(0, x1 - pad),
+                    max(0, y1 - pad),
+                    min(width, x2 + pad),
+                    min(height, y2 + pad),
+                ))
         return boxes
 
     @staticmethod
@@ -620,12 +695,58 @@ class PreviewGenService:
             crop.save(out, format="PNG")
             return out.getvalue()
 
+    @staticmethod
+    def _normalize_split_output(image_bytes: bytes) -> bytes:
+        """Flatten transparency to white and trim dark border bars.
+
+        gpt-image-2 edit output sometimes comes back with an alpha channel
+        (which turns black in any later RGB conversion / dark viewer) or
+        with black letterbox bars around the sticker. Both read as 黑边 in
+        the UI, so normalize every split result to a clean white-backed PNG.
+        """
+        from PIL import Image, ImageChops
+
+        with Image.open(BytesIO(image_bytes)) as src:
+            rgba = src.convert("RGBA")
+        flat = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        flat.alpha_composite(rgba)
+        rgb = flat.convert("RGB")
+
+        width, height = rgb.size
+        corners = [
+            rgb.getpixel((0, 0)),
+            rgb.getpixel((width - 1, 0)),
+            rgb.getpixel((0, height - 1)),
+            rgb.getpixel((width - 1, height - 1)),
+        ]
+        border = max(set(corners), key=corners.count)
+        if sum(abs(c - 255) for c in border) > 30:
+            # Non-white border (black bars / dark frame): crop to content,
+            # then re-center on a white square canvas with a small margin.
+            bg = Image.new("RGB", rgb.size, border)
+            diff = ImageChops.difference(rgb, bg).convert("L")
+            bbox = diff.point(lambda p: 255 if p > 16 else 0).getbbox()
+            if bbox and (bbox[2] - bbox[0]) > 8 and (bbox[3] - bbox[1]) > 8:
+                content = rgb.crop(bbox)
+                side = max(content.size)
+                pad = max(16, side // 20)
+                canvas = Image.new("RGB", (side + pad * 2, side + pad * 2),
+                                   (255, 255, 255))
+                canvas.paste(content,
+                             ((canvas.width - content.width) // 2,
+                              (canvas.height - content.height) // 2))
+                rgb = canvas
+
+        out = BytesIO()
+        rgb.save(out, format="PNG")
+        return out.getvalue()
+
     def _split_one_with_retry(self, sticker_id: int, size: str) -> dict[str, Any]:
         """image_edit one sticker. Marks status, writes file, updates row.
 
-        By default this is a local pixel crop from the parent preview, not an
-        AI image edit. AI fallback is opt-in via V2_STICKER_SPLIT_AI_FALLBACK=1
-        because image_edit can redraw the sticker and change the artwork.
+        Sticker splitting intentionally uses image_edit for every sticker so
+        sheet layouts with touching/merged sticker regions do not fail local
+        connected-component detection.
         """
         with _open_db(self.db_path) as conn:
             row = conn.execute(
@@ -654,65 +775,6 @@ class PreviewGenService:
             conn.commit()
 
         global_idx = int(row["preview_id"]) * 1000 + int(row["sticker_idx"])
-        try:
-            t0 = time.time()
-            with _open_db(self.db_path) as conn:
-                expected_count = conn.execute(
-                    "SELECT COUNT(*) FROM pack_stickers WHERE preview_id = ?",
-                    (int(row["preview_id"]),),
-                ).fetchone()[0]
-            boxes = self._detect_sticker_boxes(preview_path, int(expected_count or 0))
-            sticker_pos = int(row["sticker_idx"]) - 1
-            if sticker_pos < 0 or sticker_pos >= len(boxes):
-                raise ValueError(
-                    f"sticker_idx {row['sticker_idx']} outside detected boxes ({len(boxes)})"
-                )
-            image_bytes = self._crop_sticker_bytes(preview_path, boxes[sticker_pos])
-            img_path = self.store.write_sticker(
-                pack_uid=row["pack_uid"],
-                series_idx=row["series_idx"],
-                sticker_idx=global_idx,
-                image_bytes=image_bytes,
-                meta={
-                    "preview_id": row["preview_id"],
-                    "sticker_idx": row["sticker_idx"],
-                    "split_method": "local_crop",
-                    "crop_box": boxes[sticker_pos],
-                },
-            )
-            rel = img_path.as_posix()
-            with _open_db(self.db_path) as conn:
-                conn.execute(
-                    """
-                    UPDATE pack_stickers
-                       SET image_path = ?, model_used = ?,
-                           generation_status = 'ok', generated_at = ?
-                     WHERE id = ?
-                    """,
-                    (rel, "local_crop", int(time.time()), sticker_id),
-                )
-                conn.commit()
-            logger.info("sticker #%d locally cropped in %.1fs → %s",
-                        sticker_id, time.time() - t0, rel)
-            return {"status": "ok", "sticker_id": sticker_id, "image_path": rel}
-        except Exception as e:
-            if not STICKER_SPLIT_AI_FALLBACK:
-                last_err = f"{type(e).__name__}: {e}"
-                logger.warning("sticker #%d local crop failed: %s", sticker_id, last_err)
-                with _open_db(self.db_path) as conn:
-                    conn.execute(
-                        "UPDATE pack_stickers SET generation_status = 'error' WHERE id = ?",
-                        (sticker_id,),
-                    )
-                    conn.commit()
-                return {"status": "error", "sticker_id": sticker_id, "error": last_err}
-            logger.warning(
-                "sticker #%d local crop failed; falling back to AI edit because "
-                "V2_STICKER_SPLIT_AI_FALLBACK is enabled: %s",
-                sticker_id,
-                e,
-            )
-
         source_bytes = preview_path.read_bytes()
         last_err = ""
         for attempt in range(DEFAULT_RETRY_ON_ERROR + 1):
@@ -726,6 +788,11 @@ class PreviewGenService:
                     related_table="pack_stickers",
                     related_id=sticker_id,
                 )
+                try:
+                    image_bytes = self._normalize_split_output(image_bytes)
+                except Exception as norm_err:  # noqa: BLE001
+                    logger.warning("sticker #%d output normalize failed (%s); "
+                                   "keeping raw model output", sticker_id, norm_err)
                 img_path = self.store.write_sticker(
                     pack_uid=row["pack_uid"],
                     series_idx=row["series_idx"],

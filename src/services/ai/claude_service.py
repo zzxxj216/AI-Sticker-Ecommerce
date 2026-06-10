@@ -7,9 +7,11 @@ output, auto-retry, and error handling.
 
 from typing import Optional, List, Dict, Any, Union
 import anthropic
+import httpx
 from anthropic.types import Message
 
 from src.core.config import config
+from src.core.http_proxy import httpx_client_kwargs
 from src.core.logger import get_logger
 from src.core.exceptions import APIError, TimeoutError, RateLimitError
 from src.core.constants import (
@@ -55,6 +57,10 @@ class ClaudeService(BaseLLMService):
         }
         if self.base_url:
             client_kwargs["base_url"] = self.base_url
+
+        client_kwargs["http_client"] = httpx.Client(
+            **httpx_client_kwargs(self.base_url or "https://api.anthropic.com", timeout=self.timeout),
+        )
 
         self.client = anthropic.Anthropic(**client_kwargs)
 

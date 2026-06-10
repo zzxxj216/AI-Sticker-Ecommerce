@@ -111,7 +111,9 @@ repo B 把上面两步封装成本契约的单个 `/discount` 端点，对 repo 
 
 | env | 默认 | 说明 |
 |-----|------|------|
-| `TKSHOP_AUTO_DISCOUNT_PERCENT` | `40` | 发布成功后自动折扣百分比，0=关闭 |
+| `TKSHOP_AUTO_DISCOUNT_PERCENT` | `50` | 发布成功后自动折扣百分比，0=关闭（默认 $13.98×50%=$6.99） |
+| `TKSHOP_DEFAULT_SALE_PRICE` | `13.98` | 标价 / 导出表格默认原价 |
+| `TKSHOP_DEFAULT_DISCOUNT_PRICE` | `6.99` | 导出表格默认折后价（$13.98 + 50% off） |
 | `TKSHOP_DISCOUNT_WINDOW_DAYS` | `365` | 折扣活动时间窗（天） |
 | `TKSHOP_DISCOUNT_ACTIVITY_TYPE` | `DIRECT_DISCOUNT` | 传给中间层的促销活动类型 |
 

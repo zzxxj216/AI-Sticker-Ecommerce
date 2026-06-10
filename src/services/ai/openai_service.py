@@ -9,9 +9,11 @@ import json
 import re
 from typing import Optional, List, Dict, Any
 
+import httpx
 from openai import OpenAI, APITimeoutError, RateLimitError as OpenAIRateLimitError, APIError as OpenAIAPIError
 
 from src.core.config import config
+from src.core.http_proxy import httpx_client_kwargs
 from src.core.logger import get_logger
 from src.core.exceptions import APIError, TimeoutError, RateLimitError
 from src.core.constants import DEFAULT_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -57,6 +59,10 @@ class OpenAIService(BaseLLMService):
         }
         if self.base_url:
             client_kwargs["base_url"] = self.base_url
+
+        client_kwargs["http_client"] = httpx.Client(
+            **httpx_client_kwargs(self.base_url or "https://api.openai.com", timeout=self.timeout),
+        )
 
         self.client = OpenAI(**client_kwargs)
 

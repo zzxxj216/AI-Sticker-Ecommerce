@@ -30,8 +30,7 @@ def build_split_prompt(
     """Prompt for image_edit that extracts ONE sticker from a sheet preview.
 
     The source image is a {total_stickers}-sticker sheet; we want a single
-    isolated die-cut sticker without changing the artwork. This prompt is
-    only used when the opt-in AI fallback is enabled.
+    isolated die-cut sticker without changing the artwork.
     """
     return (
         f"From this sticker sheet of {total_stickers} stickers, isolate ONLY "
@@ -39,8 +38,10 @@ def build_split_prompt(
         f"Extract/crop the original sticker artwork exactly as it appears; "
         f"do not redesign, redraw, restyle, translate, repair, simplify, or "
         f"change any text, colors, outlines, proportions, or details. Place "
-        f"the unchanged sticker centered on a transparent or clean white "
-        f"background, with no other stickers visible and no sheet layout. "
+        f"the unchanged sticker centered on a pure white, full-bleed "
+        f"background that reaches all four edges of the image — no black "
+        f"borders, no dark frame, no letterboxing, no transparent areas, "
+        f"with no other stickers visible and no sheet layout. "
         f"Style reference only for identification, not redesign: {style_anchor[:300]}"
     )
 

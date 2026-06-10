@@ -405,9 +405,13 @@ class TrendService:
             f"调用 LLM：model={config.OPENAI_MODEL} base={base[:80]}",
             source="tiktok_brief",
         )
+        from src.core.http_proxy import openai_http_client
+
+        base_url = config.OPENAI_BASE_URL or None
         client = OpenAI(
             api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL or None,
+            base_url=base_url,
+            http_client=openai_http_client(base_url or "", timeout=300),
         )
         t0 = time.monotonic()
         resp = client.chat.completions.create(
@@ -582,7 +586,14 @@ class TrendService:
 
         from trend_fetcher.config import config
         from openai import OpenAI
-        client = OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL or None)
+        from src.core.http_proxy import openai_http_client
+
+        base_url = config.OPENAI_BASE_URL or None
+        client = OpenAI(
+            api_key=config.OPENAI_API_KEY,
+            base_url=base_url,
+            http_client=openai_http_client(base_url or "", timeout=300),
+        )
         resp = client.chat.completions.create(
             model=config.OPENAI_MODEL,
             messages=[
@@ -639,9 +650,15 @@ class TrendService:
         )
         from trend_fetcher.config import config
         from openai import OpenAI
+        from src.core.http_proxy import openai_http_client
 
         input_text = build_family_input(review_row, topic_row, **build_kwargs)
-        client = OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL or None)
+        base_url = config.OPENAI_BASE_URL or None
+        client = OpenAI(
+            api_key=config.OPENAI_API_KEY,
+            base_url=base_url,
+            http_client=openai_http_client(base_url or "", timeout=300),
+        )
         resp = client.chat.completions.create(
             model=config.OPENAI_MODEL,
             messages=[

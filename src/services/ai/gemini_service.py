@@ -21,6 +21,7 @@ from google.genai import types as genai_types
 from google.genai.types import GenerateContentConfig, Modality, Part
 
 from src.core.config import config
+from src.core.http_proxy import proxy_url_for
 from src.core.logger import get_logger
 from src.core.exceptions import APIError, TimeoutError, RateLimitError
 from src.core.constants import DEFAULT_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -63,10 +64,16 @@ class GeminiService(BaseLLMService):
         )
 
         client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
-        if self.base_url and self.base_url != "https://generativelanguage.googleapis.com":
-            client_kwargs["http_options"] = genai_types.HttpOptions(
-                base_url=self.base_url,
-            )
+        gemini_base = self.base_url or "https://generativelanguage.googleapis.com"
+        http_opts: Dict[str, Any] = {}
+        if gemini_base != "https://generativelanguage.googleapis.com":
+            http_opts["base_url"] = gemini_base
+        px = proxy_url_for(gemini_base)
+        if px:
+            http_opts["client_args"] = {"proxy": px, "trust_env": False}
+            http_opts["async_client_args"] = {"proxy": px, "trust_env": False}
+        if http_opts:
+            client_kwargs["http_options"] = genai_types.HttpOptions(**http_opts)
 
         self.client = genai.Client(**client_kwargs)
 
@@ -336,7 +343,8 @@ class GeminiService(BaseLLMService):
                 logger.info("Gemini video >%.0fMB -> Files API upload (%s)", max_mb_inline, vp.name)
                 uploaded = self.client.files.upload(file=str(vp))
                 waited = 0
-                while uploaded.state.name == "PROCESSING" and waited < 300:
+                max_wait = max(300, int(self.timeout))
+                while uploaded.state.name == "PROCESSING" and waited < max_wait:
                     time.sleep(2)
                     waited += 2
                     uploaded = self.client.files.get(name=uploaded.name)

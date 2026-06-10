@@ -29,6 +29,36 @@ def probe_duration(path: Path) -> float:
         return 0.0
 
 
+def make_gemini_proxy(
+    src: Path,
+    out: Path,
+    *,
+    max_height: int = 720,
+    video_bitrate: str = "1M",
+    audio_bitrate: str = "64k",
+) -> Path:
+    """Downscale/re-encode for Gemini video understanding (smaller upload)."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-i", str(src),
+            "-vf", f"scale=-2:{max_height}",
+            "-c:v", "libx264", "-preset", "veryfast", "-b:v", video_bitrate,
+            "-c:a", "aac", "-b:a", audio_bitrate, "-movflags", "+faststart",
+            str(out),
+        ],
+        check=True,
+    )
+    logger.info(
+        "gemini proxy %s: %.1fMB -> %.1fMB",
+        src.name,
+        src.stat().st_size / 1024 / 1024,
+        out.stat().st_size / 1024 / 1024,
+    )
+    return out
+
+
 def video_dims(path: Path) -> tuple[int, int]:
     out = subprocess.run(
         ["ffprobe", "-v", "quiet", "-select_streams", "v:0",

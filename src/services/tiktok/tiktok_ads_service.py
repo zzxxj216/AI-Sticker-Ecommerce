@@ -87,11 +87,16 @@ class TikTokAdsService:
                 service="tiktok_ads",
             )
         message = body.get("message") or ""
+        # Repo B puts the upstream TikTok error payload in ``detail`` — without
+        # it the message is just "POST ad/create/ failed", which is undebuggable.
+        detail = str(body.get("detail") or "").strip()
+        detail_suffix = f" — {detail[:400]}" if detail else ""
         # Primary: repo B's success-flag envelope.
         if "success" in body:
             if not body.get("success"):
                 raise APIError(
-                    f"tiktok-ads {action} failed: {message or 'unknown error'}",
+                    f"tiktok-ads {action} failed: {message or 'unknown error'}"
+                    f"{detail_suffix}",
                     service="tiktok_ads",
                 )
             return body.get("data")
@@ -101,7 +106,7 @@ class TikTokAdsService:
             if int(code) != 0:
                 raise APIError(
                     f"tiktok-ads {action} failed (code={code}): "
-                    f"{message or 'unknown error'}",
+                    f"{message or 'unknown error'}{detail_suffix}",
                     service="tiktok_ads",
                 )
             return body.get("data")

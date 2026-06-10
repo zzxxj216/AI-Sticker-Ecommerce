@@ -15,6 +15,7 @@ output/packs/{pack_uid}/videos/{video_id}/narration/.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -33,6 +34,12 @@ from src.services.video_narration.prompts import build_analysis_prompt
 logger = get_logger("service.video_narration")
 
 DEFAULT_DB_PATH = Path("data/ops_workbench.db")
+
+# Gemini upload: inline above ~18MB is slow; compress earlier to avoid timeouts.
+_GEMINI_PROXY_THRESHOLD_BYTES = int(
+    os.getenv("NARRATION_GEMINI_PROXY_MB", "8") or 8,
+) * 1024 * 1024
+_GENERATING_STALE_S = int(os.getenv("NARRATION_GENERATING_STALE_S", "900") or 900)
 
 # Quality thresholds — exceeding any flags the row needs_review.
 _DRIFT_LIMIT_S = 1.0       # a line may start at most this late vs its scene anchor
@@ -104,7 +111,19 @@ class VideoNarrationService:
                 "SELECT * FROM tk_video_narrations WHERE video_id=? ORDER BY id DESC LIMIT 1",
                 (video_id,),
             ).fetchone()
-        return self._row_to_dict(r) if r else None
+        if not r:
+            return None
+        d = self._row_to_dict(r)
+        if d.get("status") == "generating":
+            age = _now() - int(d.get("updated_at") or d.get("created_at") or 0)
+            if age > _GENERATING_STALE_S:
+                self._finish(
+                    int(d["id"]),
+                    status="error",
+                    error="生成超时或进程中断，请点「重新生成」",
+                )
+                d = self.get_narration(int(d["id"])) or d
+        return d
 
     # ------------------------------------------------------------------
     # Pack metadata ("弹药" for the script — pulled from existing tables)
@@ -173,17 +192,26 @@ class VideoNarrationService:
         if dur <= 0:
             raise ValueError("could not read video duration (ffprobe)")
 
+        self._supersede_stale_generating(video_id)
         nid = self._insert(video_id, gemini_model, voice, tts.model_id, dur)
+        ndir = self.store.narration_dir(pack_uid, video_id)
+        analysis_video = local
+        proxy_path: Optional[Path] = None
         try:
+            if local.stat().st_size > _GEMINI_PROXY_THRESHOLD_BYTES:
+                proxy_path = ndir / "gemini_proxy.mp4"
+                media.make_gemini_proxy(local, proxy_path)
+                analysis_video = proxy_path
+
             # 1) Gemini analysis -> structured, scene-anchored narration
-            gem = GeminiService(model=gemini_model)
+            gem = GeminiService(model=gemini_model, timeout=600, max_retries=5)
             prompt = build_analysis_prompt(dur, meta=meta)
             with AICallLog(
                 service="gemini", model=gemini_model, task="narration:analyze",
                 related_table="tk_video_narrations", related_id=nid,
                 prompt_summary=prompt[:300],
             ) as log:
-                res = gem.analyze_video(local, prompt, json_mode=True)
+                res = gem.analyze_video(analysis_video, prompt, json_mode=True)
                 u = res.get("usage") or {}
                 log.set_usage(
                     input_tokens=u.get("input_tokens", 0),
@@ -212,7 +240,6 @@ class VideoNarrationService:
                 anchors.append(a)
                 prev = a
 
-            ndir = self.store.narration_dir(pack_uid, video_id)
             # 3) Per-segment TTS, fit each into its scene window
             warnings: list[str] = []
             max_atempo = 1.0
@@ -310,6 +337,12 @@ class VideoNarrationService:
             logger.exception("narration #%s failed (video #%s)", nid, video_id)
             self._finish(nid, status="error", error=f"{type(e).__name__}: {e}"[:1000])
             raise
+        finally:
+            if proxy_path is not None:
+                try:
+                    proxy_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
         return self.get_narration(nid)
 
     # ------------------------------------------------------------------
@@ -344,6 +377,19 @@ class VideoNarrationService:
     # ------------------------------------------------------------------
     # DB writers
     # ------------------------------------------------------------------
+
+    def _supersede_stale_generating(self, video_id: int) -> None:
+        n = _now()
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                """UPDATE tk_video_narrations
+                      SET status='error',
+                          error='被新任务取代',
+                          updated_at=?
+                    WHERE video_id=? AND status='generating'""",
+                (n, video_id),
+            )
+            conn.commit()
 
     def _insert(self, video_id: int, gemini_model: str, voice_id: str,
                 tts_model: str, dur: float) -> int:

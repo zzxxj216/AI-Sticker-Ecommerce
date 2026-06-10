@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -15,8 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "ops_workbench.db"
 # Default shops for export script (internal registry keys).
 DEFAULT_SHOPS = ("inkelligentsticker", "inkelligentstudio")
-DEFAULT_SALE_PRICE = "16.99"
-DEFAULT_DISCOUNT_PRICE = ""
+DEFAULT_SALE_PRICE = os.getenv("TKSHOP_DEFAULT_SALE_PRICE", "13.98")
+DEFAULT_DISCOUNT_PRICE = os.getenv("TKSHOP_DEFAULT_DISCOUNT_PRICE", "6.99")
 DEFAULT_STOCK = "100"
 
 

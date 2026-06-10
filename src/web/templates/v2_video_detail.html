@@ -1,5 +1,8 @@
 ﻿{% extends 'v2_base.html' %}
 {% block content %}
+{% if video_processing %}
+<meta http-equiv="refresh" content="10">
+{% endif %}
 
 <style>
   .video-detail-page { padding-top:14px; }
@@ -22,7 +25,9 @@
         pack <a class="text-link" href="/v2/packs/{{ video.pack_id }}">#{{ video.pack_id }}</a>
         · 发布账号 {{ video.blotato_account_label }}
         · <span class="v2-status-pill {{ video_status_pill_cls(video.publish_status) }}">{{ video_status_label_zh(video.publish_status) }}</span>
-        {% if video.caption_task_running %}<span class="v2-status-pill running">AI 分析中</span>{% endif %}
+        {% if video_create_task_running %}<span class="v2-status-pill running">文件处理中</span>{% endif %}
+        {% if video.caption_task_running %}<span class="v2-status-pill running">AI 文案生成中</span>{% endif %}
+        {% if narration_task_running %}<span class="v2-status-pill running">配音生成中</span>{% endif %}
       </p>
     </div>
     <div class="v2-action-row">
@@ -37,6 +42,13 @@
       </form>
     </div>
   </section>
+
+  <div data-video-created-banner style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;"></div>
+  {% if video_processing %}
+  <div style="margin-bottom:14px;padding:10px 14px;border-radius:8px;border:1px solid var(--accent-glow);background:var(--accent-bg);color:var(--accent-dark);font-size:13px;font-weight:600;">
+    后台处理中（保存文件 / AI 文案 / 配音）— 页面每 10 秒自动刷新，完成后状态标签会消失。
+  </div>
+  {% endif %}
 
   <div class="video-detail-grid">
     <div class="video-info-card"><span>关联卡包</span><strong><a class="text-link" href="/v2/packs/{{ video.pack_id }}">#{{ video.pack_id }} {{ video.pack_name }}</a></strong></div>
@@ -89,7 +101,7 @@
         <h3 style="margin:0;font-size:16px;">AI 文案 / Hashtag</h3>
         <p class="muted" style="margin-top:4px;">不再展示大视频预览，只维护发布文案、账号和状态。</p>
       </div>
-      <form method="post" action="/v2/videos/{{ video.id }}/generate-caption" data-async-form data-pending-text="AI 分析中…">
+      <form method="post" action="/v2/videos/{{ video.id }}/generate-caption" data-async-form data-pending-text="已提交后台…">
         <input type="hidden" name="return_to" value="/v2/videos/{{ video.id }}">
         <button type="submit" class="button">{% if video.caption %}重新 AI 分析{% else %}AI 分析生成{% endif %}</button>
       </form>
@@ -417,5 +429,36 @@
 </section>
 
 {% include '_v2_video_player_modal.html' %}
+
+<script>
+  (function () {
+    const params = new URLSearchParams(window.location.search || '');
+    if (!params.get('video_created')) return;
+    const banner = document.querySelector('[data-video-created-banner]');
+    if (!banner) return;
+    const parts = [];
+    let isError = false;
+    if (params.get('processing')) parts.push('正在后台处理（保存文件 / AI 文案 / 配音）');
+    if (params.get('caption_pending')) parts.push('AI 文案已提交后台生成');
+    if (params.get('dispatch_error')) {
+      parts.push('立即发布失败：' + params.get('dispatch_error'));
+      isError = true;
+    } else if (params.get('dispatch_pending')) {
+      parts.push('已提交立即发布到 Blotato（后台任务）');
+    }
+    if (params.get('caption_ready')) parts.push('AI 文案已生成，可在下方编辑');
+    banner.textContent = '视频已创建。' + (parts.length ? parts.join('；') + '。' : '可继续编辑文案、账号和排期。');
+    banner.style.display = 'block';
+    if (isError) {
+      banner.style.color = 'var(--danger)';
+      banner.style.border = '1px solid var(--danger)';
+      banner.style.background = 'rgba(239,68,68,.08)';
+    } else {
+      banner.style.color = 'var(--success)';
+      banner.style.border = '1px solid var(--success)';
+      banner.style.background = 'rgba(16,185,129,.1)';
+    }
+  })();
+</script>
 
 {% endblock %}

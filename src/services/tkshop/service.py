@@ -165,19 +165,18 @@ TKSHOP_SHOPS = [
 ]
 # Default commerce fields for export / operator spreadsheets (TikTok Seller
 # Center bulk edit). Live listings override sale_price/stock via platform GET.
-TKSHOP_DEFAULT_SALE_PRICE = os.getenv("TKSHOP_DEFAULT_SALE_PRICE", "16.99")
-TKSHOP_DEFAULT_DISCOUNT_PRICE = (os.getenv("TKSHOP_DEFAULT_DISCOUNT_PRICE") or "").strip()
-TKSHOP_DEFAULT_QUANTITY = os.getenv("TKSHOP_DEFAULT_QUANTITY", "100")
+TKSHOP_DEFAULT_SALE_PRICE = os.getenv("TKSHOP_DEFAULT_SALE_PRICE", "13.98")
+TKSHOP_DEFAULT_DISCOUNT_PRICE = (os.getenv("TKSHOP_DEFAULT_DISCOUNT_PRICE") or "6.99").strip()
+TKSHOP_DEFAULT_QUANTITY = os.getenv("TKSHOP_DEFAULT_QUANTITY", "16")
 
 # Auto discount: after a successful publish, ask the middle layer to put the
-# product on a N% discount. 0 (or negative) disables it. Default 40 per the
-# operator's standing rule "always launch at 40% off". The middle layer turns
-# this into a TikTok Promotion activity (see
-# docs/tiktok_product_shipping_discount_contract.md).
+# product on a N% discount. 0 (or negative) disables it. Default 50% off
+# $13.98 list → $6.99 buyer price. The middle layer turns this into a TikTok
+# Promotion activity (see docs/tiktok_product_shipping_discount_contract.md).
 try:
-    TKSHOP_AUTO_DISCOUNT_PERCENT = float(os.getenv("TKSHOP_AUTO_DISCOUNT_PERCENT", "40") or 0)
+    TKSHOP_AUTO_DISCOUNT_PERCENT = float(os.getenv("TKSHOP_AUTO_DISCOUNT_PERCENT", "50") or 0)
 except (TypeError, ValueError):
-    TKSHOP_AUTO_DISCOUNT_PERCENT = 40.0
+    TKSHOP_AUTO_DISCOUNT_PERCENT = 50.0
 
 # Discount activity window (days). TikTok promotions need begin/end times and
 # CAP the period at 90 days (error 17029007), so default to 89. The middle

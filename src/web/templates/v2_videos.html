@@ -18,6 +18,10 @@
   .video-cover { width:56px; height:56px; border-radius:var(--radius-md); border:1px solid var(--line-soft); object-fit:cover; background:var(--bg-subtle); }
   .video-empty-cover { display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:11px; }
   .video-title-cell { max-width:270px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .video-title-cell a.v2-video-title { color:var(--text); font-weight:700; text-decoration:none; }
+  .video-title-cell a.v2-video-title:hover { color:var(--accent-dark); text-decoration:underline; }
+  .video-title-cell .pack-link { margin-left:6px; font-size:11px; font-weight:600; color:var(--text-muted); text-decoration:none; }
+  .video-title-cell .pack-link:hover { color:var(--accent); text-decoration:underline; }
   /* Inline action buttons — same pattern as v2_products.html .row-btn. */
   .video-row-actions {
     display:inline-flex; gap:6px;
@@ -209,7 +213,7 @@
         <tbody>
           {% for v in videos %}
           <tr>
-            <td class="mono-cell">#{{ v.id }}</td>
+            <td class="mono-cell"><a href="/v2/videos/{{ v.id }}" class="text-link">#{{ v.id }}</a></td>
             <td>
               {% if v.pack_cover_url %}
               <a href="/v2/packs/{{ v.pack_id }}"><img class="video-cover" src="{{ v.pack_cover_url }}" alt="{{ v.pack_name }} 封面" loading="lazy"></a>
@@ -218,11 +222,16 @@
               {% endif %}
             </td>
             <td>
-              <div class="video-title-cell"><a class="v2-pack-title" href="/v2/packs/{{ v.pack_id }}">{{ v.pack_name or '—' }}</a></div>
-              <div class="row-subtitle">{{ (v.video_one_liner or '未填写视频描述')[:72] }}</div>
+              <div class="video-title-cell">
+                <a class="v2-video-title" href="/v2/videos/{{ v.id }}">{{ v.pack_name or ('视频 #' ~ v.id) }}</a>
+                <a class="pack-link" href="/v2/packs/{{ v.pack_id }}" title="打开卡包">卡包 #{{ v.pack_id }}</a>
+              </div>
+              <div class="row-subtitle"><a href="/v2/videos/{{ v.id }}" style="color:inherit;text-decoration:none;">{{ (v.video_one_liner or '未填写视频描述')[:72] }}</a></div>
               <div class="v2-action-row" style="margin-top:6px;gap:5px;">
                 {% if v.local_video_path %}<span class="v2-status-pill ok">已上传视频</span>{% else %}<span class="v2-status-pill pending">未上传视频</span>{% endif %}
+                {% if v.video_create_task_running %}<span class="v2-status-pill running">处理中</span>{% endif %}
                 {% if v.caption_task_running %}<span class="v2-status-pill running">AI 分析中</span>{% endif %}
+                {% if v.narration_task_running %}<span class="v2-status-pill running">配音中</span>{% endif %}
               </div>
             </td>
             <td>
@@ -260,13 +269,11 @@
   </section>
 
   <dialog class="v2-dialog video-create-dialog" id="video-create-dialog" aria-labelledby="video-create-title">
-    <form method="post" action="/v2/videos" enctype="multipart/form-data">
-      <input type="hidden" name="return_to" value="{{ create_return_url }}">
-      <input type="hidden" name="caption_mode" value="sync">
+    <form method="post" action="/v2/videos" enctype="multipart/form-data" id="video-create-form" data-pending-text="创建中…">
       <div class="v2-dialog-header">
         <div>
           <h3 id="video-create-title" style="margin:0;font-size:18px;">新建 TK 视频</h3>
-          <p class="muted" style="margin-top:4px;">选择卡包和视频文件，创建时立即 AI 分析 Caption + Hashtag，完成后自动打开详情展示结果。</p>
+          <p class="muted" style="margin-top:4px;">点「创建视频」后立刻进入详情页；保存文件、AI 文案、配音在后台异步执行，页面会自动刷新状态。</p>
         </div>
         <button type="button" class="v2-dialog-close" data-close-dialog aria-label="关闭新建视频弹窗">×</button>
       </div>
@@ -337,7 +344,7 @@
                   <input type="checkbox" name="generate_caption" value="1" checked>
                   <span>立即 AI 分析生成 Caption + Hashtag</span>
                 </label>
-                <p>提交后会先创建视频，再同步生成英文 caption 和 hashtags；生成完成后自动打开视频详情，直接展示可编辑内容。</p>
+                <p>勾选后会在后台异步生成英文 caption 和 hashtags；详情页出现「AI 分析中」时可继续编辑其他字段。</p>
               </section>
               <section class="video-create-section">
                 <div class="video-create-section-title">
@@ -366,7 +373,7 @@
       </div>
       <div class="v2-dialog-footer">
         <button type="button" class="button ghost" data-close-dialog>取消</button>
-        <button type="submit" class="button">创建视频</button>
+        <button type="submit" class="button" id="video-create-submit">创建视频</button>
       </div>
     </form>
   </dialog>
@@ -710,7 +717,7 @@
         button.addEventListener('click', function () { closeDialog(dialog); });
       });
     });
-    document.querySelectorAll('[data-async-form]').forEach(function (form) {
+    document.querySelectorAll('[data-async-form], [data-pending-text]').forEach(function (form) {
       form.addEventListener('submit', function () {
         const button = form.querySelector('button[type="submit"]');
         if (button) {

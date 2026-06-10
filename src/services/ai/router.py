@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 from src.core.config import config
 from src.core.exceptions import APIError
+from src.core.http_proxy import httpx_request_kwargs, openai_http_client
 from src.core.logger import get_logger
 from src.services.ai.base import try_parse_json
 from src.services.ai.call_logger import AICallLog
@@ -383,7 +384,12 @@ class AIRouter:
             related_id=related_id,
             prompt_summary=query[:500],
         ) as log:
-            client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
+            client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=60,
+                http_client=openai_http_client(base_url or "", timeout=60),
+            )
             resp = client.responses.create(
                 model=model,
                 input=(
@@ -450,7 +456,12 @@ class AIRouter:
             related_id=related_id,
             prompt_summary=query[:500],
         ) as log:
-            client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
+            client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=60,
+                http_client=openai_http_client(base_url or "", timeout=60),
+            )
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": (
@@ -570,7 +581,11 @@ class AIRouter:
             last_err: Exception | None = None
             for attempt in range(1, max_attempts + 1):
                 try:
-                    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                    with httpx.Client(
+                        timeout=timeout,
+                        follow_redirects=True,
+                        **httpx_request_kwargs(url),
+                    ) as client:
                         resp = client.get(url)
                         resp.raise_for_status()
                         content = resp.content
@@ -670,6 +685,7 @@ class AIRouter:
                              "Content-Type": "application/json"},
                     json=body,
                     timeout=300,
+                    **httpx_request_kwargs(t2i_url),
                 )
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
@@ -751,6 +767,7 @@ class AIRouter:
                                  "Content-Type": "application/json"},
                         json=body,
                         timeout=300,
+                        **httpx_request_kwargs(i2i_url),
                     )
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as e:

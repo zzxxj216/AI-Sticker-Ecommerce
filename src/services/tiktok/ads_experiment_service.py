@@ -457,6 +457,20 @@ class AdsExperimentService:
                 "(promote_type='video') experiments",
                 service="tiktok_ads",
             )
+        if is_spark and identity_id and not identity_type:
+            # Persist the real identity_type now — an empty value later makes
+            # the middle layer assume AUTH_CODE at ad/create and TikTok rejects
+            # BC_AUTH_TT identities promoted without their BC id.
+            try:
+                idents = self.ads.list_identities()
+                match = next(
+                    (i for i in idents if i.get("identity_id") == identity_id), None)
+                identity_type = (match or {}).get("identity_type") or "BC_AUTH_TT"
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "create_experiment: identity_type resolve failed (%s); "
+                    "assuming BC_AUTH_TT", e)
+                identity_type = "BC_AUTH_TT"
         # Resolve the list of videos to promote. Multi-video: each video × each
         # audience = one adgroup. Back-compat: single promote_ref_id → 1-elem list.
         videos = [str(v).strip() for v in (promote_ref_ids or []) if str(v).strip()]
@@ -730,6 +744,23 @@ class AdsExperimentService:
         n_adgroups = len(ag_units)
         total_budget = per_adgroup_budget * n_adgroups
 
+        # Spark ads break at ad/create if identity_type is missing: the middle
+        # layer assumes AUTH_CODE and omits the BC id, which TikTok rejects for
+        # BC_AUTH_TT identities. Resolve the real type from identity/get.
+        identity_id = (exp["identity_id"] or "").strip()
+        identity_type = (exp["identity_type"] or "").strip()
+        if identity_id and not identity_type:
+            try:
+                idents = self.ads.list_identities()
+                match = next(
+                    (i for i in idents if i.get("identity_id") == identity_id), None)
+                identity_type = (match or {}).get("identity_type") or "BC_AUTH_TT"
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "launch_experiment #%d: identity_type resolve failed (%s); "
+                    "assuming BC_AUTH_TT", experiment_id, e)
+                identity_type = "BC_AUTH_TT"
+
         # Guardrails — enforced before any real spend.
         guard = _guardrails()
         if guard["max_experiment_budget"] > 0 and total_budget > guard["max_experiment_budget"]:
@@ -756,7 +787,7 @@ class AdsExperimentService:
                 f"SELECT id, name, targeting_json FROM tk_ad_audiences WHERE id IN ({ph})",
                 tuple(audience_ids),
             ).fetchall()
-        aud_by_id = {r["id"]: r for r in arows}
+        aud_by_id = {r["id"]: dict(r) for r in arows}
         ptype = str(exp["promote_type"])
 
         def _targ(aid: int) -> dict[str, Any]:
@@ -772,7 +803,7 @@ class AdsExperimentService:
             aid = u["audience_id"]
             audiences_payload.append({
                 "client_audience_id": aid,
-                "name": (aud_by_id.get(aid) or {}).get("name") if aud_by_id.get(aid) else None,
+                "name": (aud_by_id.get(aid) or {}).get("name"),
                 "targeting": _targ(aid),
                 "promote": {"type": ptype, "ref_id": str(u["promote_ref_id"] or exp["promote_ref_id"] or "")},
             })
@@ -780,8 +811,8 @@ class AdsExperimentService:
         payload = {
             "advertiser_id": str(exp["advertiser_id"]),
             "objective": str(exp["objective"]),
-            "identity_id": exp["identity_id"] or "",
-            "identity_type": exp["identity_type"] or "",
+            "identity_id": identity_id,
+            "identity_type": identity_type,
             "promote": {"type": ptype, "ref_id": str(exp["promote_ref_id"])},
             "per_adgroup_budget": per_adgroup_budget,
             "currency": exp["currency"] or "USD",

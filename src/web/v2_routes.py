@@ -2884,6 +2884,8 @@ def v2_videos_list(
         v["video_url"] = _path_to_v2_url(v.get("local_video_path") or "")
         v["hashtags_text"] = "\n".join(v.get("hashtags") or [])
         v["caption_task_running"] = is_running(f"caption_gen:{v['id']}")
+        v["video_create_task_running"] = is_running(f"video_create:{v['id']}")
+        v["narration_task_running"] = is_running(f"narration:{v['id']}")
         v["blotato_account_label"] = _blotato_account_label(v.get("blotato_account_id"), blotato["accounts"])
         # Per-video script context for the inline dialog
         v["scripts"] = vss.list_scripts(v["id"])
@@ -2960,51 +2962,31 @@ def _cleanup_upload_tmp(tmp_path: str) -> None:
         logger.warning("upload tmp cleanup failed for %s", tmp_path)
 
 
-def _process_new_video(
+def _enqueue_post_create_tasks(
     video_id: int,
     *,
-    tmp_path: str,
-    original_filename: str,
+    file_saved: bool,
     scheduled_at: int,
     dispatch_now: bool,
     generate_caption: bool,
 ) -> None:
-    """Heavy half of video creation, run off the request thread.
+    """Kick off slow follow-up work after the row (and optional file) exist.
 
-    Creating a video touches a lot of slow business logic (copying the file
-    into the pack tree, AI caption, Gemini narration + voiceover, optional
-    Blotato dispatch). We persist the upload bytes + create the row inline so
-    the operator gets an instant redirect, then this runs everything else in
-    one background task. The video row already exists, so the list page shows
-    it immediately with live status pills as each step completes.
+    Caption + narration always run as their own background tasks so the
+    operator isn't blocked on the create redirect. Immediate publish is the
+    only path that generates caption inline (dispatch needs the text first).
     """
     svc = get_tk_video_service()
 
-    file_saved = False
-    if tmp_path:
-        try:
-            svc.save_video_file(
-                video_id, Path(tmp_path),
-                original_filename=original_filename or "local.mp4",
-            )
-            file_saved = True
-        except Exception:
-            logger.exception("video #%d: background save_video_file failed", video_id)
-        finally:
-            _cleanup_upload_tmp(tmp_path)
-
     if scheduled_at and not dispatch_now:
-        svc.schedule_video(video_id, scheduled_at)
+        try:
+            svc.schedule_video(video_id, scheduled_at)
+        except Exception:
+            logger.exception("video #%d: background schedule failed", video_id)
 
-    # Caption is generated whenever the form asked for it OR a file landed
-    # (every uploaded video gets a caption auto-generated). It doesn't need
-    # the file — it reads pack metadata + the one-liner.
     want_caption = generate_caption or file_saved
 
     if dispatch_now:
-        # The published post must carry the caption, so generate it *before*
-        # dispatching (inline in this thread). Narration is independent of
-        # publishing the raw file, so fire it in parallel.
         if want_caption:
             try:
                 svc.generate_caption(video_id)
@@ -3028,17 +3010,49 @@ def _process_new_video(
                 "video #%d: dispatch skipped — missing video file or Blotato account",
                 video_id,
             )
-    else:
-        # No immediate publish: fire caption + narration as their own parallel
-        # tasks so the list page's "AI 分析中" / narration indicators light up.
-        if file_saved:
-            _kickoff_post_upload(video_id, include_caption=want_caption)
-        elif generate_caption:
-            run_async(
-                f"caption_gen:{video_id}",
-                svc.generate_caption, video_id,
-                label=f"AI 文案 video #{video_id}",
+        return
+
+    if file_saved:
+        _kickoff_post_upload(video_id, include_caption=want_caption)
+    elif generate_caption:
+        run_async(
+            f"caption_gen:{video_id}",
+            svc.generate_caption, video_id,
+            label=f"AI 文案 video #{video_id}",
+        )
+
+
+def _process_new_video(
+    video_id: int,
+    *,
+    tmp_path: str,
+    original_filename: str,
+    scheduled_at: int,
+    dispatch_now: bool,
+    generate_caption: bool,
+) -> None:
+    """Stage-1 background task: move upload into pack tree, then enqueue AI."""
+    svc = get_tk_video_service()
+    file_saved = False
+    if tmp_path:
+        try:
+            svc.save_video_file(
+                video_id, Path(tmp_path),
+                original_filename=original_filename or "local.mp4",
             )
+            file_saved = True
+        except Exception:
+            logger.exception("video #%d: background save_video_file failed", video_id)
+        finally:
+            _cleanup_upload_tmp(tmp_path)
+
+    _enqueue_post_create_tasks(
+        video_id,
+        file_saved=file_saved,
+        scheduled_at=scheduled_at,
+        dispatch_now=dispatch_now,
+        generate_caption=generate_caption,
+    )
 
 
 @router.post("/videos")
@@ -3106,12 +3120,11 @@ async def v2_video_create(request: Request):
         label=f"创建视频 #{video_id}（文件 / AI 文案 / 配音）",
     )
 
-    target = _safe_v2_redirect(form.get("return_to"), "/v2/videos")
+    target = _safe_v2_redirect(form.get("return_to"), f"/v2/videos/{video_id}")
     return RedirectResponse(
         url=_append_query(
             target,
             {
-                "open_video": video_id,
                 "video_created": 1,
                 "processing": 1,
                 "caption_pending": 1 if (generate_caption or has_file) else None,
@@ -3137,6 +3150,7 @@ def v2_video_detail(request: Request, video_id: int):
     v["hashtags_text"] = "\n".join(v.get("hashtags") or [])
     blotato = svc.list_blotato_accounts()
     v["caption_task_running"] = is_running(f"caption_gen:{v['id']}")
+    v["video_create_task_running"] = is_running(f"video_create:{video_id}")
     v["blotato_account_label"] = _blotato_account_label(v.get("blotato_account_id"), blotato["accounts"])
     # Video script context (templates + existing scripts for this video)
     from src.services.video_scripts import get_video_script_service
@@ -3168,6 +3182,12 @@ def v2_video_detail(request: Request, video_id: int):
             "script_task_running": script_task_running,
             "narration": narration,
             "narration_task_running": narration_task_running,
+            "video_create_task_running": v["video_create_task_running"],
+            "video_processing": bool(
+                v["video_create_task_running"]
+                or v["caption_task_running"]
+                or narration_task_running
+            ),
         },
     )
 
@@ -3443,7 +3463,6 @@ async def v2_video_generate_caption(request: Request, video_id: int):
         url=_append_query(
             target,
             {
-                "open_video": video_id,
                 "caption_ready": 1 if sync and not caption_error else None,
                 "caption_pending": 1 if not sync else None,
                 "caption_error": caption_error or None,
@@ -6691,7 +6710,7 @@ def _ads_call_and_redirect(experiment_id: int, method: str) -> RedirectResponse:
     except Exception as e:
         logger.warning("ads %s(%s) failed: %s", method, experiment_id, e)
         return RedirectResponse(
-            url=_append_query(target, {"error": str(e)[:160]}),
+            url=_append_query(target, {"error": str(e)[:400]}),
             status_code=303,
         )
     return RedirectResponse(
