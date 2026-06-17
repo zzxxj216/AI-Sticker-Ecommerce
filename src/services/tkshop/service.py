@@ -5437,14 +5437,94 @@ class TKShopService:
                     pr.get("id"), e,
                 )
 
-    def export_products_xlsx(self, product_ids: list[int]) -> bytes:
-        """XLSX with embedded main image + all metadata. One row per product."""
+    def export_local_products_rows(self, local_product_ids: list[int]) -> list[dict]:
+        """Export-ready dicts for master-catalog (local_products) rows.
+
+        Mirrors the shape of :meth:`export_products_rows` so the same XLSX/ZIP
+        builders work, but pulls from ``local_products`` / ``local_product_images``.
+        Platform-specific columns (tiktok ids, publish status) are aggregated
+        across each master's shop listings, since the master is shop-agnostic.
+        Returns rows in input order (skips ids that don't exist).
+        """
+        if not local_product_ids:
+            return []
+        ph = ",".join(["?"] * len(local_product_ids))
+        with _open_db(self.db_path) as conn:
+            masters = conn.execute(
+                f"""
+                SELECT lp.id, lp.pack_id, lp.seller_sku, lp.title,
+                       lp.description_html, lp.selling_points, lp.keywords,
+                       lp.category_id, lp.default_template_json, lp.created_at,
+                       p.display_name AS pack_name, p.pack_uid, p.total_stickers
+                  FROM local_products lp
+             LEFT JOIN packs         p ON p.id = lp.pack_id
+                 WHERE lp.id IN ({ph})
+                """,
+                tuple(local_product_ids),
+            ).fetchall()
+            order = {pid: i for i, pid in enumerate(local_product_ids)}
+            masters = sorted(
+                [dict(r) for r in masters],
+                key=lambda r: order.get(r["id"], 1e9),
+            )
+            for pr in masters:
+                imgs = conn.execute(
+                    """SELECT id, role, source, local_path, sort_order, ai_prompt
+                         FROM local_product_images
+                        WHERE local_product_id = ?
+                        ORDER BY role = 'main' DESC, sort_order ASC, id ASC""",
+                    (pr["id"],),
+                ).fetchall()
+                pr["images"] = [dict(i) for i in imgs]
+                # Aggregate the per-shop listings into the platform columns.
+                listings = conn.execute(
+                    """SELECT shop, tiktok_product_id, tiktok_sku_id,
+                              publish_status, published_at
+                         FROM tkshop_products
+                        WHERE local_product_id = ?
+                        ORDER BY shop, id""",
+                    (pr["id"],),
+                ).fetchall()
+                pr["tiktok_product_id"] = ", ".join(
+                    (ls["tiktok_product_id"] or "").strip()
+                    for ls in listings if (ls["tiktok_product_id"] or "").strip()
+                )
+                pr["tiktok_sku_id"] = ", ".join(
+                    (ls["tiktok_sku_id"] or "").strip()
+                    for ls in listings if (ls["tiktok_sku_id"] or "").strip()
+                )
+                pr["publish_status"] = "; ".join(
+                    f"{ls['shop']}:{ls['publish_status'] or 'draft'}"
+                    for ls in listings
+                ) or "no_listing"
+                pub_times = [int(ls["published_at"]) for ls in listings if ls["published_at"]]
+                pr["published_at"] = max(pub_times) if pub_times else None
+                try:
+                    pr["selling_points_list"] = json.loads(pr["selling_points"] or "[]")
+                except Exception:
+                    pr["selling_points_list"] = []
+                try:
+                    pr["keywords_list"] = json.loads(pr["keywords"] or "[]")
+                except Exception:
+                    pr["keywords_list"] = []
+        self._enrich_export_commerce_fields(masters)
+        return masters
+
+    def export_products_xlsx(
+        self, product_ids: Optional[list[int]] = None, *, rows: Optional[list[dict]] = None,
+    ) -> bytes:
+        """XLSX with embedded main image + all metadata. One row per product.
+
+        Pass ``rows`` to export precomputed dicts (e.g. master-catalog rows from
+        :meth:`export_local_products_rows`); otherwise rows are pulled from
+        ``tkshop_products`` for the given ``product_ids``.
+        """
         from io import BytesIO
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.drawing.image import Image as XLImage
 
-        rows = self.export_products_rows(product_ids)
+        rows = rows if rows is not None else self.export_products_rows(product_ids or [])
         wb = Workbook()
         ws = wb.active
         ws.title = "TKShop Products"
@@ -5542,15 +5622,20 @@ class TKShopService:
         wb.save(buf)
         return buf.getvalue()
 
-    def export_products_zip(self, product_ids: list[int]) -> bytes:
+    def export_products_zip(
+        self, product_ids: Optional[list[int]] = None, *, rows: Optional[list[dict]] = None,
+    ) -> bytes:
         """ZIP containing products.csv + images/ folder with all product images.
         Image filenames: ``{seller_sku or product_id}__{role}_{sort_order}{ext}``.
+
+        Pass ``rows`` to export precomputed dicts (e.g. master-catalog rows);
+        otherwise rows are pulled from ``tkshop_products`` for ``product_ids``.
         """
         import csv
         from io import BytesIO, StringIO
         import zipfile
 
-        rows = self.export_products_rows(product_ids)
+        rows = rows if rows is not None else self.export_products_rows(product_ids or [])
         buf = BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             # CSV

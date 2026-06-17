@@ -4456,32 +4456,43 @@ async def v2_products_sync_all(request: Request):
 @router.post("/products/export")
 async def v2_products_export(request: Request):
     """Bulk-export selected products. Accepts form fields:
-      - product_ids: list of int (multi-select checkboxes)
+      - product_ids: list of int — tkshop_products listing ids (产品列表页)
+      - local_product_ids: list of int — local_products master ids (本地产品库页)
       - fmt: 'xlsx' (default, embeds main images) or 'zip' (CSV + images folder)
     """
     form = await request.form()
-    raw_ids = form.getlist("product_ids") if hasattr(form, "getlist") else []
+
+    def _int_ids(field: str) -> list[int]:
+        raw = form.getlist(field) if hasattr(form, "getlist") else []
+        out: list[int] = []
+        for v in raw:
+            try:
+                out.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        return out
+
     fmt = (form.get("fmt") or "xlsx").strip().lower()
-    ids: list[int] = []
-    for v in raw_ids:
-        try:
-            ids.append(int(v))
-        except (TypeError, ValueError):
-            continue
-    if not ids:
-        raise HTTPException(status_code=400, detail="no product_ids selected")
+    local_ids = _int_ids("local_product_ids")
+    ids = _int_ids("product_ids")
+    if not ids and not local_ids:
+        raise HTTPException(status_code=400, detail="no products selected")
 
     svc = get_tkshop_service()
     from datetime import datetime as _dt
     stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
 
+    # Master-catalog export takes precedence when local_product_ids is given.
+    rows = svc.export_local_products_rows(local_ids) if local_ids else None
+    name_stub = "local_products" if local_ids else "tkshop_products"
+
     if fmt == "zip":
-        data = svc.export_products_zip(ids)
-        filename = f"tkshop_products_{stamp}.zip"
+        data = svc.export_products_zip(ids, rows=rows)
+        filename = f"{name_stub}_{stamp}.zip"
         media = "application/zip"
     else:
-        data = svc.export_products_xlsx(ids)
-        filename = f"tkshop_products_{stamp}.xlsx"
+        data = svc.export_products_xlsx(ids, rows=rows)
+        filename = f"{name_stub}_{stamp}.xlsx"
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     from io import BytesIO
