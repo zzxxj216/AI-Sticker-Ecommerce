@@ -4380,6 +4380,90 @@ async def v2_products_batch_publish_from_local(request: Request):
     )
 
 
+def _parse_local_product_ids(form) -> list[int]:
+    """Extract repeated ``local_product_ids`` form values as ints."""
+    raw = form.getlist("local_product_ids") if hasattr(form, "getlist") else []
+    out: list[int] = []
+    for v in raw:
+        try:
+            out.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+@router.post("/local-products/batch-set-quantity")
+async def v2_local_products_batch_set_quantity(request: Request):
+    """One-click batch edit of the local default stock (本地默认库存).
+
+    Local-only: writes ``local_products.default_quantity`` for the selected
+    masters. Does NOT touch live TikTok inventory — the value is applied as the
+    listing quantity on the next push. Form: ``local_product_ids`` (repeated),
+    ``quantity`` (int >= 0), optional ``back``.
+    """
+    form = await request.form()
+    ids = _parse_local_product_ids(form)
+    if not ids:
+        raise HTTPException(status_code=400, detail="no local_product_ids selected")
+    raw_qty = (form.get("quantity") or "").strip()
+    try:
+        quantity = int(raw_qty)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"invalid quantity {raw_qty!r}")
+    if quantity < 0:
+        raise HTTPException(status_code=400, detail="quantity must be >= 0")
+    svc = get_tkshop_service()
+    n = svc.batch_set_local_default_quantity(ids, quantity)
+    logger.info("batch-set-quantity: qty=%d applied to %d masters", quantity, n)
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/local-products/")
+    sep = "&" if "?" in back else "?"
+    msg = f"已把 {n} 个本地产品的默认库存改为 {quantity}（下次推送生效）"
+    return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+
+
+@router.post("/products/batch-shop-status")
+async def v2_products_batch_shop_status(request: Request):
+    """One-click 上架 / 下架 for one shop, driven by local_product ids.
+
+    Toggles the live status of selected masters' listings on ``shop`` via the
+    middle layer (activate/deactivate). Real platform write — fire-and-forget
+    so the operator gets a redirect immediately. Form: ``local_product_ids``
+    (repeated), ``shop``, ``action`` ('activate' | 'deactivate'), optional
+    ``back``.
+    """
+    form = await request.form()
+    shop = (form.get("shop") or "").strip()
+    if shop not in TKSHOP_SHOPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown shop {shop!r}; configured: {TKSHOP_SHOPS}",
+        )
+    action = (form.get("action") or "").strip().lower()
+    if action not in ("activate", "deactivate"):
+        raise HTTPException(status_code=400, detail="action must be activate/deactivate")
+    ids = _parse_local_product_ids(form)
+    if not ids:
+        raise HTTPException(status_code=400, detail="no local_product_ids selected")
+    svc = get_tkshop_service()
+    verb = "上架" if action == "activate" else "下架"
+    task_id = f"tkshop_batch_shop_status:{action}:{shop}:{int(time.time())}"
+    run_async(
+        task_id,
+        svc.batch_set_shop_listing_status,
+        ids, shop,
+        activate=(action == "activate"),
+        label=f"批量{verb} {get_shop_label(shop)} ({len(ids)} 选)",
+    )
+    logger.info(
+        "batch-shop-status dispatched: %s %d masters → %s (task=%s)",
+        action, len(ids), shop, task_id,
+    )
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/local-products/")
+    sep = "&" if "?" in back else "?"
+    msg = f"已派发 {len(ids)} 个本地产品在「{get_shop_label(shop)}」{verb}（仅对已上架的生效）"
+    return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+
+
 @router.post("/products/batch-publish-to-shop")
 async def v2_products_batch_publish_to_shop(request: Request):
     """Multi-select 'batch-publish to shop X' from the local-products tab.

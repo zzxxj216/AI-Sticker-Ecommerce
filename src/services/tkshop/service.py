@@ -684,25 +684,34 @@ class TKShopService:
         truth for title/description/images; listings carry shop-specific
         platform IDs and a snapshot of what was last pushed.
         """
-        target_shop = (shop or TKSHOP_DEFAULT_SHOP).strip() or TKSHOP_DEFAULT_SHOP
+        # Always store the canonical shop key so a legacy alias (main/second)
+        # and its canonical name (inkelligentsticker/inkelligentstudio) are
+        # never treated as two different shops — that mismatch is what used to
+        # spawn a duplicate listing for the same physical store.
+        target_shop = canonical_shop_key(shop or TKSHOP_DEFAULT_SHOP)
         # Master is mandatory — created first so the listing FK can point at
         # it from row insert (avoids a second UPDATE).
         local_product_id = self.get_or_create_local_product(pack_id)
         with _open_db(self.db_path) as conn:
+            # Idempotency is canonical-shop-aware: an existing row stored under
+            # a legacy alias counts as the same shop, so we reuse it instead of
+            # minting a duplicate.
             existing = conn.execute(
-                "SELECT id FROM tkshop_products WHERE pack_id = ? AND shop = ? "
-                "ORDER BY id DESC LIMIT 1",
-                (pack_id, target_shop),
-            ).fetchone()
-            if existing:
-                return existing["id"]
+                "SELECT id, shop FROM tkshop_products WHERE pack_id = ? "
+                "ORDER BY id DESC",
+                (pack_id,),
+            ).fetchall()
+            for row in existing:
+                if canonical_shop_key(row["shop"]) == target_shop:
+                    return row["id"]
             now = int(time.time())
             # Snapshot master fields into the listing — if master is still
             # empty (operator hasn't run AI gen yet) the listing inherits the
             # empties, which is the same as the old behavior.
             master = conn.execute(
                 "SELECT title, description_html, selling_points, keywords, "
-                "       detail_main_raw_text, category_id, default_template_json "
+                "       detail_main_raw_text, category_id, default_template_json, "
+                "       seller_sku "
                 "FROM local_products WHERE id = ?",
                 (local_product_id,),
             ).fetchone()
@@ -711,9 +720,9 @@ class TKShopService:
                 INSERT INTO tkshop_products
                     (pack_id, shop, tiktok_product_id, detail_main_raw_text,
                      title, description_html, selling_points, keywords,
-                     category_id, default_template_json, publish_status,
-                     created_at, published_at, local_product_id)
-                VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?)
+                     seller_sku, category_id, default_template_json,
+                     publish_status, created_at, published_at, local_product_id)
+                VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?)
                 """,
                 (
                     pack_id, target_shop,
@@ -722,6 +731,9 @@ class TKShopService:
                     master["description_html"] or "",
                     master["selling_points"] or "[]",
                     master["keywords"] or "[]",
+                    # Inherit the master SKU so every shop's listing shares one
+                    # SKU. Empty master SKU falls back at publish time.
+                    master["seller_sku"] or "",
                     master["category_id"] or "928016",
                     master["default_template_json"] or "{}",
                     now, local_product_id,
@@ -3166,9 +3178,11 @@ class TKShopService:
                 """
                 SELECT pr.id, pr.shop, pr.title, pr.description_html, pr.category_id,
                        pr.seller_sku, pr.tiktok_product_id, pr.tiktok_sku_id,
-                       p.display_name, p.pack_uid, p.total_stickers
+                       p.display_name, p.pack_uid, p.total_stickers,
+                       lp.default_quantity AS master_default_quantity
                   FROM tkshop_products pr
                   JOIN packs p ON p.id = pr.pack_id
+             LEFT JOIN local_products lp ON lp.id = pr.local_product_id
                  WHERE pr.id = ?
                 """, (product_id,),
             ).fetchone()
@@ -3204,25 +3218,51 @@ class TKShopService:
             if staged and os.path.isfile(staged):
                 image_paths.append(staged)
 
-        # Quantity: ship 100 per SKU by default. Operator can tune via
-        # TKSHOP_DEFAULT_QUANTITY without touching code.
+        # Quantity (initial inventory written to TikTok). Prefer the master's
+        # per-product default_quantity (set via the 本地产品 batch-stock tool);
+        # fall back to the env-wide TKSHOP_DEFAULT_QUANTITY when unset (NULL).
         quantity = int(TKSHOP_DEFAULT_QUANTITY)
+        with _open_db(self.db_path) as conn:
+            mq = conn.execute(
+                "SELECT lp.default_quantity FROM local_products lp "
+                "JOIN tkshop_products pr ON pr.local_product_id = lp.id "
+                "WHERE pr.id = ?",
+                (product_id,),
+            ).fetchone()
+        if mq is not None and mq["default_quantity"] is not None:
+            try:
+                quantity = max(0, int(mq["default_quantity"]))
+            except (TypeError, ValueError):
+                pass
 
         seller_sku = pr["seller_sku"] or ""
         if not seller_sku:
-            # Fallback if AI/extract step never populated it. Use the row's
-            # shop so the prefix (INK1/INK2/…) matches the destination store.
             with _open_db(self.db_path) as conn:
-                seller_sku = compute_default_seller_sku(
-                    pack_uid=pr["pack_uid"] or "",
-                    total_stickers=pr["total_stickers"] or 0,
-                    pack_id=product_id,
-                    shop=pr["shop"] or TKSHOP_DEFAULT_SHOP,
+                # Fallback if AI/extract step never populated it. Prefer the
+                # master's SKU so this listing matches the local product (and
+                # any sibling shop's listing); only compute a fresh default if
+                # the master is also blank.
+                master_sku_row = conn.execute(
+                    "SELECT lp.seller_sku FROM local_products lp "
+                    "JOIN tkshop_products pr ON pr.local_product_id = lp.id "
+                    "WHERE pr.id = ?",
+                    (product_id,),
+                ).fetchone()
+                seller_sku = (
+                    (master_sku_row["seller_sku"] or "").strip()
+                    if master_sku_row else ""
                 )
-                seller_sku = _ensure_unique_seller_sku(
-                    conn, seller_sku, exclude_product_id=product_id,
-                    shop=pr["shop"] or TKSHOP_DEFAULT_SHOP,
-                )
+                if not seller_sku:
+                    seller_sku = compute_default_seller_sku(
+                        pack_uid=pr["pack_uid"] or "",
+                        total_stickers=pr["total_stickers"] or 0,
+                        pack_id=product_id,
+                        shop=pr["shop"] or TKSHOP_DEFAULT_SHOP,
+                    )
+                    seller_sku = _ensure_unique_seller_sku(
+                        conn, seller_sku, exclude_product_id=product_id,
+                        shop=pr["shop"] or TKSHOP_DEFAULT_SHOP,
+                    )
                 # Persist so future retries/self-heal see the same value.
                 conn.execute(
                     "UPDATE tkshop_products SET seller_sku = ? WHERE id = ?",
@@ -3542,6 +3582,9 @@ class TKShopService:
         """
         if not target_shop:
             raise ValueError("target_shop is required")
+        # Normalize to the canonical shop key up front so a legacy alias and
+        # its canonical name are never treated as two different stores.
+        target_shop = canonical_shop_key(target_shop)
         if target_shop not in TKSHOP_SHOPS:
             raise ValueError(
                 f"unknown shop {target_shop!r}; configured shops: {TKSHOP_SHOPS}"
@@ -3557,15 +3600,30 @@ class TKShopService:
             ).fetchone()
             if not src:
                 raise ValueError(f"product #{product_id} not found")
-            if (src["shop"] or TKSHOP_DEFAULT_SHOP) == target_shop:
+            if canonical_shop_key(src["shop"] or TKSHOP_DEFAULT_SHOP) == target_shop:
                 raise ValueError(
                     f"product #{product_id} is already on shop {target_shop!r}"
                 )
-            # Unified SKU: same pack on different shops gets the same SKU now,
-            # so clone-to-shop produces an identical seller_sku as the source
-            # row. Uniqueness is scoped to the target shop; if some pre-existing
-            # row on the target shop already squats that SKU it gets a -2.
-            target_sku = compute_default_seller_sku(
+            # Don't fork a second listing if this pack already has one on the
+            # target shop (under any alias) — return that existing listing.
+            for row in conn.execute(
+                "SELECT id, shop FROM tkshop_products WHERE pack_id = ? AND id != ?",
+                (src["pack_id"], product_id),
+            ).fetchall():
+                if canonical_shop_key(row["shop"]) == target_shop:
+                    return row["id"]
+            # Unified SKU: every shop's listing for a pack shares one SKU.
+            # Prefer the master's SKU so a manually-edited master propagates;
+            # fall back to the computed default. Uniqueness is scoped to the
+            # target shop; a pre-existing row squatting that SKU gets a -2.
+            master_sku = ""
+            if src["local_product_id"]:
+                m = conn.execute(
+                    "SELECT seller_sku FROM local_products WHERE id = ?",
+                    (src["local_product_id"],),
+                ).fetchone()
+                master_sku = (m["seller_sku"] or "").strip() if m else ""
+            target_sku = master_sku or compute_default_seller_sku(
                 pack_uid=src["pack_uid"] or "",
                 total_stickers=src["total_stickers"] or 0,
                 pack_id=src["pack_id"],
@@ -3740,11 +3798,13 @@ class TKShopService:
             try:
                 if raw < 0:
                     listing_id = self.create_product_from_pack(-raw, shop=target_shop)
-                    # Also snapshot master images into the listing so publish
-                    # has something to upload.
-                    self._snapshot_master_images_to_listing(lp_id, listing_id)
                 else:
                     listing_id = raw
+                # Local product is the source of truth: refresh the listing's
+                # text fields + SKU and images from the master right before
+                # publishing, so a reused draft never ships stale content.
+                self._sync_master_to_listing(lp_id, listing_id)
+                self.sync_master_images_to_listing(lp_id, listing_id, replace=True)
                 with _open_db(self.db_path) as conn:
                     conn.execute(
                         "UPDATE tkshop_products SET publish_status = 'publishing' "
@@ -3896,6 +3956,56 @@ class TKShopService:
                 self._sync_pack_cover_from_listing_main(listing_id, conn=conn)
             conn.commit()
             return inserted
+
+    def _sync_master_to_listing(
+        self, local_product_id: int, listing_id: int,
+    ) -> bool:
+        """Overwrite a listing's text fields from its master (local product).
+
+        The local product is the single source of truth, so right before a
+        push we copy the master's title/description/selling_points/keywords/
+        detail/category and SKU onto the listing. Platform IDs and
+        publish_status are left untouched. Returns False if either row is
+        missing. Only call this for unpublished listings — the master-first
+        publish path already skips listings that are live on TikTok.
+        """
+        with _open_db(self.db_path) as conn:
+            m = conn.execute(
+                "SELECT title, description_html, selling_points, keywords, "
+                "       detail_main_raw_text, category_id, "
+                "       default_template_json, seller_sku "
+                "FROM local_products WHERE id = ?",
+                (local_product_id,),
+            ).fetchone()
+            if not m:
+                return False
+            cur = conn.execute(
+                """
+                UPDATE tkshop_products
+                   SET title                = ?,
+                       description_html      = ?,
+                       selling_points        = ?,
+                       keywords              = ?,
+                       detail_main_raw_text  = ?,
+                       category_id           = ?,
+                       default_template_json = ?,
+                       seller_sku            = ?
+                 WHERE id = ?
+                """,
+                (
+                    m["title"] or "",
+                    m["description_html"] or "",
+                    m["selling_points"] or "[]",
+                    m["keywords"] or "[]",
+                    m["detail_main_raw_text"] or "",
+                    m["category_id"] or "928016",
+                    m["default_template_json"] or "{}",
+                    m["seller_sku"] or "",
+                    listing_id,
+                ),
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
     def _sync_listing_main_to_local(
         self, local_product_id: int, listing_id: int,
@@ -5152,6 +5262,127 @@ class TKShopService:
         return {"ok": True, "remote_status": remote, "local_status": local,
                 "previous": row["publish_status"]}
 
+    def set_listing_live_status(
+        self, product_id: int, *, activate: bool,
+    ) -> dict[str, Any]:
+        """上架 / 下架 a single listing on its shop via the middle layer.
+
+        Calls ``POST {TKSHOP_SERVER_URL}/api/v1/tiktok/products/{id}/{activate
+        |deactivate}?shop=``. Only works for a listing already on the platform
+        (has tiktok_product_id). On success, refreshes publish_status from
+        TikTok (falls back to an optimistic local value if the sync fails).
+        Returns ``{ok, ...}``.
+        """
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tiktok_product_id, shop, publish_status "
+                "FROM tkshop_products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+        if not row:
+            return {"ok": False, "error_message": f"listing #{product_id} not found"}
+        tt_id = (row["tiktok_product_id"] or "").strip()
+        if not tt_id:
+            return {"ok": False, "error_message": "尚未上架到平台(无 tiktok_product_id)"}
+        shop_name = canonical_shop_key(row["shop"] or TKSHOP_DEFAULT_SHOP)
+        action = "activate" if activate else "deactivate"
+        endpoint = (
+            f"{TKSHOP_SERVER_URL.rstrip('/')}"
+            f"/api/v1/tiktok/products/{tt_id}/{action}"
+        )
+        try:
+            resp = requests.post(
+                endpoint, params={"shop": shop_name},
+                timeout=TKSHOP_SERVER_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            return {"ok": False, "error_message": f"{type(e).__name__}: {e}"[:200]}
+        try:
+            rj = resp.json() if resp.text else {}
+        except Exception:
+            rj = {"_raw_text": resp.text[:500]}
+        # ApiResponse envelope: {success, message, data}. Treat success=False
+        # (or non-2xx) as failure.
+        ok = bool(resp.ok)
+        if isinstance(rj, dict) and "success" in rj:
+            ok = ok and bool(rj.get("success"))
+        if not ok:
+            msg = ""
+            if isinstance(rj, dict):
+                msg = str(rj.get("message") or rj.get("error_message") or rj)
+            return {"ok": False, "_http_status": resp.status_code,
+                    "error_message": msg[:300] or f"HTTP {resp.status_code}"}
+        # Refresh status from the platform; on failure, set optimistically so
+        # the badge reflects the action immediately.
+        try:
+            self.sync_one_status(product_id)
+        except Exception:
+            with _open_db(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE tkshop_products SET publish_status = ? WHERE id = ?",
+                    ("activate" if activate else "seller_deactivated", product_id),
+                )
+                conn.commit()
+        return {"ok": True, "product_id": product_id, "shop": shop_name,
+                "action": action}
+
+    def batch_set_shop_listing_status(
+        self, local_product_ids: list[int], shop: str, *, activate: bool,
+    ) -> dict[str, Any]:
+        """一键 上架 / 下架 selected masters' listings on one shop.
+
+        For each local product, find its listing on ``shop`` (canonical-key
+        aware) that is already on the platform, and activate/deactivate it.
+        Masters with no platform listing on that shop are skipped. Returns a
+        summary ``{ok, action, shop, done, skipped, failed}``.
+        """
+        target_shop = canonical_shop_key(shop)
+        if target_shop not in TKSHOP_SHOPS:
+            raise ValueError(
+                f"unknown shop {shop!r}; configured shops: {TKSHOP_SHOPS}"
+            )
+        action = "activate" if activate else "deactivate"
+        ids: list[int] = []
+        seen: set[int] = set()
+        for v in local_product_ids:
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                continue
+            if iv not in seen:
+                seen.add(iv)
+                ids.append(iv)
+        done, skipped, failed = [], [], []
+        for lp_id in ids:
+            with _open_db(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT id, shop, tiktok_product_id FROM tkshop_products "
+                    "WHERE local_product_id = ? AND tiktok_product_id != '' "
+                    "ORDER BY id ASC",
+                    (lp_id,),
+                ).fetchall()
+            listing_id = None
+            for r in rows:
+                if canonical_shop_key(r["shop"]) == target_shop:
+                    listing_id = r["id"]
+                    break
+            if listing_id is None:
+                skipped.append({"local_product_id": lp_id,
+                                "reason": "该店铺无已上架 listing"})
+                continue
+            res = self.set_listing_live_status(listing_id, activate=activate)
+            if res.get("ok"):
+                done.append({"local_product_id": lp_id, "product_id": listing_id})
+            else:
+                failed.append({"local_product_id": lp_id, "product_id": listing_id,
+                               "error": res.get("error_message", "")})
+        logger.info(
+            "batch_set_shop_listing_status: shop=%s action=%s done=%d skipped=%d failed=%d",
+            target_shop, action, len(done), len(skipped), len(failed),
+        )
+        return {"ok": True, "action": action, "shop": target_shop,
+                "done": done, "skipped": skipped, "failed": failed}
+
     def sync_statuses(self) -> dict[str, Any]:
         """C.4 — query multi-channel-api for status of every published product.
 
@@ -5853,7 +6084,8 @@ class TKShopService:
             rows = conn.execute(
                 f"""
                 SELECT lp.id, lp.pack_id, lp.title, lp.seller_sku,
-                       lp.category_id, lp.created_at, lp.updated_at,
+                       lp.category_id, lp.default_quantity,
+                       lp.created_at, lp.updated_at,
                        p.display_name AS pack_name, p.pack_uid,
                        p.cover_image_path AS pack_cover,
                        (SELECT COUNT(*) FROM tkshop_products t
@@ -5985,6 +6217,43 @@ class TKShopService:
             )
             conn.commit()
             return cur.rowcount > 0
+
+    def batch_set_local_default_quantity(
+        self, local_product_ids: list[int], quantity: int,
+    ) -> int:
+        """Set ``default_quantity`` (local default stock) on many masters.
+
+        Local-only: does NOT touch any live TikTok inventory. The value is
+        used as the listing quantity on the NEXT push (see
+        ``_build_publish_payload``). Returns the number of rows updated.
+        """
+        try:
+            qty = max(0, int(quantity))
+        except (TypeError, ValueError):
+            raise ValueError(f"invalid quantity {quantity!r}")
+        ids: list[int] = []
+        for v in local_product_ids:
+            try:
+                ids.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return 0
+        now = int(time.time())
+        ph = ",".join(["?"] * len(ids))
+        with _open_db(self.db_path) as conn:
+            cur = conn.execute(
+                f"UPDATE local_products "
+                f"   SET default_quantity = ?, updated_at = ? "
+                f" WHERE id IN ({ph})",
+                tuple([qty, now] + ids),
+            )
+            conn.commit()
+        logger.info(
+            "batch_set_local_default_quantity: qty=%d applied to %d/%d masters",
+            qty, cur.rowcount, len(ids),
+        )
+        return cur.rowcount
 
     def list_local_product_images(self, local_product_id: int) -> list[dict]:
         with _open_db(self.db_path) as conn:
