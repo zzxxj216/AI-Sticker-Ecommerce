@@ -207,6 +207,8 @@ def _cover_cache_key(disk_path: str, created_at: int = 0) -> int:
 
 
 def _versioned_url_from_path(disk_path: str, *, cache_key: int = 0) -> str:
+    if not disk_path or not _resolve_disk_path(disk_path).is_file():
+        return ""
     url = _path_to_v2_url(disk_path)
     if not url:
         return ""

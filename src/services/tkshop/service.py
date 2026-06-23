@@ -668,6 +668,113 @@ class TKShopService:
         self.store = store or get_pack_store()
         self.db_path = db_path
 
+    def _asset_root(self) -> Path:
+        return self.db_path.resolve().parent.parent
+
+    def _image_path_exists(self, local_path: str) -> bool:
+        return _resolve_disk_path(local_path, root=self._asset_root()).is_file()
+
+    def _copy_image_rows_to_listing(
+        self,
+        conn: sqlite3.Connection,
+        listing_id: int,
+        pack_uid: str,
+        rows: list[Any],
+        *,
+        now: Optional[int] = None,
+    ) -> int:
+        """Materialize image files under ``draft_{listing_id}`` and insert rows.
+
+        Skips rows whose source file is missing so we never register broken
+        ``/v2-outputs/...`` URLs after clone/sync from another listing draft.
+        """
+        now = now or int(time.time())
+        inserted = 0
+        root = self._asset_root()
+        target_slug = f"draft_{listing_id}"
+        for r in rows:
+            lp = (r["local_path"] or "").strip()
+            if not lp:
+                continue
+            src = _resolve_disk_path(lp, root=root)
+            if not src.is_file():
+                logger.warning(
+                    "listing #%s: skip missing image %s", listing_id, lp,
+                )
+                continue
+            norm = lp.replace("\\", "/")
+            if f"/products/{target_slug}/" in norm:
+                dest_path = norm
+            else:
+                dest = self.store.write_product_image(
+                    pack_uid, target_slug, src.name, src.read_bytes(),
+                )
+                dest_path = dest.as_posix()
+            conn.execute(
+                """
+                INSERT INTO tkshop_product_images
+                    (product_id, role, source, local_path,
+                     tiktok_image_uri, sort_order, ai_prompt, created_at)
+                VALUES (?, ?, ?, ?, '', ?, ?, ?)
+                """,
+                (
+                    listing_id,
+                    r["role"],
+                    r["source"],
+                    dest_path,
+                    r["sort_order"],
+                    r["ai_prompt"],
+                    now,
+                ),
+            )
+            inserted += 1
+        return inserted
+
+    def prune_missing_image_rows(
+        self,
+        *,
+        local_product_id: Optional[int] = None,
+        product_id: Optional[int] = None,
+    ) -> dict[str, int]:
+        """Drop gallery rows whose ``local_path`` file no longer exists."""
+        root = self._asset_root()
+        removed_local = removed_listing = 0
+        with _open_db(self.db_path) as conn:
+            if local_product_id is not None:
+                rows = conn.execute(
+                    "SELECT id, local_path FROM local_product_images "
+                    "WHERE local_product_id = ?",
+                    (local_product_id,),
+                ).fetchall()
+                for row in rows:
+                    if _resolve_disk_path(row["local_path"] or "", root=root).is_file():
+                        continue
+                    conn.execute(
+                        "DELETE FROM local_product_images WHERE id = ?",
+                        (row["id"],),
+                    )
+                    removed_local += 1
+            if product_id is not None:
+                rows = conn.execute(
+                    "SELECT id, local_path FROM tkshop_product_images "
+                    "WHERE product_id = ?",
+                    (product_id,),
+                ).fetchall()
+                for row in rows:
+                    if _resolve_disk_path(row["local_path"] or "", root=root).is_file():
+                        continue
+                    conn.execute(
+                        "DELETE FROM tkshop_product_images WHERE id = ?",
+                        (row["id"],),
+                    )
+                    removed_listing += 1
+            if removed_local or removed_listing:
+                conn.commit()
+        return {
+            "local_product_images": removed_local,
+            "tkshop_product_images": removed_listing,
+        }
+
     # ------------------------------------------------------------------
     # C.1 create + AI generate
     # ------------------------------------------------------------------
@@ -1104,7 +1211,10 @@ class TKShopService:
                 """,
                 (product_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [
+            dict(r) for r in rows
+            if self._image_path_exists(r["local_path"] or "")
+        ]
 
     def update_image(
         self,
@@ -2629,6 +2739,42 @@ class TKShopService:
         product = self._build_publish_payload(product_id)
         product["auto_activate"] = bool(auto_activate)
 
+        if not product.get("image_urls") and not product.get("image_paths"):
+            msg = (
+                "缺少商品图片（image_urls / image_paths 均为空）。"
+                "请先在商品详情上传主图/副图，或执行 AI 生图后再上架。"
+            )
+            attempt_idx = 1
+            with _open_db(self.db_path) as conn:
+                attempt_idx = (conn.execute(
+                    "SELECT COALESCE(MAX(attempt_idx), 0) + 1 "
+                    "FROM tkshop_publish_logs WHERE product_id = ?",
+                    (product_id,),
+                ).fetchone()[0]) or 1
+                conn.execute(
+                    "UPDATE tkshop_products SET publish_status = 'failed' WHERE id = ?",
+                    (product_id,),
+                )
+                conn.commit()
+            shop_name = _get_product_shop(self.db_path, product_id)
+            endpoint = (
+                f"{TKSHOP_SERVER_URL.rstrip('/')}"
+                f"/api/v1/tiktok/products/sticker_publish"
+            )
+            self._log_publish_attempt(
+                product_id, attempt_idx, endpoint, product,
+                response={"ok": False, "error_code": "NO_IMAGES"},
+                success=False,
+                error_code="NO_IMAGES",
+                error_message=msg,
+            )
+            return {
+                "ok": False,
+                "error_code": "NO_IMAGES",
+                "error_message": msg,
+                "shop": shop_name,
+            }
+
         attempt_idx = 1
         with _open_db(self.db_path) as conn:
             attempt_idx = (conn.execute(
@@ -3656,21 +3802,19 @@ class TKShopService:
                 ),
             )
             new_id = cur.lastrowid
-            # Replicate image rows so the new product has the same images.
-            # local_path stays the same — files are shared on disk.
-            # tiktok_image_uri is reset because the new product is a fresh
-            # listing on the target shop and will get its own URIs on publish.
-            conn.execute(
+            # Copy image files into this listing's draft folder; skip missing
+            # sources so a stale draft_* path from the source row cannot 404.
+            src_images = conn.execute(
                 """
-                INSERT INTO tkshop_product_images
-                    (product_id, role, source, local_path,
-                     tiktok_image_uri, sort_order, ai_prompt, created_at)
-                SELECT ?, role, source, local_path,
-                       '', sort_order, ai_prompt, ?
+                SELECT role, source, local_path, sort_order, ai_prompt
                   FROM tkshop_product_images
                  WHERE product_id = ?
+                 ORDER BY role = 'main' DESC, sort_order ASC, id ASC
                 """,
-                (new_id, now, product_id),
+                (product_id,),
+            ).fetchall()
+            self._copy_image_rows_to_listing(
+                conn, int(new_id), src["pack_uid"] or "", src_images, now=now,
             )
             conn.commit()
         logger.info(
@@ -3743,10 +3887,14 @@ class TKShopService:
                 # main row (e.g. operator promoted a listing image), sync it
                 # back so publish can proceed.
                 has_img = conn.execute(
-                    "SELECT 1 FROM local_product_images "
+                    "SELECT local_path FROM local_product_images "
                     "WHERE local_product_id = ? AND role = 'main' LIMIT 1",
                     (lp_id,),
                 ).fetchone()
+                if has_img and not _resolve_disk_path(
+                    has_img["local_path"] or "", root=self._asset_root(),
+                ).is_file():
+                    has_img = None
                 listing_for_sync = conn.execute(
                     "SELECT id FROM tkshop_products "
                     "WHERE local_product_id = ? AND shop = ? "
@@ -4073,20 +4221,32 @@ class TKShopService:
             ).fetchone()
             if has_imgs:
                 return 0
-            cur = conn.execute(
+            pack_row = conn.execute(
                 """
-                INSERT INTO tkshop_product_images
-                    (product_id, role, source, local_path,
-                     tiktok_image_uri, sort_order, ai_prompt, created_at)
-                SELECT ?, role, source, local_path,
-                       '', sort_order, ai_prompt, ?
+                SELECT p.pack_uid
+                  FROM tkshop_products pr
+                  JOIN packs p ON p.id = pr.pack_id
+                 WHERE pr.id = ?
+                """,
+                (listing_id,),
+            ).fetchone()
+            master_rows = conn.execute(
+                """
+                SELECT role, source, local_path, sort_order, ai_prompt
                   FROM local_product_images
                  WHERE local_product_id = ?
+                 ORDER BY role = 'main' DESC, sort_order ASC, id ASC
                 """,
-                (listing_id, int(time.time()), local_product_id),
+                (local_product_id,),
+            ).fetchall()
+            inserted = self._copy_image_rows_to_listing(
+                conn,
+                listing_id,
+                pack_row["pack_uid"] if pack_row else "",
+                master_rows,
             )
             conn.commit()
-            return cur.rowcount
+            return inserted
 
     def pad_master_gallery_to_target(
         self, local_product_id: int, *, target_total: int = 5,
@@ -4676,22 +4836,34 @@ class TKShopService:
                 "DELETE FROM tkshop_product_images WHERE product_id = ?",
                 (listing_id,),
             )
-            now = int(time.time())
-            cur = conn.execute(
+            pack_row = conn.execute(
                 """
-                INSERT INTO tkshop_product_images
-                    (product_id, role, source, local_path,
-                     tiktok_image_uri, sort_order, ai_prompt, created_at)
-                SELECT ?, role, source, local_path,
-                       '', sort_order, ai_prompt, ?
+                SELECT p.pack_uid
+                  FROM tkshop_products pr
+                  JOIN packs p ON p.id = pr.pack_id
+                 WHERE pr.id = ?
+                """,
+                (listing_id,),
+            ).fetchone()
+            master_rows = conn.execute(
+                """
+                SELECT role, source, local_path, sort_order, ai_prompt
                   FROM local_product_images
                  WHERE local_product_id = ?
                  ORDER BY role = 'main' DESC, sort_order ASC, id ASC
                 """,
-                (listing_id, now, local_product_id),
+                (local_product_id,),
+            ).fetchall()
+            now = int(time.time())
+            inserted = self._copy_image_rows_to_listing(
+                conn,
+                listing_id,
+                pack_row["pack_uid"] if pack_row else "",
+                master_rows,
+                now=now,
             )
             conn.commit()
-            return cur.rowcount
+            return inserted
 
     def batch_fill_gallery_and_push(
         self,
@@ -4965,11 +5137,16 @@ class TKShopService:
                     skipped.append({"product_id": pid, "reason": "incomplete: missing category"})
                     continue
                 main_img = conn.execute(
-                    "SELECT 1 FROM tkshop_product_images "
+                    "SELECT local_path FROM tkshop_product_images "
                     "WHERE product_id = ? AND role = 'main' LIMIT 1",
                     (pid,),
                 ).fetchone()
-                if not main_img:
+                if (
+                    not main_img
+                    or not _resolve_disk_path(
+                        main_img["local_path"] or "", root=DEFAULT_DB_PATH.resolve().parent.parent,
+                    ).is_file()
+                ):
                     skipped.append({"product_id": pid, "reason": "incomplete: no main image"})
                     continue
                 # Already-listed guard: if any row for this pack on the target
@@ -6266,7 +6443,10 @@ class TKShopService:
                 """,
                 (local_product_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [
+            dict(r) for r in rows
+            if self._image_path_exists(r["local_path"] or "")
+        ]
 
     def add_local_product_image(
         self,
