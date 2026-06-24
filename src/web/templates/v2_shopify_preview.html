@@ -1,0 +1,352 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .shopify-preview { padding-top:14px; }
+  .shopify-preview .panel { padding:18px 22px; margin-bottom:16px; }
+
+  /* Header action bar */
+  .shopify-preview .sp-header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .shopify-preview .sp-sync-form { display:inline; }
+  .shopify-preview .sp-sync-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:9px 18px; border:none; border-radius:var(--radius-pill);
+    background:var(--accent); color:#fff; font-size:13px; font-weight:700;
+    cursor:pointer; transition:background .12s;
+  }
+  .shopify-preview .sp-sync-btn:hover:not([disabled]) { background:var(--accent-dark); }
+  .shopify-preview .sp-sync-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .shopify-preview .sp-sync-hint { font-size:11px; color:#dc2626; font-weight:600; }
+  .shopify-preview .sp-regen-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:9px 16px; border:1px solid var(--line); border-radius:var(--radius-pill);
+    background:var(--surface); color:var(--text); font-size:13px; font-weight:700;
+    cursor:pointer; transition:background .12s, border-color .12s;
+  }
+  .shopify-preview .sp-regen-btn:hover:not([disabled]) { background:var(--bg-subtle); border-color:var(--accent-glow); }
+  .shopify-preview .sp-regen-btn[disabled] { opacity:.6; cursor:wait; }
+
+  /* Storefront card */
+  .shopify-preview .sp-store {
+    display:grid; grid-template-columns: minmax(280px, 460px) minmax(0, 1fr);
+    gap:26px; align-items:start;
+  }
+  @media (max-width: 940px) { .shopify-preview .sp-store { grid-template-columns:1fr; } }
+
+  /* Gallery */
+  .shopify-preview .sp-gallery { display:flex; flex-direction:column; gap:10px; }
+  .shopify-preview .sp-main {
+    width:100%; aspect-ratio:1/1; border-radius:var(--radius-md);
+    border:1px solid var(--line-soft); background:var(--bg-subtle);
+    object-fit:contain; display:block;
+  }
+  .shopify-preview .sp-main-empty {
+    width:100%; aspect-ratio:1/1; border-radius:var(--radius-md);
+    border:1px dashed var(--line); background:var(--bg-subtle);
+    display:flex; align-items:center; justify-content:center;
+    color:var(--text-muted); font-size:13px;
+  }
+  .shopify-preview .sp-thumbs { display:flex; flex-wrap:wrap; gap:8px; }
+  .shopify-preview .sp-thumb {
+    width:64px; height:64px; border-radius:var(--radius-md);
+    border:1px solid var(--line-soft); background:var(--bg-subtle);
+    object-fit:cover; cursor:pointer; padding:2px; transition:border-color .12s;
+  }
+  .shopify-preview .sp-thumb:hover { border-color:var(--accent-glow); }
+  .shopify-preview .sp-thumb.is-active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+
+  /* Product info (right column) */
+  .shopify-preview .sp-title { margin:0 0 12px; font-size:24px; line-height:1.25; }
+  .shopify-preview .sp-price { font-size:26px; font-weight:800; color:var(--text); margin-bottom:6px; }
+  .shopify-preview .sp-price-missing {
+    display:inline-block; padding:4px 12px; border-radius:var(--radius-pill);
+    background:rgba(220,38,38,.10); border:1px solid rgba(220,38,38,.30);
+    color:#dc2626; font-size:13px; font-weight:700; margin-bottom:6px;
+  }
+  .shopify-preview .sp-vendor { color:var(--text-muted); font-size:13px; margin-bottom:16px; }
+  .shopify-preview .sp-vendor strong { color:var(--text); }
+
+  .shopify-preview .sp-fields { width:100%; border-collapse:collapse; font-size:13px; }
+  .shopify-preview .sp-fields th, .shopify-preview .sp-fields td {
+    text-align:left; padding:8px 0; border-top:1px solid var(--line-soft); vertical-align:top;
+  }
+  .shopify-preview .sp-fields tr:first-child th, .shopify-preview .sp-fields tr:first-child td { border-top:0; }
+  .shopify-preview .sp-fields th { width:90px; color:var(--text-muted); font-weight:600; }
+  .shopify-preview .sp-fields code { font-size:12px; }
+
+  .shopify-preview .sp-tags { display:flex; flex-wrap:wrap; gap:6px; }
+  .shopify-preview .sp-tag {
+    display:inline-block; padding:2px 9px; border-radius:var(--radius-pill);
+    background:var(--accent-bg); color:var(--accent-dark);
+    border:1px solid var(--accent-glow); font-size:11px; font-weight:600;
+  }
+
+  /* Body HTML preview */
+  .shopify-preview .sp-body {
+    border:1px solid var(--line); border-radius:var(--radius-md);
+    background:var(--surface); padding:22px 26px;
+    font-size:14px; line-height:1.6; color:var(--text);
+  }
+  .shopify-preview .sp-body h1, .shopify-preview .sp-body h2, .shopify-preview .sp-body h3 { color:var(--text); }
+  .shopify-preview .sp-body img { max-width:100%; height:auto; border-radius:var(--radius-md); }
+  .shopify-preview .sp-body ul, .shopify-preview .sp-body ol { padding-left:22px; }
+
+  /* SEO snippet */
+  .shopify-preview .sp-seo {
+    max-width:600px; padding:14px 16px; border:1px solid var(--line-soft);
+    border-radius:var(--radius-md); background:var(--surface);
+  }
+  .shopify-preview .sp-seo-title {
+    color:#1a0dab; font-size:18px; line-height:1.3; margin:0 0 2px;
+  }
+  .shopify-preview .sp-seo-url { color:#006621; font-size:13px; margin:0 0 4px; word-break:break-all; }
+  .shopify-preview .sp-seo-desc { color:#4d5156; font-size:13px; line-height:1.5; margin:0; }
+  .shopify-preview .sp-seo-empty { color:var(--text-muted); font-style:italic; }
+
+  /* Sticky bottom action bar */
+  .shopify-preview .sp-sticky-bar {
+    position:sticky; bottom:0; z-index:5;
+    display:flex; align-items:center; justify-content:flex-end; gap:14px;
+    padding:14px 22px; margin-top:18px;
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius-md);
+    box-shadow:0 -4px 14px rgba(0,0,0,.06);
+  }
+  .shopify-preview .sp-sticky-bar .info { margin-right:auto; font-size:12px; color:var(--text-muted); }
+
+  .shopify-preview .sp-error {
+    border:1px solid rgba(220,38,38,.30); background:rgba(220,38,38,.06);
+    color:#b91c1c; padding:18px 22px; border-radius:var(--radius-md); font-size:14px;
+  }
+</style>
+
+<div class="shopify-preview">
+
+  <section class="page-header" style="margin-bottom:16px;">
+    <div>
+      <p class="eyebrow">Shopify · 上架预览</p>
+      <h1>{{ page_title or 'Shopify 预览' }}</h1>
+      <p class="page-subtitle">
+        <a href="{{ back_url }}" style="color:var(--text-muted);text-decoration:none;">← 返回本地产品</a>
+        {% if pv.sync %}
+          {% if pv.sync.sync_status == 'synced' %}
+            <span class="v2-status-pill ok" style="margin-left:10px;">已同步</span>
+          {% elif pv.sync.sync_status == 'failed' %}
+            <span class="v2-status-pill pending" style="margin-left:10px;">同步失败</span>
+          {% else %}
+            <span class="v2-status-pill pending" style="margin-left:10px;">未同步</span>
+          {% endif %}
+        {% endif %}
+      </p>
+    </div>
+    <div class="sp-header-actions">
+      {% if pv.ok %}
+      <button type="button" id="sp-gen-images" class="sp-regen-btn"
+              data-lpid="{{ pv.local_product_id }}"
+              title="用 AI 生成全套商品图（封面/总览/生活场景等），写入主版本图集，Shopify 同步会用这些图。后台运行,每张约 30s。">🎨 生成全套图片</button>
+      <span id="sp-gen-status" class="sp-sync-hint" style="color:var(--text-muted);"></span>
+      <form class="sp-sync-form" method="post"
+            action="/v2/local-products/{{ pv.local_product_id }}/shopify-regenerate"
+            onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='生成中…';return true;">
+        <input type="hidden" name="back" value="{{ back_url }}">
+        <button type="submit" class="sp-regen-btn" title="用 AI 重新生成文案（标题/卖点/场景/SEO），约需十几秒">🔄 重新生成文案</button>
+      </form>
+      <form class="sp-sync-form" method="post"
+            action="/v2/local-products/{{ pv.local_product_id }}/sync-shopify"
+            onsubmit="return confirm('确认把该产品同步到 Shopify（草稿状态）?');">
+        <input type="hidden" name="back" value="{{ back_url }}">
+        {% if pv.price is none %}
+        <button type="submit" class="sp-sync-btn" disabled>🛍️ 同步到 Shopify（草稿）</button>
+        <span class="sp-sync-hint">请先设置价格</span>
+        {% else %}
+        <button type="submit" class="sp-sync-btn">🛍️ 同步到 Shopify（草稿）</button>
+        {% endif %}
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {% if not pv.ok %}
+  <section class="panel">
+    <div class="sp-error">
+      ⚠ 无法生成预览：{{ pv.error or '未知错误' }}
+    </div>
+  </section>
+  {% else %}
+
+  <!-- 1. Storefront-style card -->
+  <section class="panel">
+    <div class="sp-store">
+      <!-- LEFT: gallery -->
+      <div class="sp-gallery">
+        {% if pv.images and pv.images|length > 0 %}
+        <img id="sp-main-image" class="sp-main"
+             src="{{ pv.images[0].url }}"
+             alt="{{ pv.title }}" loading="lazy" decoding="async">
+        {% if pv.images|length > 1 %}
+        <div class="sp-thumbs">
+          {% for img in pv.images %}
+          <img class="sp-thumb{% if loop.first %} is-active{% endif %}"
+               src="{{ img.url }}"
+               data-full="{{ img.url }}"
+               title="{{ img.role or '' }}{% if img.source %} · {{ img.source }}{% endif %}"
+               alt="{{ img.role or 'image' }}"
+               loading="lazy" decoding="async">
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="sp-main-empty">暂无图片</div>
+        {% endif %}
+      </div>
+
+      <!-- RIGHT: product info -->
+      <div class="sp-info">
+        <h1 class="sp-title">{{ pv.title or '（未填写标题）' }}</h1>
+
+        {% if pv.price is none %}
+        <div class="sp-price-missing">未设置价格</div>
+        {% else %}
+        <div class="sp-price">${{ '%.2f'|format(pv.price) }}</div>
+        {% endif %}
+
+        <p class="sp-vendor">
+          品牌：<strong>{{ pv.vendor or 'Inkelligent' }}</strong>
+        </p>
+
+        <table class="sp-fields">
+          <tbody>
+            <tr><th>SKU</th><td><code>{{ pv.sku or '—' }}</code></td></tr>
+            <tr><th>库存</th><td>{{ pv.quantity if pv.quantity is not none else '—' }}</td></tr>
+            <tr><th>重量</th><td>{{ pv.weight_g if pv.weight_g is not none else '—' }} g</td></tr>
+            <tr><th>类型</th><td>{{ pv.product_type or '—' }}</td></tr>
+            <tr><th>状态</th><td>{{ pv.status or '—' }}</td></tr>
+            <tr>
+              <th>标签</th>
+              <td>
+                {% if pv.tags and pv.tags|length > 0 %}
+                <div class="sp-tags">
+                  {% for tag in pv.tags %}<span class="sp-tag">{{ tag }}</span>{% endfor %}
+                </div>
+                {% else %}
+                <span class="muted">—</span>
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Body HTML preview -->
+  <section class="panel">
+    <p class="eyebrow" style="margin-top:0;">商品描述（Shopify 富文本预览）</p>
+    {% if pv.body_html %}
+    <div class="sp-body">{{ pv.body_html | safe }}</div>
+    {% else %}
+    <p class="muted">暂无描述内容。</p>
+    {% endif %}
+  </section>
+
+  <!-- 3. SEO preview -->
+  <section class="panel">
+    <p class="eyebrow" style="margin-top:0;">SEO 预览</p>
+    {% set _seo = pv.seo or {} %}
+    <div class="sp-seo">
+      {% if _seo.title %}
+      <p class="sp-seo-title">{{ _seo.title }}</p>
+      {% else %}
+      <p class="sp-seo-title sp-seo-empty">（未设置 SEO 标题）</p>
+      {% endif %}
+      <p class="sp-seo-url">
+        inkelligent.myshopify.com/products/{% if _seo.handle %}{{ _seo.handle }}{% else %}<span class="sp-seo-empty">（未设置 handle）</span>{% endif %}
+      </p>
+      {% if _seo.description %}
+      <p class="sp-seo-desc">{{ _seo.description }}</p>
+      {% else %}
+      <p class="sp-seo-desc sp-seo-empty">（未设置 SEO 描述）</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- 5. Sticky bottom action bar -->
+  <div class="sp-sticky-bar">
+    <span class="info">本地产品 #{{ pv.local_product_id }} · 同步为 Shopify 草稿（status: {{ pv.status or 'draft' }}），不会立即上线。</span>
+    <form class="sp-sync-form" method="post"
+          action="/v2/local-products/{{ pv.local_product_id }}/sync-shopify"
+          onsubmit="return confirm('确认把该产品同步到 Shopify（草稿状态）?');">
+      <input type="hidden" name="back" value="{{ back_url }}">
+      {% if pv.price is none %}
+      <span class="sp-sync-hint">请先设置价格</span>
+      <button type="submit" class="sp-sync-btn" disabled>🛍️ 同步到 Shopify（草稿）</button>
+      {% else %}
+      <button type="submit" class="sp-sync-btn">🛍️ 同步到 Shopify（草稿）</button>
+      {% endif %}
+    </form>
+  </div>
+
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  // Thumbnail click swaps the main gallery image.
+  var main = document.getElementById('sp-main-image');
+  var thumbs = Array.prototype.slice.call(document.querySelectorAll('.sp-thumb'));
+  if (main) thumbs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      var full = t.getAttribute('data-full');
+      if (full) main.setAttribute('src', full);
+      thumbs.forEach(function (o) { o.classList.remove('is-active'); });
+      t.classList.add('is-active');
+    });
+  });
+
+  // 生成全套图片：触发主版本 AI 图集生成（复用已有的 master 级流程），
+  // 后台运行，轮询进度，完成后刷新本页（Shopify 预览用的是主版本图）。
+  var genBtn = document.getElementById('sp-gen-images');
+  var genStatus = document.getElementById('sp-gen-status');
+  if (genBtn) {
+    var lpid = genBtn.getAttribute('data-lpid');
+    var poll = null;
+    function setStatus(t) { if (genStatus) genStatus.textContent = t; }
+    function startPolling() {
+      if (poll) return;
+      poll = setInterval(function () {
+        fetch('/v2/local-products/' + lpid + '/auto_design_status')
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            var n = (d.images || []).length;
+            if (d.running) {
+              setStatus('⏳ 后台生成中…（已完成 ' + n + ' 张，每张约 30s）可离开本页');
+            } else {
+              clearInterval(poll); poll = null;
+              setStatus('✓ 生成完成，正在刷新…');
+              window.location.reload();
+            }
+          })
+          .catch(function () { /* keep polling */ });
+      }, 5000);
+    }
+    genBtn.addEventListener('click', function () {
+      if (!confirm('用 AI 生成全套商品图？将写入主版本图集（替换已有 AI 图），后台运行,需几分钟。')) return;
+      genBtn.disabled = true;
+      setStatus('启动中…');
+      fetch('/v2/local-products/' + lpid + '/auto_design_images_sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: 5, mode: 'all', language: 'en' })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) { setStatus('⏳ 已在后台启动…'); startPolling(); }
+          else { genBtn.disabled = false; setStatus('✗ ' + (d.error || '启动失败')); }
+        })
+        .catch(function (e) { genBtn.disabled = false; setStatus('✗ 网络错误'); });
+    });
+  }
+})();
+</script>
+
+{% endblock %}

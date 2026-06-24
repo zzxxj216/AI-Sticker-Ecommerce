@@ -48,6 +48,7 @@ from src.services.tk_videos.service import (
     video_status_pill_cls,
 )
 from src.services.tkshop import get_tkshop_service
+from src.services.shopify.sync import get_shopify_sync
 from src.services.tkshop.service import (
     TKSHOP_DEFAULT_SHOP,
     TKSHOP_SHOPS,
@@ -4447,20 +4448,141 @@ async def v2_products_batch_shop_status(request: Request):
     svc = get_tkshop_service()
     verb = "上架" if action == "activate" else "下架"
     task_id = f"tkshop_batch_shop_status:{action}:{shop}:{int(time.time())}"
-    run_async(
-        task_id,
-        svc.batch_set_shop_listing_status,
-        ids, shop,
-        activate=(action == "activate"),
-        label=f"批量{verb} {get_shop_label(shop)} ({len(ids)} 选)",
-    )
+    if action == "activate":
+        # Smart 上架: publishes first-timers (creates listing) and re-activates
+        # deactivated ones — merges the old "批量发布" into 上架.
+        run_async(
+            task_id,
+            svc.batch_shelf_on_shop,
+            ids, shop,
+            label=f"批量上架 {get_shop_label(shop)} ({len(ids)} 选)",
+        )
+        msg = f"已派发 {len(ids)} 个本地产品在「{get_shop_label(shop)}」上架（未上架的会自动发布创建）"
+    else:
+        run_async(
+            task_id,
+            svc.batch_set_shop_listing_status,
+            ids, shop,
+            activate=False,
+            label=f"批量下架 {get_shop_label(shop)} ({len(ids)} 选)",
+        )
+        msg = f"已派发 {len(ids)} 个本地产品在「{get_shop_label(shop)}」下架（仅对已上架的生效）"
     logger.info(
         "batch-shop-status dispatched: %s %d masters → %s (task=%s)",
         action, len(ids), shop, task_id,
     )
     back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/local-products/")
     sep = "&" if "?" in back else "?"
-    msg = f"已派发 {len(ids)} 个本地产品在「{get_shop_label(shop)}」{verb}（仅对已上架的生效）"
+    return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+
+
+# ──────────────────────────── Shopify 同步 ────────────────────────────
+
+@router.get("/local-products/{local_product_id:int}/shopify-preview", response_class=HTMLResponse)
+def v2_local_product_shopify_preview(request: Request, local_product_id: int):
+    """Local style preview of how this master will look as a Shopify product.
+
+    No network call — assembles the branded HTML + image gallery + fields via
+    ShopifyProductSync.build_preview so the operator can review before pushing.
+    """
+    pv = get_shopify_sync().build_preview(local_product_id)
+    # Attach browsable image URLs (the service returns local_paths only).
+    for img in pv.get("images", []) or []:
+        img["url"] = _versioned_local_product_image_url(img)
+    return templates.TemplateResponse(
+        "v2_shopify_preview.html",
+        {
+            "request": request,
+            "page_title": f"Shopify 预览 · 本地 #{local_product_id}",
+            "pv": pv,
+            "back_url": f"/v2/local-products/{local_product_id}",
+        },
+    )
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-regenerate")
+async def v2_local_product_shopify_regenerate(request: Request, local_product_id: int):
+    """Force a fresh AI generation of the Shopify copy and persist it, then
+    return to the preview. Synchronous (one AI pass) so the operator sees the
+    new content immediately on redirect."""
+    form = await request.form()
+    get_shopify_sync().regenerate_content(local_product_id)
+    back = _safe_v2_redirect(
+        (form.get("back") or "").strip(),
+        f"/v2/local-products/{local_product_id}/shopify-preview",
+    )
+    return RedirectResponse(url=back, status_code=303)
+
+
+@router.post("/local-products/{local_product_id:int}/sync-shopify")
+async def v2_local_product_sync_shopify(request: Request, local_product_id: int):
+    """One-click sync a single master to Shopify (draft). Real external write —
+    fire-and-forget so the operator gets an immediate redirect."""
+    form = await request.form()
+    svc = get_shopify_sync()
+    # Guard: need a price first (also enforced in service, but fail fast w/ msg).
+    pv = svc.build_preview(local_product_id)
+    back = _safe_v2_redirect(
+        (form.get("back") or "").strip(),
+        f"/v2/local-products/{local_product_id}/shopify-preview",
+    )
+    sep = "&" if "?" in back else "?"
+    if pv.get("price") is None:
+        msg = "未设置价格，无法同步 — 请先在本地产品库批量改价或设置该产品价格"
+        return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+    task_id = f"shopify_sync:{local_product_id}:{int(time.time())}"
+    run_async(
+        task_id,
+        svc.batch_sync,
+        [local_product_id],
+        label=f"同步本地 #{local_product_id} → Shopify",
+    )
+    msg = f"已派发：本地 #{local_product_id} → Shopify（草稿）"
+    return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+
+
+@router.post("/products/batch-sync-shopify")
+async def v2_products_batch_sync_shopify(request: Request):
+    """Multi-select batch sync masters to Shopify (draft). Skips ones with no
+    price. Fire-and-forget."""
+    form = await request.form()
+    ids = _parse_local_product_ids(form)
+    if not ids:
+        raise HTTPException(status_code=400, detail="no local_product_ids selected")
+    svc = get_shopify_sync()
+    task_id = f"shopify_batch_sync:{int(time.time())}"
+    run_async(
+        task_id,
+        svc.batch_sync,
+        ids,
+        label=f"批量同步 → Shopify ({len(ids)} 选)",
+    )
+    logger.info("batch-sync-shopify dispatched: %d masters (task=%s)", len(ids), task_id)
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/local-products/")
+    sep = "&" if "?" in back else "?"
+    msg = f"已派发 {len(ids)} 个本地产品同步到 Shopify（草稿，未设价的会跳过）"
+    return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+
+
+@router.post("/local-products/batch-set-price")
+async def v2_local_products_batch_set_price(request: Request):
+    """One-click batch edit of the local default price (Shopify variant price)."""
+    form = await request.form()
+    ids = _parse_local_product_ids(form)
+    if not ids:
+        raise HTTPException(status_code=400, detail="no local_product_ids selected")
+    raw_price = (form.get("price") or "").strip()
+    try:
+        price = float(raw_price)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"invalid price {raw_price!r}")
+    if price < 0:
+        raise HTTPException(status_code=400, detail="price must be >= 0")
+    n = get_shopify_sync().batch_set_local_default_price(ids, price)
+    logger.info("batch-set-price: price=%.2f applied to %d masters", price, n)
+    back = _safe_v2_redirect((form.get("back") or "").strip(), "/v2/local-products/")
+    sep = "&" if "?" in back else "?"
+    msg = f"已把 {n} 个本地产品的价格设为 ${price:.2f}"
     return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
 
 

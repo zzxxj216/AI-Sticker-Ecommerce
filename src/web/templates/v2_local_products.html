@@ -49,6 +49,43 @@
     font-size:12px; font-weight:700; cursor:pointer;
   }
   .lp-bulk-bar .bulk-stock-btn:hover:not([disabled]) { border-color:var(--accent-glow); background:var(--bg-subtle); }
+  .lp-bulk-bar .bulk-shopify-btn {
+    padding:6px 12px; background:#5a31f4; color:#fff;
+    border:none; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;
+  }
+  .lp-bulk-bar .bulk-shopify-btn:hover:not([disabled]) { background:#4a27d4; }
+  .lp-bulk-bar .bulk-shopify-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  /* 更多 ▾ dropdown */
+  .lp-bulk-bar .bulk-more { position:relative; }
+  .lp-bulk-bar .bulk-more-btn {
+    padding:6px 12px; background:var(--surface); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:700; cursor:pointer;
+  }
+  .lp-bulk-bar .bulk-more-btn:hover:not([disabled]) { border-color:var(--accent-glow); background:var(--bg-subtle); }
+  .lp-bulk-bar .bulk-more-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .bulk-more-menu {
+    position:absolute; top:calc(100% + 6px); right:0; z-index:50;
+    min-width:230px; padding:6px;
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius-md); box-shadow:0 8px 28px rgba(0,0,0,.18);
+    display:flex; flex-direction:column; gap:2px;
+  }
+  /* The [hidden] attribute must win over display:flex above, otherwise the
+     menu can never be closed. */
+  .bulk-more-menu[hidden] { display:none; }
+  .bulk-more-section { font-size:10px; font-weight:700; color:var(--text-muted); padding:6px 8px 2px; text-transform:none; }
+  .bulk-more-divider { height:1px; background:var(--line-soft); margin:4px 2px; }
+  .bulk-more-item {
+    display:block; width:100%; text-align:left;
+    padding:8px 10px; border:none; background:transparent; color:var(--text);
+    border-radius:6px; font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .bulk-more-item:hover:not([disabled]) { background:var(--bg-subtle); }
+  .bulk-more-item[disabled] { opacity:.45; cursor:not-allowed; }
+  .bulk-more-shop {
+    display:flex; align-items:center; gap:6px; padding:5px 8px;
+  }
+  .bulk-more-shop .bulk-shop-name { flex:1; font-size:11px; font-weight:700; color:var(--text-muted); }
   .lp-bulk-bar .bulk-shop-group {
     display:inline-flex; align-items:center; gap:4px;
     padding:3px 6px; border:1px solid var(--line); border-radius:8px; background:var(--surface);
@@ -157,9 +194,6 @@
        Checkboxes use form="<id>" to associate with both. -->
   {% set _back_url = '/v2/local-products/' + (_q_suffix and '?' + _q_suffix[1:] or '') %}
   <form id="export-form"   method="post" action="/v2/products/export" target="_blank" style="display:none;"></form>
-  <form id="bulk-pub-form" method="post" action="/v2/products/batch-publish-from-local" style="display:none;">
-    <input type="hidden" name="back" value="{{ _back_url }}">
-  </form>
   <!-- 批量改本地默认库存（仅本地数字，下次推送生效） -->
   <form id="bulk-stock-form" method="post" action="/v2/local-products/batch-set-quantity" style="display:none;">
     <input type="hidden" name="back" value="{{ _back_url }}">
@@ -171,41 +205,51 @@
     <input type="hidden" name="shop" id="bulk-status-shop">
     <input type="hidden" name="action" id="bulk-status-action">
   </form>
+  <!-- 批量改价（Shopify 变体价格，仅本地数字） -->
+  <form id="bulk-price-form" method="post" action="/v2/local-products/batch-set-price" style="display:none;">
+    <input type="hidden" name="back" value="{{ _back_url }}">
+    <input type="hidden" name="price" id="bulk-price-val">
+  </form>
+  <!-- 批量同步到 Shopify（草稿，真实外部写操作） -->
+  <form id="bulk-shopify-form" method="post" action="/v2/products/batch-sync-shopify" style="display:none;">
+    <input type="hidden" name="back" value="{{ _back_url }}">
+  </form>
 
   {% if tkshop_shops|length > 0 %}
   <div id="lp-bulk-bar" class="lp-bulk-bar" role="region" aria-label="批量操作工具栏">
     <span>已选 <strong id="bulk-count">0</strong> 个本地产品</span>
     <span class="spacer"></span>
 
-    <!-- 批量改本地默认库存 -->
-    <button type="button" class="bulk-stock-btn" id="bulk-stock-go" disabled
-            title="批量设置所选本地产品的「默认库存」。仅改本地数字，不动线上；下次推送时写入 TikTok 初始库存。">
-      📦 批量改库存
+    <!-- 主操作：同步到 Shopify -->
+    <button type="button" class="bulk-shopify-btn" id="bulk-shopify-go" disabled
+            title="把所选本地产品同步到 Shopify（草稿状态）。未设价的会自动跳过。真实外部写操作。">
+      🛍️ 同步 Shopify
     </button>
 
-    <!-- 发布（创建并上架到平台） -->
-    <label style="font-size:12px;font-weight:600;">发布到：
-      <select id="bulk-target-shop" form="bulk-pub-form" name="target_shop">
+    <!-- 更多操作：下拉收纳 改库存 / 改价 / 各店上下架 -->
+    <div class="bulk-more" id="bulk-more">
+      <button type="button" class="bulk-more-btn" id="bulk-more-btn" disabled aria-haspopup="true" aria-expanded="false">
+        更多 ▾
+      </button>
+      <div class="bulk-more-menu" id="bulk-more-menu" role="menu" hidden>
+        <div class="bulk-more-section">本地数据（不动线上）</div>
+        <button type="button" class="bulk-more-item" id="bulk-stock-go"
+                title="批量设置「默认库存」。仅改本地数字，下次推送写入 TikTok 初始库存。">📦 批量改库存</button>
+        <button type="button" class="bulk-more-item" id="bulk-price-go"
+                title="批量设置价格（Shopify 同步时作为变体价）。仅本地数字。">💲 批量改价</button>
+        <div class="bulk-more-divider"></div>
+        <div class="bulk-more-section">TikTok 上架 / 下架</div>
         {% for s in tkshop_shops %}
-        <option value="{{ s }}">🏪 {{ shop_label(s) }}</option>
+        <div class="bulk-more-shop">
+          <span class="bulk-shop-name">🏪 {{ shop_label(s) }}</span>
+          <button type="button" class="bulk-act-btn up" data-shop="{{ s }}" data-action="activate"
+                  title="一键上架到「{{ shop_label(s) }}」：未上架过的自动发布创建，已下架的重新上架">▲ 上架</button>
+          <button type="button" class="bulk-act-btn down" data-shop="{{ s }}" data-action="deactivate"
+                  title="一键下架所选产品在「{{ shop_label(s) }}」的 listing（仅对已上架的生效）">▼ 下架</button>
+        </div>
         {% endfor %}
-      </select>
-    </label>
-    <button type="submit" form="bulk-pub-form" class="pub-btn" id="bulk-pub-go" disabled
-            title="若该 pack 已在目标店上架，则跳过；标题/类目/主图缺失的也跳过。">
-      🚀 批量发布（后台）
-    </button>
-
-    <!-- 每个店铺独立的一键上架 / 一键下架（仅对已上架的 listing 生效） -->
-    {% for s in tkshop_shops %}
-    <span class="bulk-shop-group" title="对所选产品在「{{ shop_label(s) }}」已上架的 listing 执行上架/下架">
-      <span class="bulk-shop-name">🏪 {{ shop_label(s) }}</span>
-      <button type="button" class="bulk-act-btn up" data-shop="{{ s }}" data-action="activate" disabled
-              title="一键上架（恢复销售）所选产品在「{{ shop_label(s) }}」的 listing">▲ 上架</button>
-      <button type="button" class="bulk-act-btn down" data-shop="{{ s }}" data-action="deactivate" disabled
-              title="一键下架所选产品在「{{ shop_label(s) }}」的 listing">▼ 下架</button>
-    </span>
-    {% endfor %}
+      </div>
+    </div>
   </div>
   {% endif %}
 
@@ -237,6 +281,7 @@
             <th>title (en) / pack</th>
             <th style="width:170px;">seller_sku</th>
             <th style="width:90px;text-align:center;">默认库存</th>
+            <th style="width:110px;text-align:center;">价格 / Shopify</th>
             <th style="width:140px;">上架进度</th>
             <th style="width:110px;">平台同步</th>
             <th style="width:120px;">created</th>
@@ -293,6 +338,25 @@
                 <span class="muted" style="font-size:11px;" title="未设置，推送时用全局默认值">—</span>
               {% endif %}
             </td>
+            <td style="text-align:center;">
+              {% if p.default_price is not none %}
+                <span style="font-weight:700;font-size:13px;">${{ '%.2f'|format(p.default_price) }}</span>
+              {% else %}
+                <span class="muted" style="font-size:11px;" title="未设价，无法同步 Shopify">未设价</span>
+              {% endif %}
+              <div style="margin-top:3px;">
+                {% set _ss = p.shopify_sync_status %}
+                {% if _ss == 'synced' %}
+                  <span class="v2-status-pill ok" style="font-size:10px;">Shopify ✓</span>
+                {% elif _ss == 'failed' %}
+                  <span class="v2-status-pill pending" style="font-size:10px;">Shopify ✗</span>
+                {% elif _ss %}
+                  <span class="v2-status-pill running" style="font-size:10px;">Shopify…</span>
+                {% else %}
+                  <span class="muted" style="font-size:10px;">未同步</span>
+                {% endif %}
+              </div>
+            </td>
             <td>
               {% set _total = (p.listing_count or 0) %}
               {% set _live = (p.shops or {})|length %}
@@ -314,11 +378,12 @@
             <td>
               <div class="lp-row-actions">
                 <a href="/v2/local-products/{{ p.id }}" class="row-btn primary" title="进入主版本编辑（标题/描述/图集 + 推送到各店）">✏️ 主版本</a>
+                <a href="/v2/local-products/{{ p.id }}/shopify-preview" class="row-btn" title="预览 Shopify 商品样式（不推送）">🛍️ 预览</a>
               </div>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="10" style="padding:30px 0;text-align:center;color:var(--text-muted);">
+          <tr><td colspan="11" style="padding:30px 0;text-align:center;color:var(--text-muted);">
             {% if q or pack_id_filter %}
               没有命中筛选条件的本地产品 — <a href="/v2/local-products/" style="color:var(--accent);">清空筛选</a>
             {% else %}
@@ -335,17 +400,21 @@
 <script>
 (function(){
   const exportForm = document.getElementById('export-form');
-  const bulkForm   = document.getElementById('bulk-pub-form');
   const stockForm  = document.getElementById('bulk-stock-form');
   const statusForm = document.getElementById('bulk-status-form');
+  const priceForm  = document.getElementById('bulk-price-form');
+  const shopifyForm= document.getElementById('bulk-shopify-form');
   const bulkBar    = document.getElementById('lp-bulk-bar');
   const bulkCount  = document.getElementById('bulk-count');
-  const bulkGo     = document.getElementById('bulk-pub-go');
-  const bulkShop   = document.getElementById('bulk-target-shop');
   const stockGo    = document.getElementById('bulk-stock-go');
+  const priceGo    = document.getElementById('bulk-price-go');
+  const shopifyGo  = document.getElementById('bulk-shopify-go');
+  const moreBtn    = document.getElementById('bulk-more-btn');
+  const moreMenu   = document.getElementById('bulk-more-menu');
   const actBtns    = Array.from(document.querySelectorAll('.bulk-act-btn'));
+  function closeMore(){ if (moreMenu) moreMenu.hidden = true; if (moreBtn) moreBtn.setAttribute('aria-expanded','false'); }
   // Bulk forms that need the selected ids mirrored in as hidden inputs.
-  const mirrorForms = [bulkForm, stockForm, statusForm].filter(Boolean);
+  const mirrorForms = [stockForm, statusForm, priceForm, shopifyForm].filter(Boolean);
   if (!exportForm) return;
   const rowPicks = () => Array.from(document.querySelectorAll('.row-pick'));
   const headerPick = document.getElementById('pick-header');
@@ -385,12 +454,53 @@
     });
     if (bulkBar) bulkBar.classList.toggle('show', checked > 0);
     if (bulkCount) bulkCount.textContent = checked;
-    if (bulkGo) bulkGo.disabled = checked === 0;
     if (stockGo) stockGo.disabled = checked === 0;
+    if (priceGo) priceGo.disabled = checked === 0;
+    if (shopifyGo) shopifyGo.disabled = checked === 0;
+    if (moreBtn) moreBtn.disabled = checked === 0;
     actBtns.forEach(b => { b.disabled = checked === 0; });
+    if (checked === 0) closeMore();
     syncBulkForm();
   }
   const pickedCount = () => rowPicks().filter(c => c.checked).length;
+
+  // 更多 ▾ 下拉开合 + 点外部关闭。
+  if (moreBtn && moreMenu) {
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (moreBtn.disabled) return;
+      const willShow = moreMenu.hidden;
+      moreMenu.hidden = !willShow;
+      moreBtn.setAttribute('aria-expanded', willShow ? 'true' : 'false');
+    });
+    document.addEventListener('click', (e) => {
+      if (!moreMenu.hidden && !e.target.closest('#bulk-more')) closeMore();
+    });
+    moreMenu.addEventListener('click', (e) => { if (e.target.closest('button')) closeMore(); });
+  }
+
+  // 批量改价：弹窗输入价格 + 二次确认（仅本地数字，Shopify 变体价）。
+  if (priceGo && priceForm) priceGo.addEventListener('click', () => {
+    const n = pickedCount();
+    if (n === 0) return;
+    const raw = prompt('为所选 ' + n + ' 个本地产品设置价格（美元，可带小数，如 14.99）。\n这是 Shopify 同步时的变体价格,仅改本地数字。');
+    if (raw === null) return;
+    const price = parseFloat(String(raw).trim());
+    if (isNaN(price) || price < 0) { alert('请输入 ≥ 0 的数字'); return; }
+    if (!confirm('确认把 ' + n + ' 个本地产品的价格设为 $' + price.toFixed(2) + ' ?')) return;
+    document.getElementById('bulk-price-val').value = String(price);
+    syncBulkForm();
+    priceForm.submit();
+  });
+
+  // 批量同步到 Shopify：二次确认（真实外部写操作,草稿）。
+  if (shopifyGo && shopifyForm) shopifyGo.addEventListener('click', () => {
+    const n = pickedCount();
+    if (n === 0) return;
+    if (!confirm('确认把所选 ' + n + ' 个本地产品同步到 Shopify（草稿状态）?\n未设价的会自动跳过。这是真实外部写操作。')) return;
+    syncBulkForm();
+    shopifyForm.submit();
+  });
 
   // 批量改库存：弹窗输入数字 + 二次确认（仅改本地默认库存，不动线上）。
   if (stockGo && stockForm) stockGo.addEventListener('click', () => {
@@ -413,12 +523,12 @@
     const shop = btn.getAttribute('data-shop');
     const action = btn.getAttribute('data-action');
     const verb = action === 'activate' ? '上架' : '下架';
-    const shopName = btn.closest('.bulk-shop-group')
-      .querySelector('.bulk-shop-name').textContent.replace('🏪', '').trim();
-    const warn = action === 'deactivate'
-      ? '\n⚠ 下架会让商品在该店停止销售（可恢复）。'
-      : '';
-    if (!confirm('确认对所选 ' + n + ' 个本地产品，在「' + shopName + '」执行【' + verb + '】?\n仅对已上架到该店的 listing 生效，未上架的会自动跳过。' + warn)) return;
+    const grp = btn.closest('.bulk-more-shop');
+    const shopName = grp ? grp.querySelector('.bulk-shop-name').textContent.replace('🏪', '').trim() : shop;
+    const detail = action === 'activate'
+      ? '\n未上架过的会自动发布创建，已下架的会重新上架。'
+      : '\n仅对已上架到该店的 listing 生效，未上架的自动跳过。\n⚠ 下架会让商品在该店停止销售（可恢复）。';
+    if (!confirm('确认对所选 ' + n + ' 个本地产品，在「' + shopName + '」执行【' + verb + '】?' + detail)) return;
     document.getElementById('bulk-status-shop').value = shop;
     document.getElementById('bulk-status-action').value = action;
     syncBulkForm();
@@ -437,15 +547,6 @@
   if (pickNone) pickNone.addEventListener('click', () => {
     rowPicks().forEach(c => { c.checked = false; });
     refresh();
-  });
-  if (bulkForm) bulkForm.addEventListener('submit', (e) => {
-    const n = rowPicks().filter(c => c.checked).length;
-    if (n === 0) { e.preventDefault(); return; }
-    const shop = bulkShop ? bulkShop.value : '';
-    if (!confirm('将把 ' + n + ' 个本地草稿上架到「' + shop + '」店。已上架过的 pack 会被跳过，标题/类目/主图缺失的也会被跳过。继续?')) {
-      e.preventDefault(); return;
-    }
-    if (bulkGo) { bulkGo.disabled = true; bulkGo.textContent = '已派发到后台…'; }
   });
   refresh();
 })();

@@ -5383,6 +5383,91 @@ class TKShopService:
         return {"ok": True, "action": action, "shop": target_shop,
                 "done": done, "skipped": skipped, "failed": failed}
 
+    def batch_shelf_on_shop(
+        self, local_product_ids: list[int], shop: str,
+        *, auto_fix: bool = True,
+    ) -> dict[str, Any]:
+        """Smart 上架 for one shop — the single entry point that puts products
+        live, whether or not they already exist on the platform:
+
+          - master has NO platform listing on the shop  -> publish (create +
+            activate) via ``batch_publish_local_to_shop``
+          - has a listing that is on-platform but not live (deactivated/draft)
+            -> activate it
+          - already live -> skip
+
+        Merges the old separate "批量发布" into 上架. Returns a summary
+        ``{ok, action:'shelf_on', shop, published, activated, skipped, failed}``.
+        """
+        target_shop = canonical_shop_key(shop)
+        if target_shop not in TKSHOP_SHOPS:
+            raise ValueError(
+                f"unknown shop {shop!r}; configured shops: {TKSHOP_SHOPS}"
+            )
+        ids: list[int] = []
+        seen: set[int] = set()
+        for v in local_product_ids:
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                continue
+            if iv not in seen:
+                seen.add(iv)
+                ids.append(iv)
+
+        to_publish: list[int] = []          # no platform listing yet
+        to_activate: list[tuple[int, int]] = []  # (lp_id, listing_id) deactivated/draft
+        skipped: list[dict] = []
+        for lp_id in ids:
+            with _open_db(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT id, shop, tiktok_product_id, publish_status "
+                    "FROM tkshop_products WHERE local_product_id = ? "
+                    "ORDER BY id ASC",
+                    (lp_id,),
+                ).fetchall()
+            platform_listing = None
+            for r in rows:
+                if canonical_shop_key(r["shop"]) == target_shop \
+                        and (r["tiktok_product_id"] or "").strip():
+                    platform_listing = r
+                    break
+            if platform_listing is None:
+                # No live listing on the platform yet -> first-time publish.
+                to_publish.append(lp_id)
+            elif (platform_listing["publish_status"] or "") == "activate":
+                skipped.append({"local_product_id": lp_id, "reason": "已在线销售中"})
+            else:
+                to_activate.append((lp_id, platform_listing["id"]))
+
+        published, activated, failed = [], [], []
+        # First-time publishes go through the master-first publish pipeline
+        # (creates listing, snapshots images, publishes + activates).
+        if to_publish:
+            pub = self.batch_publish_local_to_shop(
+                to_publish, target_shop, auto_activate=True, auto_fix=auto_fix,
+            )
+            published = pub.get("published", [])
+            for s in pub.get("skipped", []):
+                skipped.append(s)
+            for f in pub.get("failed", []):
+                failed.append(f)
+        # Re-activate existing deactivated/draft listings.
+        for lp_id, listing_id in to_activate:
+            res = self.set_listing_live_status(listing_id, activate=True)
+            if res.get("ok"):
+                activated.append({"local_product_id": lp_id, "product_id": listing_id})
+            else:
+                failed.append({"local_product_id": lp_id, "product_id": listing_id,
+                               "error": res.get("error_message", "")})
+        logger.info(
+            "batch_shelf_on_shop: shop=%s published=%d activated=%d skipped=%d failed=%d",
+            target_shop, len(published), len(activated), len(skipped), len(failed),
+        )
+        return {"ok": True, "action": "shelf_on", "shop": target_shop,
+                "published": published, "activated": activated,
+                "skipped": skipped, "failed": failed}
+
     def sync_statuses(self) -> dict[str, Any]:
         """C.4 — query multi-channel-api for status of every published product.
 
@@ -6084,14 +6169,16 @@ class TKShopService:
             rows = conn.execute(
                 f"""
                 SELECT lp.id, lp.pack_id, lp.title, lp.seller_sku,
-                       lp.category_id, lp.default_quantity,
+                       lp.category_id, lp.default_quantity, lp.default_price,
                        lp.created_at, lp.updated_at,
                        p.display_name AS pack_name, p.pack_uid,
                        p.cover_image_path AS pack_cover,
                        (SELECT COUNT(*) FROM tkshop_products t
                           WHERE t.local_product_id = lp.id) AS listing_count,
                        (SELECT COUNT(*) FROM local_product_images li
-                          WHERE li.local_product_id = lp.id) AS image_count
+                          WHERE li.local_product_id = lp.id) AS image_count,
+                       (SELECT sp.sync_status FROM shopify_products sp
+                          WHERE sp.local_product_id = lp.id) AS shopify_sync_status
                   FROM local_products lp
              LEFT JOIN packs           p ON p.id = lp.pack_id
                   {where}
