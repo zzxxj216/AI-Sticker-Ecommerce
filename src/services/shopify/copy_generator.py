@@ -369,15 +369,18 @@ def generate_shopify_content(local_product: dict, *, router=None) -> dict:
         return fallback
 
 
-def build_body_html(local_product: dict, content: dict) -> str:
+def build_body_html(local_product: dict, content: dict, *, offer: dict | None = None) -> str:
     """Assemble a branded, sectioned, inline-styled ``body_html`` string.
 
-    Sections, in order: Hero, What's included, Why you'll love it (checklist),
-    How to use, Material & Care (fixed), Shipping & Guarantee (fixed). All
+    Sections, in order: (optional offer banner), Hero, What's included, Why
+    you'll love it (checklist), How to use, Material & Care (fixed), Shipping &
+    Guarantee (fixed). ``offer`` (e.g. ``{"discount_percent": 40,
+    "free_shipping": True}``) renders a promo banner under the hero. All
     user/AI text is HTML-escaped. Returns the HTML string.
     """
     local_product = local_product or {}
     content = content or {}
+    offer = offer or {}
 
     def esc(value: Any) -> str:
         return html.escape(_as_str(value) if isinstance(value, str) else str(value or ""))
@@ -413,6 +416,25 @@ def build_body_html(local_product: dict, content: dict) -> str:
     if intro:
         parts.append(f'<p style="{p_style}">{intro}</p>')
     parts.append("</div>")
+
+    # 1b) Offer banner (standing rule: free shipping + N% off)
+    try:
+        disc = int(offer.get("discount_percent") or 0)
+    except (TypeError, ValueError):
+        disc = 0
+    free_ship = bool(offer.get("free_shipping"))
+    if disc > 0 or free_ship:
+        chips = []
+        if disc > 0:
+            chips.append(f"\U0001F525 {disc}% OFF today")
+        if free_ship:
+            chips.append("\U0001F69A Free shipping")
+        banner_style = (
+            "margin:0 0 28px 0;padding:12px 16px;border-radius:10px;"
+            "background:#fff4ec;border:1px solid #ffd9c2;color:#b4530a;"
+            "font-weight:700;font-size:15px;text-align:center;"
+        )
+        parts.append(f'<div style="{banner_style}">{esc("  ·  ".join(chips))}</div>')
 
     # 2) What's included
     parts.append(f'<div style="{section_style}">')
@@ -459,7 +481,10 @@ def build_body_html(local_product: dict, content: dict) -> str:
     # 6) Shipping & Guarantee (fixed brand template)
     parts.append(f'<div style="{section_style}">')
     parts.append(f'<h3 style="{h3_style}">Shipping &amp; Guarantee</h3>')
-    parts.append(f'<p style="{p_style}">{html.escape(SHIPPING_GUARANTEE_HTML_TEXT)}</p>')
+    ship_text = SHIPPING_GUARANTEE_HTML_TEXT
+    if free_ship:
+        ship_text = "Free shipping on every order. " + ship_text
+    parts.append(f'<p style="{p_style}">{html.escape(ship_text)}</p>')
     parts.append("</div>")
 
     parts.append("</div>")

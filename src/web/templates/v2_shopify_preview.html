@@ -57,7 +57,14 @@
 
   /* Product info (right column) */
   .shopify-preview .sp-title { margin:0 0 12px; font-size:24px; line-height:1.25; }
-  .shopify-preview .sp-price { font-size:26px; font-weight:800; color:var(--text); margin-bottom:6px; }
+  .shopify-preview .sp-price-row { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
+  .shopify-preview .sp-price { font-size:26px; font-weight:800; color:#c0392b; }
+  .shopify-preview .sp-price-was { font-size:16px; color:var(--text-muted); text-decoration:line-through; }
+  .shopify-preview .sp-price-badge {
+    padding:2px 8px; border-radius:var(--radius-pill); background:#ffe3d3; color:#b4530a;
+    font-size:12px; font-weight:800;
+  }
+  .shopify-preview .sp-free-ship { font-size:13px; color:#22a06b; font-weight:700; margin-bottom:6px; }
   .shopify-preview .sp-price-missing {
     display:inline-block; padding:4px 12px; border-radius:var(--radius-pill);
     background:rgba(220,38,38,.10); border:1px solid rgba(220,38,38,.30);
@@ -207,7 +214,18 @@
         {% if pv.price is none %}
         <div class="sp-price-missing">未设置价格</div>
         {% else %}
-        <div class="sp-price">${{ '%.2f'|format(pv.price) }}</div>
+        <div class="sp-price-row">
+          <span class="sp-price">${{ '%.2f'|format(pv.price) }}</span>
+          {% if pv.compare_at_price %}
+          <span class="sp-price-was">${{ '%.2f'|format(pv.compare_at_price) }}</span>
+          {% endif %}
+          {% if pv.discount_percent %}
+          <span class="sp-price-badge">{{ pv.discount_percent }}% OFF</span>
+          {% endif %}
+        </div>
+        {% if pv.free_shipping %}
+        <div class="sp-free-ship">🚚 Free shipping</div>
+        {% endif %}
         {% endif %}
 
         <p class="sp-vendor">
@@ -330,13 +348,13 @@
       }, 5000);
     }
     genBtn.addEventListener('click', function () {
-      if (!confirm('用 AI 生成全套商品图？将写入主版本图集（替换已有 AI 图），后台运行,需几分钟。')) return;
+      if (!confirm('用 AI 生成全套商品图（生活场景等）？\n已有主图会保留(不影响 TikTok),只重做副图;没主图时才生成主图。后台运行,需几分钟。')) return;
       genBtn.disabled = true;
       setStatus('启动中…');
-      fetch('/v2/local-products/' + lpid + '/auto_design_images_sync', {
+      fetch('/v2/local-products/' + lpid + '/shopify-generate-images', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: 5, mode: 'all', language: 'en' })
+        body: JSON.stringify({ secondary_count: 4 })
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {

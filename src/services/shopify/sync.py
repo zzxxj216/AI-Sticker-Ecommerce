@@ -53,6 +53,29 @@ SHOPIFY_VARIANT_WEIGHT_G = 30
 SHOPIFY_DEFAULT_QUANTITY = 16
 SHOPIFY_MAX_IMAGES = 8
 
+# Standing launch rule: free shipping + 40% off every upload. ``default_price``
+# is treated as the ORIGINAL price; the listed (selling) price is discounted and
+# the original is shown struck-through via Shopify's ``compare_at_price``.
+SHOPIFY_DISCOUNT_PERCENT = float(os.getenv("SHOPIFY_DISCOUNT_PERCENT", "40"))
+SHOPIFY_FREE_SHIPPING = (
+    os.getenv("SHOPIFY_FREE_SHIPPING", "1").strip().lower() not in ("0", "false", "no", "")
+)
+
+
+def _apply_discount(original: float) -> tuple[float, Optional[float]]:
+    """Return (sale_price, compare_at_price). When a discount is configured the
+    sale price is ``original * (1 - pct/100)`` and compare_at is the original;
+    otherwise sale == original and compare_at is None."""
+    try:
+        orig = round(float(original), 2)
+    except (TypeError, ValueError):
+        return 0.0, None
+    pct = SHOPIFY_DISCOUNT_PERCENT
+    if pct and pct > 0:
+        sale = round(orig * (1.0 - pct / 100.0), 2)
+        return sale, orig
+    return orig, None
+
 
 # ---------------------------------------------------------------------------
 # DB helper (mirrors tkshop service._open_db; intentionally decoupled)
@@ -177,12 +200,21 @@ class ShopifyProductSync:
         title = (local_product.get("title") or "").strip()
         sku = (local_product.get("seller_sku") or commerce.get("seller_sku") or "").strip()
 
+        # default_price is the ORIGINAL price. Apply the standing discount so
+        # the preview/sync show sale price + struck original.
         raw_price = _pick("default_price")
-        price: Optional[float]
+        original_price: Optional[float]
         try:
-            price = float(raw_price) if raw_price is not None else None
+            original_price = float(raw_price) if raw_price is not None else None
         except (TypeError, ValueError):
-            price = None
+            original_price = None
+        if original_price is not None:
+            sale_price, compare_at_price = _apply_discount(original_price)
+            discount_percent = int(SHOPIFY_DISCOUNT_PERCENT) if compare_at_price else 0
+        else:
+            sale_price, compare_at_price, discount_percent = None, None, 0
+        # `price` = what the customer pays (sale). None => not priced yet.
+        price = sale_price
 
         raw_qty = _pick("default_quantity")
         try:
@@ -221,7 +253,11 @@ class ShopifyProductSync:
                 except Exception as e:  # noqa: BLE001
                     logger.warning("build_preview: cache save failed for #%s: %s",
                                    local_product_id, str(e)[:150])
-            body_html = build_body_html(local_product, content)
+            body_html = build_body_html(
+                local_product, content,
+                offer={"discount_percent": discount_percent,
+                       "free_shipping": SHOPIFY_FREE_SHIPPING},
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("build_preview: copy generation failed for #%s: %s; "
                            "falling back to local fields", local_product_id, str(e)[:200])
@@ -275,7 +311,10 @@ class ShopifyProductSync:
             "vendor": SHOPIFY_VENDOR,
             "product_type": SHOPIFY_PRODUCT_TYPE,
             "status": "draft",
-            "price": price,
+            "price": price,                       # sale price (what they pay)
+            "compare_at_price": compare_at_price,  # struck original, or None
+            "discount_percent": discount_percent,  # 0 if no discount
+            "free_shipping": SHOPIFY_FREE_SHIPPING,
             "sku": sku,
             "quantity": quantity,
             "weight_g": SHOPIFY_VARIANT_WEIGHT_G,
@@ -314,8 +353,10 @@ class ShopifyProductSync:
         tags = preview.get("tags") or []
         body_html = preview.get("body_html") or ""
 
+        # ``price`` arg is the ORIGINAL; apply the standing discount.
+        sale_price, compare_at = _apply_discount(float(price))
         variant = {
-            "price": f"{float(price):.2f}",
+            "price": f"{sale_price:.2f}",
             "sku": sku,
             "inventory_quantity": quantity,
             "weight": SHOPIFY_VARIANT_WEIGHT_G,
@@ -323,6 +364,8 @@ class ShopifyProductSync:
             "requires_shipping": True,
             "taxable": True,
         }
+        if compare_at is not None and compare_at > sale_price:
+            variant["compare_at_price"] = f"{compare_at:.2f}"
 
         images: list[dict] = []
         position = 1

@@ -4478,6 +4478,68 @@ async def v2_products_batch_shop_status(request: Request):
 
 # ──────────────────────────── Shopify 同步 ────────────────────────────
 
+@router.post("/local-products/{local_product_id:int}/shopify-generate-images")
+async def v2_local_product_shopify_generate_images(request: Request, local_product_id: int):
+    """Generate the full image set for the Shopify preview, KEEPING the
+    existing main image (the one TikTok uses).
+
+    Behavior (per operator decision "保留主图,只补副图"):
+      - master already has a main image -> mode='secondary' + replace AI so
+        only the side/lifestyle images are (re)generated; the main is untouched.
+      - master has no main yet           -> mode='all' so a main is created too.
+
+    Reuses the master-level pipeline + the same task_id as the detail page so
+    the existing ``auto_design_status`` poll works. Background; returns JSON.
+    """
+    try:
+        payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else dict(await request.form())
+    except Exception:
+        payload = {}
+    try:
+        secondary_count = max(1, min(int(payload.get("secondary_count", 4)), 7))
+    except (TypeError, ValueError):
+        secondary_count = 4
+
+    conn = _open_db()
+    try:
+        has_main = conn.execute(
+            "SELECT 1 FROM local_product_images "
+            "WHERE local_product_id = ? AND role = 'main' LIMIT 1",
+            (local_product_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if has_main:
+        # Keep the main; refresh only the secondary/lifestyle set.
+        mode, replace_existing_ai = "secondary", True
+        kept = "保留现有主图"
+    else:
+        # No main yet — generate the whole set including a main.
+        mode, replace_existing_ai = "all", True
+        kept = "无主图,生成全套(含主图)"
+
+    task_id = f"tkshop_auto_design_local:{local_product_id}"
+    try:
+        started = run_async(
+            task_id,
+            _run_local_auto_design_bg, local_product_id,
+            secondary_count=secondary_count,
+            language="en",
+            replace_existing_ai=replace_existing_ai,
+            size="1024x1024",
+            mode=mode,
+            label=f"Shopify 全套图 (master #{local_product_id}, mode={mode}, +{secondary_count} 副图)",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    if not started:
+        return JSONResponse({"ok": True, "task_id": task_id, "started": False,
+                             "message": "任务已在后台运行中"})
+    return JSONResponse({"ok": True, "task_id": task_id, "started": True,
+                         "message": f"已在后台启动({kept}) — 完成后自动刷新"})
+
+
 @router.get("/local-products/{local_product_id:int}/shopify-preview", response_class=HTMLResponse)
 def v2_local_product_shopify_preview(request: Request, local_product_id: int):
     """Local style preview of how this master will look as a Shopify product.
@@ -4498,6 +4560,64 @@ def v2_local_product_shopify_preview(request: Request, local_product_id: int):
             "back_url": f"/v2/local-products/{local_product_id}",
         },
     )
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-generate-images")
+async def v2_local_product_shopify_generate_images(request: Request, local_product_id: int):
+    """Generate the Shopify image set while PRESERVING the existing main image.
+
+    The master gallery is shared with TikTok, so we must not clobber the TK
+    main/hero. Behaviour:
+      - master already has a main image -> mode='secondary', replace AI
+        secondaries only (main untouched), regenerate the lifestyle set.
+      - master has no main yet           -> mode='all' (generate main + set).
+    Background task; poll ``auto_design_status`` (same task_id) for progress.
+    """
+    payload = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else dict(await request.form())
+    )
+    try:
+        secondary_count = max(1, min(int(payload.get("secondary_count", 4)), 7))
+    except (TypeError, ValueError):
+        secondary_count = 4
+    conn = _open_db()
+    try:
+        has_main = conn.execute(
+            "SELECT 1 FROM local_product_images "
+            "WHERE local_product_id = ? AND role = 'main' LIMIT 1",
+            (local_product_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if has_main:
+        # Keep the main; refresh only the secondary (lifestyle) set.
+        mode, replace_existing_ai, sec = "secondary", True, secondary_count
+        note = "保留主图，只重做副图"
+    else:
+        # No main yet — generate the full set including a hero.
+        mode, replace_existing_ai, sec = "all", True, secondary_count
+        note = "无主图，生成全套（含主图）"
+    task_id = f"tkshop_auto_design_local:{local_product_id}"
+    try:
+        started = run_async(
+            task_id,
+            _run_local_auto_design_bg, local_product_id,
+            secondary_count=sec,
+            language="en",
+            replace_existing_ai=replace_existing_ai,
+            size="1024x1024",
+            mode=mode,
+            label=f"Shopify 全套图 (master #{local_product_id}, {note}, +{sec} 副图)",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "ok": True, "task_id": task_id, "started": bool(started),
+        "message": ("已在后台启动 — " + note + "。完成后本页自动刷新。")
+        if started else "任务已在后台运行中（同一产品不会并行启动）",
+    })
 
 
 @router.post("/local-products/{local_product_id:int}/shopify-regenerate")
