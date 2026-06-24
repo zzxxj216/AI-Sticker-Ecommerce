@@ -58,7 +58,7 @@
   /* Product info (right column) */
   .shopify-preview .sp-title { margin:0 0 12px; font-size:24px; line-height:1.25; }
   .shopify-preview .sp-price-row { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
-  .shopify-preview .sp-price { font-size:26px; font-weight:800; color:#c0392b; }
+  .shopify-preview .sp-price { font-size:26px; font-weight:800; color:var(--text); }
   .shopify-preview .sp-price-was { font-size:16px; color:var(--text-muted); text-decoration:line-through; }
   .shopify-preview .sp-price-badge {
     padding:2px 8px; border-radius:var(--radius-pill); background:#ffe3d3; color:#b4530a;
@@ -332,7 +332,7 @@
     function startPolling() {
       if (poll) return;
       poll = setInterval(function () {
-        fetch('/v2/local-products/' + lpid + '/auto_design_status')
+        fetch('/v2/local-products/' + lpid + '/shopify-images-status')
           .then(function (r) { return r.json(); })
           .then(function (d) {
             var n = (d.images || []).length;
@@ -348,7 +348,7 @@
       }, 5000);
     }
     genBtn.addEventListener('click', function () {
-      if (!confirm('用 AI 生成全套商品图（生活场景等）？\n已有主图会保留(不影响 TikTok),只重做副图;没主图时才生成主图。后台运行,需几分钟。')) return;
+      if (!confirm('用 AI 生成 Shopify 固定样式 5 张图（白底总览 / 笔电 / 水杯 / 手持 / 平铺尺寸）？\nShopify 独立一套,不影响 TikTok。后台运行,需几分钟。')) return;
       genBtn.disabled = true;
       setStatus('启动中…');
       fetch('/v2/local-products/' + lpid + '/shopify-generate-images', {

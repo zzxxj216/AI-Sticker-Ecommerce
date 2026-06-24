@@ -417,75 +417,58 @@ def build_body_html(local_product: dict, content: dict, *, offer: dict | None = 
         parts.append(f'<p style="{p_style}">{intro}</p>')
     parts.append("</div>")
 
-    # 1b) Offer banner (standing rule: free shipping + N% off)
-    try:
-        disc = int(offer.get("discount_percent") or 0)
-    except (TypeError, ValueError):
-        disc = 0
-    free_ship = bool(offer.get("free_shipping"))
-    if disc > 0 or free_ship:
-        chips = []
-        if disc > 0:
-            chips.append(f"\U0001F525 {disc}% OFF today")
-        if free_ship:
-            chips.append("\U0001F69A Free shipping")
-        banner_style = (
-            "margin:0 0 28px 0;padding:12px 16px;border-radius:10px;"
-            "background:#fff4ec;border:1px solid #ffd9c2;color:#b4530a;"
-            "font-weight:700;font-size:15px;text-align:center;"
-        )
-        parts.append(f'<div style="{banner_style}">{esc("  ·  ".join(chips))}</div>')
-
-    # 2) What's included
-    parts.append(f'<div style="{section_style}">')
-    parts.append(f'<h3 style="{h3_style}">What\'s Included</h3>')
-    whats = esc(content.get("whats_included"))
-    if whats:
-        parts.append(f'<p style="{p_style}">{whats}</p>')
-    parts.append(
-        f'<p style="{p_style}font-weight:600;">This pack: {esc(count_note)}.</p>'
+    # Collapsible section helper. Each lower section is a native <details> so
+    # the description folds on the Shopify storefront and in the preview.
+    # (Discount banner / free-shipping copy intentionally removed — handled in
+    # the Shopify admin now; the ``offer`` arg is accepted but ignored.)
+    details_style = "margin:0 0 10px 0;border-top:1px solid #ececf1;padding-top:10px;"
+    summary_style = (
+        "cursor:pointer;list-style:revert;font-size:13px;letter-spacing:0.08em;"
+        "text-transform:uppercase;color:#7a5cff;font-weight:700;margin:0;padding:4px 0;"
     )
-    parts.append("</div>")
+
+    def details(title: str, inner: str, *, open_: bool = False) -> str:
+        o = " open" if open_ else ""
+        return (
+            f'<details style="{details_style}"{o}>'
+            f'<summary style="{summary_style}">{title}</summary>'
+            f'<div style="padding-top:10px;">{inner}</div>'
+            f'</details>'
+        )
+
+    # 2) What's included (open by default)
+    whats = esc(content.get("whats_included"))
+    inc_inner = (f'<p style="{p_style}">{whats}</p>' if whats else "")
+    inc_inner += f'<p style="{p_style}font-weight:600;">This pack: {esc(count_note)}.</p>'
+    parts.append(details("What's Included", inc_inner, open_=True))
 
     # 3) Why you'll love it (checklist)
     bullets = _as_list(content.get("bullets"))
     if bullets:
-        parts.append(f'<div style="{section_style}">')
-        parts.append(f'<h3 style="{h3_style}">Why You\'ll Love It</h3>')
-        parts.append(f'<ul style="{ul_style}">')
-        for b in bullets:
-            parts.append(
-                f'<li style="{check_li_style}">'
-                f'<span style="{check_glyph_style}">✓</span>{esc(b)}</li>'
-            )
-        parts.append("</ul>")
-        parts.append("</div>")
+        items = "".join(
+            f'<li style="{check_li_style}">'
+            f'<span style="{check_glyph_style}">✓</span>{esc(b)}</li>'
+            for b in bullets
+        )
+        parts.append(details("Why You'll Love It", f'<ul style="{ul_style}">{items}</ul>'))
 
     # 4) How to use
     how = _as_list(content.get("how_to_use"))
     if how:
-        parts.append(f'<div style="{section_style}">')
-        parts.append(f'<h3 style="{h3_style}">How To Use</h3>')
-        parts.append(f'<ul style="{plain_ul_style}">')
-        for h in how:
-            parts.append(f'<li style="{plain_li_style}">{esc(h)}</li>')
-        parts.append("</ul>")
-        parts.append("</div>")
+        items = "".join(f'<li style="{plain_li_style}">{esc(h)}</li>' for h in how)
+        parts.append(details("How To Use", f'<ul style="{plain_ul_style}">{items}</ul>'))
 
     # 5) Material & Care (fixed brand template)
-    parts.append(f'<div style="{section_style}">')
-    parts.append(f'<h3 style="{h3_style}">Material &amp; Care</h3>')
-    parts.append(f'<p style="{p_style}">{html.escape(MATERIAL_CARE_HTML_TEXT)}</p>')
-    parts.append("</div>")
+    parts.append(details(
+        "Material &amp; Care",
+        f'<p style="{p_style}">{html.escape(MATERIAL_CARE_HTML_TEXT)}</p>',
+    ))
 
     # 6) Shipping & Guarantee (fixed brand template)
-    parts.append(f'<div style="{section_style}">')
-    parts.append(f'<h3 style="{h3_style}">Shipping &amp; Guarantee</h3>')
-    ship_text = SHIPPING_GUARANTEE_HTML_TEXT
-    if free_ship:
-        ship_text = "Free shipping on every order. " + ship_text
-    parts.append(f'<p style="{p_style}">{html.escape(ship_text)}</p>')
-    parts.append("</div>")
+    parts.append(details(
+        "Shipping &amp; Guarantee",
+        f'<p style="{p_style}">{html.escape(SHIPPING_GUARANTEE_HTML_TEXT)}</p>',
+    ))
 
     parts.append("</div>")
     return "".join(parts)

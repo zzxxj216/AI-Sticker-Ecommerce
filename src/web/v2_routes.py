@@ -4478,66 +4478,48 @@ async def v2_products_batch_shop_status(request: Request):
 
 # ──────────────────────────── Shopify 同步 ────────────────────────────
 
+def _run_shopify_image_gen_bg(local_product_id: int) -> dict:
+    """Background worker: generate the fixed Shopify image set."""
+    from src.services.shopify.images import generate_shopify_images
+    return generate_shopify_images(local_product_id, replace=True)
+
+
 @router.post("/local-products/{local_product_id:int}/shopify-generate-images")
 async def v2_local_product_shopify_generate_images(request: Request, local_product_id: int):
-    """Generate the full image set for the Shopify preview, KEEPING the
-    existing main image (the one TikTok uses).
-
-    Behavior (per operator decision "保留主图,只补副图"):
-      - master already has a main image -> mode='secondary' + replace AI so
-        only the side/lifestyle images are (re)generated; the main is untouched.
-      - master has no main yet           -> mode='all' so a main is created too.
-
-    Reuses the master-level pipeline + the same task_id as the detail page so
-    the existing ``auto_design_status`` poll works. Background; returns JSON.
+    """Generate the dedicated Shopify image set (fixed 5-image style, all AI
+    image-to-image). Independent from TikTok's master gallery — stored in
+    ``shopify_product_images``. Background; poll ``shopify-images-status``.
     """
-    try:
-        payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else dict(await request.form())
-    except Exception:
-        payload = {}
-    try:
-        secondary_count = max(1, min(int(payload.get("secondary_count", 4)), 7))
-    except (TypeError, ValueError):
-        secondary_count = 4
-
-    conn = _open_db()
-    try:
-        has_main = conn.execute(
-            "SELECT 1 FROM local_product_images "
-            "WHERE local_product_id = ? AND role = 'main' LIMIT 1",
-            (local_product_id,),
-        ).fetchone()
-    finally:
-        conn.close()
-
-    if has_main:
-        # Keep the main; refresh only the secondary/lifestyle set.
-        mode, replace_existing_ai = "secondary", True
-        kept = "保留现有主图"
-    else:
-        # No main yet — generate the whole set including a main.
-        mode, replace_existing_ai = "all", True
-        kept = "无主图,生成全套(含主图)"
-
-    task_id = f"tkshop_auto_design_local:{local_product_id}"
+    task_id = f"shopify_images:{local_product_id}"
     try:
         started = run_async(
             task_id,
-            _run_local_auto_design_bg, local_product_id,
-            secondary_count=secondary_count,
-            language="en",
-            replace_existing_ai=replace_existing_ai,
-            size="1024x1024",
-            mode=mode,
-            label=f"Shopify 全套图 (master #{local_product_id}, mode={mode}, +{secondary_count} 副图)",
+            _run_shopify_image_gen_bg, local_product_id,
+            label=f"Shopify 固定样式图 (master #{local_product_id}, 5 张)",
         )
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     if not started:
         return JSONResponse({"ok": True, "task_id": task_id, "started": False,
-                             "message": "任务已在后台运行中"})
+                             "message": "任务已在后台运行中（同一产品不会并行启动）"})
     return JSONResponse({"ok": True, "task_id": task_id, "started": True,
-                         "message": f"已在后台启动({kept}) — 完成后自动刷新"})
+                         "message": "已在后台启动 — Shopify 固定样式 5 张图，完成后自动刷新"})
+
+
+@router.get("/local-products/{local_product_id:int}/shopify-images-status")
+def v2_local_product_shopify_images_status(local_product_id: int):
+    """Poll endpoint for the Shopify image generation: {running, images}."""
+    from src.services.shopify.images import list_shopify_images
+    task_id = f"shopify_images:{local_product_id}"
+    imgs = list_shopify_images(local_product_id)
+    imgs_with_url = [
+        {**i, "url": _versioned_local_product_image_url(i)} for i in imgs
+    ]
+    return JSONResponse({
+        "ok": True,
+        "running": is_running(task_id),
+        "images": imgs_with_url,
+    })
 
 
 @router.get("/local-products/{local_product_id:int}/shopify-preview", response_class=HTMLResponse)

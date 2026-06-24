@@ -53,12 +53,14 @@ SHOPIFY_VARIANT_WEIGHT_G = 30
 SHOPIFY_DEFAULT_QUANTITY = 16
 SHOPIFY_MAX_IMAGES = 8
 
-# Standing launch rule: free shipping + 40% off every upload. ``default_price``
-# is treated as the ORIGINAL price; the listed (selling) price is discounted and
-# the original is shown struck-through via Shopify's ``compare_at_price``.
-SHOPIFY_DISCOUNT_PERCENT = float(os.getenv("SHOPIFY_DISCOUNT_PERCENT", "40"))
+# Discounts + free shipping are now configured centrally in the Shopify admin
+# (store-wide automatic discounts / shipping profiles), NOT baked per-product.
+# So both default OFF: ``default_price`` is sent as-is and no promo banner /
+# compare_at_price is added. Left as env toggles in case per-product discounting
+# is ever wanted again.
+SHOPIFY_DISCOUNT_PERCENT = float(os.getenv("SHOPIFY_DISCOUNT_PERCENT", "0"))
 SHOPIFY_FREE_SHIPPING = (
-    os.getenv("SHOPIFY_FREE_SHIPPING", "1").strip().lower() not in ("0", "false", "no", "")
+    os.getenv("SHOPIFY_FREE_SHIPPING", "0").strip().lower() not in ("0", "false", "no", "")
 )
 
 
@@ -279,9 +281,20 @@ class ShopifyProductSync:
             "how_to_use": content.get("how_to_use") or [],
         }
 
-        # Images (metadata only; route adds 'url'). Cap to keep payload sane.
+        # Images (metadata only; route adds 'url'). Prefer the dedicated Shopify
+        # image set (fixed style, independent from TikTok); fall back to the
+        # master gallery when none generated yet.
         images: list[dict] = []
-        for img in (local_product.get("images") or []):
+        shop_imgs: list[dict] = []
+        try:
+            from src.services.shopify.images import list_shopify_images
+            shop_imgs = list_shopify_images(local_product_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("build_preview: list_shopify_images failed for #%s: %s",
+                           local_product_id, str(e)[:150])
+        source_imgs = shop_imgs if shop_imgs else (local_product.get("images") or [])
+        images_from_shopify_set = bool(shop_imgs)
+        for img in source_imgs:
             lp = (img.get("local_path") or "").strip()
             if not lp:
                 continue
@@ -323,6 +336,7 @@ class ShopifyProductSync:
             "seo": seo,
             "body_html": body_html,
             "images": images,
+            "images_from_shopify_set": images_from_shopify_set,
             "sync": sync_summary,
         }
 
