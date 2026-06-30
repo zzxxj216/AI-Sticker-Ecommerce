@@ -1,0 +1,5 @@
+interface:
+  display_name: Amazon Listing
+  short_description: 创建/编辑/拉取 Amazon listing + A+(经 multi-channel-api 中间层)
+policy:
+  allow_implicit_invocation: true
