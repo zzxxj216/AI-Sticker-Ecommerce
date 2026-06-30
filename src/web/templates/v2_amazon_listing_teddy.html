@@ -1,0 +1,162 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .tl { padding-top:14px; }
+  .tl .topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+  .tl .ptitle { font-size:19px; font-weight:800; margin:0 0 6px; max-width:760px; line-height:1.35; }
+  .tl .pmeta { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .tag { font-size:11px; padding:3px 10px; border-radius:var(--radius-pill); background:var(--bg-subtle); border:1px solid var(--line-soft); color:var(--text-muted); }
+  .tag.custom { background:#fef3c7; color:#92400e; border:none; }
+  .tag.src a { color:var(--accent); text-decoration:none; }
+  .btn { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border:1px solid var(--line); border-radius:var(--radius-pill); background:var(--surface); color:var(--text); font-size:13px; font-weight:700; cursor:pointer; text-decoration:none; }
+  .btn.primary { background:var(--accent); color:#fff; border:none; } .btn.primary:hover{background:var(--accent-dark);}
+  .btn:hover:not(.primary){ background:var(--bg-subtle); }
+
+  .tabs { display:flex; gap:4px; border-bottom:2px solid var(--line-soft); margin-bottom:18px; flex-wrap:wrap; }
+  .tab { padding:10px 18px; font-size:14px; font-weight:700; color:var(--text-muted); cursor:pointer; border:none; background:none; border-bottom:2px solid transparent; margin-bottom:-2px; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .panel { display:none; } .panel.active { display:block; }
+  .card { background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:18px 22px; margin-bottom:16px; }
+  .card h3 { font-size:14px; margin:0 0 12px; } .muted{ color:var(--text-muted); font-size:12px; }
+
+  /* 概览 */
+  .ov { display:grid; grid-template-columns:240px 1fr; gap:24px; } @media(max-width:680px){.ov{grid-template-columns:1fr;}}
+  .ov img { width:100%; aspect-ratio:1/1; object-fit:contain; background:var(--bg-subtle); border-radius:var(--radius-md); }
+  .kv { font-size:13px; line-height:2; } .kv b{ display:inline-block; width:96px; color:var(--text-muted); font-weight:600; }
+
+  /* 设计款 */
+  .dcards { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; }
+  .dcard { border:1px solid var(--line-soft); border-radius:var(--radius-md); overflow:hidden; text-align:center; }
+  .dcard img { width:100%; aspect-ratio:1/1; object-fit:cover; background:var(--bg-subtle); }
+  .dcard .nm { padding:8px; font-weight:700; font-size:13px; }
+  .qchips { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  .qchip { padding:6px 14px; border:1px solid var(--line); border-radius:var(--radius-pill); font-size:13px; font-weight:700; }
+  .matrixnote { background:#eff6ff; color:#1e40af; border-radius:var(--radius-md); padding:10px 14px; font-size:13px; margin-top:12px; }
+
+  /* 文案 */
+  .fld { margin-bottom:14px; } .fld label{ display:block; font-size:11px; text-transform:uppercase; color:var(--text-muted); font-weight:700; margin-bottom:4px; }
+  ul.b { margin:0; padding-left:18px; } ul.b li{ margin-bottom:6px; font-size:13px; line-height:1.5; }
+  .kws { display:flex; flex-wrap:wrap; gap:6px; } .kw{ font-size:11px; padding:3px 9px; border-radius:var(--radius-pill); background:var(--bg-subtle); border:1px solid var(--line-soft); }
+
+  /* 图片 / A+ 分主题 */
+  .theme-sec { margin-bottom:22px; }
+  .theme-h { font-size:14px; font-weight:800; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+  .theme-h .cnt { font-size:11px; color:var(--text-muted); font-weight:600; }
+  .grid-imgs { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px; }
+  .grid-imgs img { width:100%; aspect-ratio:1/1; object-fit:cover; border:1px solid var(--line-soft); border-radius:8px; background:var(--bg-subtle); }
+  .sublabel { font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase; margin:12px 0 6px; }
+  /* A+ 竖排(像 Amazon A+) */
+  .aplus-stack { max-width:760px; }
+  .aplus-stack img { width:100%; display:block; border:1px solid var(--line-soft); border-radius:8px; margin-bottom:10px; background:#fff; }
+</style>
+
+{% set themes = p['themes'] %}
+<div class="tl">
+  <div class="topbar">
+    <div>
+      <div class="ptitle">{{ p.title }}</div>
+      <div class="pmeta">
+        <span class="tag">{{ p.brand }}</span>
+        <span class="tag">${{ p.price }}</span>
+        <span class="tag custom">Amazon Custom · 买家填名字</span>
+        <span class="tag">变体: 设计 × 数量</span>
+        <span class="tag src">模仿 <a href="{{ p.source_url }}" target="_blank">TeddyLabels ↗</a></span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a class="btn" href="/v2/amazon/custom">← 返回</a>
+      <button class="btn">✓ 校验</button>
+      <button class="btn primary">🚀 推送父+子(草稿)</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="ov">概览</button>
+    <button class="tab" data-tab="var">设计款 + 数量</button>
+    <button class="tab" data-tab="copy">文案</button>
+    <button class="tab" data-tab="img">图片</button>
+    <button class="tab" data-tab="aplus">A+</button>
+  </div>
+
+  <!-- 概览 -->
+  <div class="panel active" data-panel="ov">
+    <div class="card"><div class="ov">
+      <img src="{{ themes[0].thumb }}" alt="hero">
+      <div>
+        <h3>产品概览</h3>
+        <div class="kv">
+          <div><b>类型</b> 半定制(Amazon Custom)· 儿童姓名标签</div>
+          <div><b>变体</b> {{ themes|length }} 设计 × {{ p.dimensions.quantity|length }} 数量 = {{ themes|length * p.dimensions.quantity|length }} 个子 SKU</div>
+          <div><b>素材</b> 每设计款:主图 + 副图 + A+(本地 amazon4 文件夹)</div>
+          <div><b>关键词</b> {{ p.keywords|length }} 个真实搜索词(Helium10 CSV)</div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- 设计款 + 数量 -->
+  <div class="panel" data-panel="var">
+    <div class="card">
+      <h3>设计款(color_name)</h3>
+      <div class="dcards">
+        {% for t in themes %}
+        <div class="dcard"><img src="{{ t.thumb }}" alt="{{ t.name }}" loading="lazy"><div class="nm">{{ t.name }}</div></div>
+        {% endfor %}
+      </div>
+      <h3 style="margin-top:20px;">数量档(size_name)</h3>
+      <div class="qchips">{% for q in p.dimensions.quantity %}<span class="qchip">{{ q }}</span>{% endfor %}</div>
+      <div class="matrixnote">📐 二维变体:<b>{{ themes|length }} 设计 × {{ p.dimensions.quantity|length }} 数量 = {{ themes|length * p.dimensions.quantity|length }} 个子 SKU</b>。买家在商详页选设计 + 数量,再填名字定制(Custom)。</div>
+    </div>
+  </div>
+
+  <!-- 文案 -->
+  <div class="panel" data-panel="copy">
+    <div class="card">
+      <h3>父级文案 <span class="muted">模仿 TeddyLabels + 真实关键词</span></h3>
+      <div class="fld"><label>标题</label><div>{{ p.title }}</div></div>
+      <div class="fld"><label>五点描述</label><ul class="b">{% for b in p.bullets %}<li>{{ b }}</li>{% endfor %}</ul></div>
+      <div class="fld"><label>真实搜索词(Helium10,按搜索量)</label><div class="kws">{% for k in p.keywords %}<span class="kw">{{ k }}</span>{% endfor %}</div></div>
+      <button class="btn">↻ AI 生成文案(融入关键词)</button>
+    </div>
+  </div>
+
+  <!-- 图片(分主题) -->
+  <div class="panel" data-panel="img">
+    <div class="card">
+      <h3>图片 <span class="muted">每个设计款的主图 + 副图(本地 → 推送时上传 COS)</span></h3>
+      {% for t in themes %}
+      <div class="theme-sec">
+        <div class="theme-h">{{ t.name }} <span class="cnt">主图 {{ t.main_images|length }} · 副图 {{ t.sub_images|length }}</span></div>
+        <div class="sublabel">主图</div>
+        <div class="grid-imgs">{% for u in t.main_images %}<img src="{{ u }}" loading="lazy">{% endfor %}</div>
+        {% if t.sub_images %}<div class="sublabel">副图</div>
+        <div class="grid-imgs">{% for u in t.sub_images %}<img src="{{ u }}" loading="lazy">{% endfor %}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- A+(分主题,竖排) -->
+  <div class="panel" data-panel="aplus">
+    <div class="card">
+      <h3>A+ 内容 <span class="muted">每个设计款的 A+ 页(竖排,像 Amazon A+)</span></h3>
+      {% for t in themes %}
+      <div class="theme-sec">
+        <div class="theme-h">{{ t.name }} <span class="cnt">{{ t.aplus_images|length }} 张 A+</span></div>
+        <div class="aplus-stack">{% for u in t.aplus_images %}<img src="{{ u }}" loading="lazy">{% endfor %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.tl .tab').forEach(function(t){
+    t.addEventListener('click', function(){
+      var k=t.getAttribute('data-tab');
+      document.querySelectorAll('.tl .tab').forEach(function(x){ x.classList.toggle('active', x===t); });
+      document.querySelectorAll('.tl .panel').forEach(function(pn){ pn.classList.toggle('active', pn.getAttribute('data-panel')===k); });
+    });
+  });
+</script>
+{% endblock %}

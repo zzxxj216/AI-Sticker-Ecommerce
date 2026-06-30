@@ -92,6 +92,12 @@ app.mount(
     StaticFiles(directory=str(DAILY_STICKER_ASSETS_DIR)),
     name="daily-sticker-assets",
 )
+# Amazon 半定制素材(本地主副图 + A+),供前端预览引用。可用 AMAZON_ASSETS_DIR 覆盖路径。
+import os as _os
+AMAZON_ASSETS_DIR = Path(_os.getenv("AMAZON_ASSETS_DIR", r"C:\Users\zane\Desktop\amazon4"))
+if AMAZON_ASSETS_DIR.is_dir():
+    app.mount("/amazon4-assets", StaticFiles(directory=str(AMAZON_ASSETS_DIR)), name="amazon4-assets")
+
 app.include_router(v2_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))

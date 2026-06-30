@@ -1,0 +1,130 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .aplus { padding-top:14px; max-width:1000px; }
+  .aplus .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .aplus-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border:1px solid var(--line); border-radius:var(--radius-pill); background:var(--surface); color:var(--text); font-size:13px; font-weight:700; cursor:pointer; text-decoration:none; }
+  .aplus-btn.primary { background:var(--accent); color:#fff; border:none; }
+  .aplus-btn:hover:not([disabled]) { background:var(--bg-subtle); }
+  .aplus-btn.primary:hover { background:var(--accent-dark); }
+  .amz-summary { margin:0 0 14px; padding:10px 14px; border-radius:var(--radius-md); background:#eff6ff; color:#1e40af; font-size:13px; font-weight:600; }
+
+  /* A+ canvas — 模拟 Amazon 详情页 A+ 区域 */
+  .aplus-canvas { background:#fff; border:1px solid var(--line-soft); border-radius:var(--radius-md); overflow:hidden; }
+  .aplus-mod { padding:28px 32px; border-bottom:1px solid #f0f0f0; color:#111; }
+  .aplus-mod:last-child { border-bottom:none; }
+  .aplus-mod .mtag { font-size:10px; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+
+  .aplus-header { text-align:center; background:linear-gradient(180deg,#fafafa,#fff); }
+  .aplus-header h2 { font-size:26px; margin:0 0 8px; font-weight:800; color:#111; }
+  .aplus-header p { font-size:15px; color:#555; margin:0; }
+  .aplus-header .banner { width:100%; max-height:280px; object-fit:cover; border-radius:8px; margin-top:16px; }
+
+  .aplus-sit { display:grid; grid-template-columns: 1fr 1fr; gap:24px; align-items:center; }
+  @media (max-width:760px){ .aplus-sit { grid-template-columns:1fr; } }
+  .aplus-sit img { width:100%; aspect-ratio:1/1; object-fit:contain; background:#f7f7f7; border-radius:8px; }
+  .aplus-sit h3 { font-size:18px; margin:0 0 8px; }
+  .aplus-sit p { font-size:14px; color:#444; line-height:1.6; margin:0; }
+
+  .aplus-three h3.sec { font-size:18px; text-align:center; margin:0 0 18px; }
+  .aplus-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+  @media (max-width:760px){ .aplus-cards { grid-template-columns:1fr; } }
+  .aplus-card img { width:100%; aspect-ratio:1/1; object-fit:contain; background:#f7f7f7; border-radius:8px; margin-bottom:10px; }
+  .aplus-card h4 { font-size:14px; margin:0 0 4px; }
+  .aplus-card p { font-size:13px; color:#555; margin:0; line-height:1.5; }
+
+  .aplus-cmp h3.sec { font-size:18px; text-align:center; margin:0 0 16px; }
+  .cmp-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .cmp-table th, .cmp-table td { padding:10px 12px; border:1px solid #eee; text-align:center; }
+  .cmp-table th { background:#fafafa; font-weight:700; }
+  .cmp-table td:first-child, .cmp-table th:first-child { text-align:left; font-weight:600; }
+  .cmp-table td.us { color:#166534; font-weight:700; }
+
+  .aplus-closing { text-align:center; background:#fafafa; }
+  .aplus-closing h2 { font-size:22px; margin:0 0 8px; }
+  .aplus-closing p { font-size:14px; color:#555; max-width:640px; margin:0 auto; line-height:1.6; }
+
+  .imgph { width:100%; aspect-ratio:1/1; background:#f0f0f0; border:1px dashed #ccc; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#aaa; font-size:12px; }
+  .noimg-note { background:#fef9c3; color:#854d0e; border-radius:var(--radius-md); padding:8px 12px; font-size:12px; margin-bottom:12px; }
+</style>
+
+{% set imgs = pv['image_urls'] %}
+{% macro img_at(idx) %}
+  {% if imgs and idx is not none and idx < imgs|length %}<img src="{{ imgs[idx] }}" loading="lazy">{% else %}<div class="imgph">需先上传图片</div>{% endif %}
+{% endmacro %}
+
+<div class="aplus">
+  <div class="topbar">
+    <h1 class="page-title" style="margin:0;">🅰️＋ Amazon A+ · #{{ pv.local_product_id }}</h1>
+    <div style="display:flex;gap:8px;">
+      <a class="aplus-btn" href="{{ back_url }}">← 返回 Listing</a>
+      <form method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/aplus/regenerate" style="display:inline;"
+            onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='生成中…(约20s)';">
+        <button class="aplus-btn primary" type="submit">↻ {{ '重新生成 A+' if pv.modules else 'AI 生成 A+' }}</button>
+      </form>
+    </div>
+  </div>
+  {% if summary %}<div class="amz-summary">{{ summary }}</div>{% endif %}
+  {% if not imgs %}<div class="noimg-note">提示:A+ 模块的图片来自该产品已上传 COS 的图。先到 Listing 页「上传 master 图片到 COS」,A+ 才有图。文案不受影响。</div>{% endif %}
+
+  {% if not pv.modules %}
+  <div class="aplus-canvas"><div class="aplus-mod"><p style="color:#888;">还没有 A+ 内容。点右上角「AI 生成 A+」。</p></div></div>
+  {% else %}
+  <div class="aplus-canvas">
+    {% for m in pv.modules %}
+    <div class="aplus-mod">
+      <div class="mtag">{{ m.type }}</div>
+
+      {% if m.type == 'header' %}
+      <div class="aplus-header">
+        <h2>{{ m.headline }}</h2>
+        <p>{{ m.body }}</p>
+        {% if imgs and m.image_idx is not none and m.image_idx < imgs|length %}<img class="banner" src="{{ imgs[m.image_idx] }}" loading="lazy">{% endif %}
+      </div>
+
+      {% elif m.type == 'single_image_text' %}
+      <div class="aplus-sit">
+        <div>{{ img_at(m.image_idx) }}</div>
+        <div><h3>{{ m.headline }}</h3><p>{{ m.body }}</p></div>
+      </div>
+
+      {% elif m.type == 'three_image_text' %}
+      <div class="aplus-three">
+        {% if m.headline %}<h3 class="sec">{{ m.headline }}</h3>{% endif %}
+        <div class="aplus-cards">
+          {% for cd in m.cards %}
+          <div class="aplus-card">
+            {{ img_at(cd.image_idx) }}
+            <h4>{{ cd.heading }}</h4><p>{{ cd.body }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      {% elif m.type == 'comparison' %}
+      <div class="aplus-cmp">
+        {% if m.headline %}<h3 class="sec">{{ m.headline }}</h3>{% endif %}
+        <table class="cmp-table">
+          <thead><tr><th>Feature</th>{% for col in m.comparison.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+          <tbody>
+            {% for row in m.comparison.rows %}
+            <tr><td>{{ row.feature }}</td>
+              {% for v in row['values'] %}<td {% if loop.first %}class="us"{% endif %}>{{ v }}</td>{% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% elif m.type == 'closing' %}
+      <div class="aplus-closing"><h2>{{ m.headline }}</h2><p>{{ m.body }}</p></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p style="color:var(--text-muted);font-size:12px;margin-top:12px;">
+    提交到 Amazon 需中间层补 A+ Content API(待办);当前为内容制作 + 预览。
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

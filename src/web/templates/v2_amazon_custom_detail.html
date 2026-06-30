@@ -1,0 +1,202 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .cd { padding-top:14px; }
+  .cd .topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+  .cd .ptitle { font-size:20px; font-weight:800; margin:0 0 6px; }
+  .cd .pmeta { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .tag { font-size:11px; padding:3px 10px; border-radius:var(--radius-pill); background:var(--bg-subtle); border:1px solid var(--line-soft); color:var(--text-muted); }
+  .pill { font-size:11px; font-weight:700; padding:2px 10px; border-radius:var(--radius-pill); background:var(--bg-subtle); color:var(--text-muted); }
+  .btn { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border:1px solid var(--line); border-radius:var(--radius-pill); background:var(--surface); color:var(--text); font-size:13px; font-weight:700; cursor:pointer; text-decoration:none; }
+  .btn.primary { background:var(--accent); color:#fff; border:none; }
+  .btn.primary:hover { background:var(--accent-dark); }
+  .btn:hover:not(.primary) { background:var(--bg-subtle); }
+
+  /* Tabs */
+  .tabs { display:flex; gap:4px; border-bottom:2px solid var(--line-soft); margin-bottom:18px; flex-wrap:wrap; }
+  .tab { padding:10px 18px; font-size:14px; font-weight:700; color:var(--text-muted); cursor:pointer; border:none; background:none; border-bottom:2px solid transparent; margin-bottom:-2px; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  .card { background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:18px 22px; margin-bottom:16px; }
+  .card h3 { font-size:14px; margin:0 0 12px; }
+  .muted { color:var(--text-muted); font-size:12px; }
+
+  /* 概览 */
+  .ov { display:grid; grid-template-columns:200px 1fr; gap:24px; }
+  @media(max-width:680px){ .ov{ grid-template-columns:1fr; } }
+  .ov img { width:100%; aspect-ratio:1/1; object-fit:contain; background:var(--bg-subtle); border-radius:var(--radius-md); }
+  .prog { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+  .prog .it { font-size:12px; padding:6px 12px; border-radius:8px; background:var(--bg-subtle); }
+  .prog .it.ok { background:#dcfce7; color:#166534; }
+
+  /* 变体网格 */
+  .vtable { width:100%; border-collapse:collapse; font-size:13px; }
+  .vtable th, .vtable td { padding:10px 12px; border-bottom:1px solid var(--line-soft); text-align:left; }
+  .vtable th { font-size:11px; text-transform:uppercase; color:var(--text-muted); }
+  .vthumb { width:46px; height:46px; border-radius:8px; background:var(--bg-subtle); display:flex; align-items:center; justify-content:center; font-size:10px; color:var(--text-muted); }
+  img.vthumb { object-fit:cover; }
+  .vadd { margin-top:12px; }
+
+  /* 文案 */
+  .fld { margin-bottom:14px; }
+  .fld label { display:block; font-size:11px; text-transform:uppercase; color:var(--text-muted); font-weight:700; margin-bottom:4px; }
+  .fld .v { font-size:13px; line-height:1.5; }
+  ul.b { margin:0; padding-left:18px; } ul.b li{ margin-bottom:4px; font-size:13px; }
+
+  /* 图片 */
+  .gal { display:flex; gap:10px; flex-wrap:wrap; }
+  .gal .ph, .gal img { width:120px; height:120px; border-radius:var(--radius-md); border:1px solid var(--line-soft); background:var(--bg-subtle); object-fit:contain; display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:11px; }
+
+  /* A+ 共享 + 专属 */
+  .aplus2 { display:grid; grid-template-columns:300px 1fr; gap:18px; align-items:start; }
+  @media(max-width:820px){ .aplus2{ grid-template-columns:1fr; } }
+  .lib { border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:14px; }
+  .lib h4 { font-size:12px; text-transform:uppercase; color:var(--text-muted); margin:0 0 10px; }
+  .lib .row { display:flex; align-items:center; gap:8px; padding:8px 6px; border-radius:8px; font-size:13px; }
+  .lib .row:hover { background:var(--bg-subtle); }
+  .lib .ttype { font-size:10px; color:var(--text-muted); margin-left:auto; }
+  .canvas { border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:14px; min-height:200px; }
+  .canvas h4 { font-size:12px; text-transform:uppercase; color:var(--text-muted); margin:0 0 10px; }
+  .cmod { display:flex; align-items:center; gap:10px; padding:12px 14px; border:1px solid var(--line-soft); border-radius:8px; margin-bottom:8px; background:var(--surface); cursor:grab; }
+  .cmod .grip { color:var(--text-muted); }
+  .scope { font-size:10px; font-weight:700; padding:2px 8px; border-radius:var(--radius-pill); margin-left:auto; }
+  .scope.shared { background:#eef2ff; color:#4338ca; }
+  .scope.specific { background:#fef3c7; color:#92400e; }
+  .hint { font-size:12px; color:var(--text-muted); margin-top:10px; }
+</style>
+
+<div class="cd">
+  <div class="topbar">
+    <div>
+      <div class="ptitle">{{ p.name }}</div>
+      <div class="pmeta">
+        <span class="tag">{{ p.brand }}</span>
+        <span class="tag">variation_theme: {{ p.variation_theme }}</span>
+        <span class="tag">默认价 ${{ p.price }}</span>
+        <span class="pill">草稿</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a class="btn" href="/v2/amazon/custom">← 返回</a>
+      <button class="btn">✓ 校验</button>
+      <button class="btn primary">🚀 推送父+子(草稿)</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="ov">概览</button>
+    <button class="tab" data-tab="var">设计款(变体)</button>
+    <button class="tab" data-tab="copy">文案</button>
+    <button class="tab" data-tab="img">图片</button>
+    <button class="tab" data-tab="aplus">A+</button>
+  </div>
+
+  <!-- 概览 -->
+  <div class="panel active" data-panel="ov">
+    <div class="card">
+      <div class="ov">
+        <img src="{{ p.img }}" alt="cover">
+        <div>
+          <h3>产品概览</h3>
+          <p class="muted">父 listing 为不可售容器,买家在商详页切换下面的设计款变体购买。</p>
+          <div class="prog">
+            <div class="it ok">文案 ✓</div>
+            <div class="it ok">图片 ✓</div>
+            <div class="it">A+ {{ p.progress.aplus }}</div>
+            <div class="it ok">{{ p.progress.variants }} 设计款</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设计款变体 -->
+  <div class="panel" data-panel="var">
+    <div class="card">
+      <h3>设计款变体 <span class="muted">每个 = 一个 pack(一个 color_name 值),父体合并</span></h3>
+      <table class="vtable">
+        <thead><tr><th>主图</th><th>设计款(款名)</th><th>SKU</th><th>价格</th><th></th></tr></thead>
+        <tbody>
+          {% for v in p.variants %}
+          <tr>
+            <td>{% if v.img %}<img class="vthumb" src="{{ v.img }}" loading="lazy" alt="{{ v.name }}">{% else %}<div class="vthumb">{{ loop.index }}</div>{% endif %}</td>
+            <td style="font-weight:600;">{{ v.name }}</td>
+            <td><code style="font-size:11px;">{{ v.sku }}</code></td>
+            <td>${{ v.price }}</td>
+            <td><button class="btn" style="padding:4px 12px;font-size:12px;">移除</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button class="btn vadd">+ 从 pack 库添加设计款</button>
+    </div>
+  </div>
+
+  <!-- 文案 -->
+  <div class="panel" data-panel="copy">
+    <div class="card">
+      <h3>父级文案 <span class="muted">item_name / 五点 / 描述 / search_terms(可编辑 · AI 生成)</span></h3>
+      <div class="fld"><label>标题</label><div class="v">{{ p['copy'].item_name }}</div></div>
+      <div class="fld"><label>五点描述</label><ul class="b">{% for b in p['copy'].bullets %}<li>{{ b }}</li>{% endfor %}</ul></div>
+      <div class="fld"><label>产品描述</label><div class="v">{{ p['copy'].description }}</div></div>
+      <div class="fld"><label>搜索词</label><div class="v muted">{{ p['copy'].search_terms }}</div></div>
+      <button class="btn">↻ AI 重新生成文案</button>
+    </div>
+  </div>
+
+  <!-- 图片 -->
+  <div class="panel" data-panel="img">
+    <div class="card">
+      <h3>图片 <span class="muted">父级主图集 + 每个设计款自己的主图(→ COS 公网 URL)</span></h3>
+      <div class="gal">
+        {% for u in p.main_images %}<img src="{{ u }}" alt="main {{ loop.index }}" loading="lazy">{% endfor %}
+        <div class="ph">+ 添加</div>
+      </div>
+      <button class="btn" style="margin-top:12px;">☁ 上传图片到 COS</button>
+    </div>
+  </div>
+
+  <!-- A+ 共享 + 专属 -->
+  <div class="panel" data-panel="aplus">
+    <div class="card">
+      <h3>A+ 内容 <span class="muted">引用共享库模块 + 添加本品专属模块</span></h3>
+      <div class="aplus2">
+        <div class="lib">
+          <h4>共享模块库(勾选引用)</h4>
+          {% for m in shared_lib %}
+          <label class="row">
+            <input type="checkbox" {% if m.checked %}checked{% endif %}>
+            <span>{{ m.name }}</span>
+            <span class="ttype">{{ m.type }}</span>
+          </label>
+          {% endfor %}
+          <a class="muted" href="/v2/amazon/aplus-library" style="display:inline-block;margin-top:8px;">管理共享库 →</a>
+        </div>
+        <div class="canvas">
+          <h4>当前产品 A+ 画布(可拖动排序)</h4>
+          {% for m in p.aplus_modules %}
+          <div class="cmod">
+            <span class="grip">⠿</span>
+            <span>{{ loop.index }}. {{ m.title }}</span>
+            <span class="scope {{ m.scope }}">{{ '共享🔗' if m.scope=='shared' else '专属' }}</span>
+          </div>
+          {% endfor %}
+          <button class="btn" style="margin-top:6px;">+ 添加专属模块</button>
+        </div>
+      </div>
+      <p class="hint">🔗 共享模块改一处 → 所有引用它的产品同步更新。下方可接整体可视化预览(模拟 Amazon A+ 排版)。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.cd .tab').forEach(function(t){
+    t.addEventListener('click', function(){
+      var k = t.getAttribute('data-tab');
+      document.querySelectorAll('.cd .tab').forEach(function(x){ x.classList.toggle('active', x===t); });
+      document.querySelectorAll('.cd .panel').forEach(function(pn){ pn.classList.toggle('active', pn.getAttribute('data-panel')===k); });
+    });
+  });
+</script>
+{% endblock %}

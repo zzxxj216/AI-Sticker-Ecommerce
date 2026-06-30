@@ -1,0 +1,49 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .lib2 { padding-top:14px; }
+  .lib2 .head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .lib2 .sub { color:var(--text-muted); font-size:13px; margin:0 0 16px; }
+  .new { padding:9px 18px; border-radius:var(--radius-pill); background:var(--accent); color:#fff; font-weight:700; font-size:13px; text-decoration:none; }
+  .new:hover { background:var(--accent-dark); }
+  .card { background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-md); padding:6px 4px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { padding:12px 16px; border-bottom:1px solid var(--line-soft); text-align:left; }
+  th { font-size:11px; text-transform:uppercase; color:var(--text-muted); }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:var(--bg-subtle); }
+  .mtype { font-size:11px; padding:3px 10px; border-radius:var(--radius-pill); background:#eef2ff; color:#4338ca; }
+  .used { font-weight:700; }
+  .used .n { color:var(--accent); }
+  .act { display:flex; gap:6px; }
+  .act a { font-size:12px; color:var(--accent); text-decoration:none; font-weight:700; }
+  .mname { font-weight:700; display:flex; align-items:center; gap:8px; }
+  .mname .ic { width:26px; height:26px; border-radius:6px; background:var(--bg-subtle); display:flex; align-items:center; justify-content:center; font-size:13px; }
+  .note { background:#eff6ff; color:#1e40af; border-radius:var(--radius-md); padding:10px 14px; font-size:13px; margin-bottom:16px; }
+</style>
+
+<div class="lib2">
+  <div class="head">
+    <h1 class="page-title" style="margin:0;">🅰️＋ A+ 共享模块库</h1>
+    <a class="new" href="#">+ 新建共享模块</a>
+  </div>
+  <p class="sub">这里的模块可被多个半定制产品引用;改一处,所有引用它的产品同步更新。</p>
+  <div class="note">💡 共享 = 跨产品复用的通用模块(品牌横幅、材质对比、防水说明…);各产品再叠加自己的"专属模块"。</div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>模块名</th><th>类型</th><th>被引用</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for m in modules %}
+        <tr>
+          <td><div class="mname"><span class="ic">{% if m.type=='header' %}🏷️{% elif m.type=='comparison' %}📊{% elif m.type=='three_image_text' %}🖼️{% elif m.type=='closing' %}🎁{% else %}📝{% endif %}</span>{{ m.name }}</div></td>
+          <td><span class="mtype">{{ m.type }}</span></td>
+          <td class="used"><span class="n">{{ m.used }}</span> 个产品</td>
+          <td><div class="act"><a href="#">编辑</a><a href="#">预览</a><a href="#" style="color:var(--text-muted);">复制</a></div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

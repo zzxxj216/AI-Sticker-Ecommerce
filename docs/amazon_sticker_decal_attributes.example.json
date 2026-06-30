@@ -1,0 +1,40 @@
+{
+  "_note": "STICKER_DECAL (美国站 ATVPDKIKX0DER) 的最小可用 attributes 模板。已用此结构真实 POST 创建成功(status=ACCEPTED, issues=0, store=main=inkelligent, SKU=INK-VSP50-DRAFT01, 无图+库存0=抑制不可售)。坑1: unit_count.type.value 必须用枚举值 'Count'(大写; 合法集 ['Count','Sq Ft']), 小写 'count' 会被真实提交拒(VALIDATION_PREVIEW 反而漏判=干跑比真提交宽松)。坑2: 图片 main_product_image_locator 已去掉——Amazon 校验阶段就真实抓图, 占位/不可达图 InvalidInput 且整调用 success:false;真实公网图(CDN)就绪后再加回。brand='Inkelligent' 被接受。required_product_compliance_certificate 用 'Does Not Apply' 通过。",
+  "sku": "INK-AMZTEST-VAL-1",
+  "product_type": "STICKER_DECAL",
+  "requirements": "LISTING",
+  "attributes": {
+    "condition_type": [{"value": "new_new", "marketplace_id": "ATVPDKIKX0DER"}],
+    "brand": [{"value": "Inkelligent", "marketplace_id": "ATVPDKIKX0DER"}],
+    "manufacturer": [{"value": "Inkelligent", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "item_name": [{"value": "Inkelligent Vinyl Sticker Pack 50 PCS - 3 Inch Matte Waterproof Aesthetic Stickers for Laptop Water Bottle", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "bullet_point": [
+      {"value": "PREMIUM MATTE VINYL: 50 waterproof, fade-resistant stickers with a non-reflective matte finish", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"},
+      {"value": "DURABLE & WEATHERPROOF: UV and water resistant, leaves no residue when removed", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"},
+      {"value": "PERFECT FOR: laptops, water bottles, notebooks, journals, planners and phone cases", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"},
+      {"value": "EASY TO APPLY: just peel and stick on any clean, smooth surface", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"},
+      {"value": "GREAT GIFT: a fun, thoughtful gift for teens, students and sticker lovers", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}
+    ],
+    "product_description": [{"value": "Decorate everything you own with this 50-piece premium vinyl sticker pack. Each sticker is printed on durable, waterproof matte vinyl that resists fading, water and UV. Perfect for laptops, water bottles, notebooks, journals and more.", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "country_of_origin": [{"value": "CN", "marketplace_id": "ATVPDKIKX0DER"}],
+    "item_type_keyword": [{"value": "vinyl-stickers", "marketplace_id": "ATVPDKIKX0DER"}],
+    "supplier_declared_dg_hz_regulation": [{"value": "not_applicable", "marketplace_id": "ATVPDKIKX0DER"}],
+    "supplier_declared_has_product_identifier_exemption": [{"value": true, "marketplace_id": "ATVPDKIKX0DER"}],
+    "fulfillment_availability": [{"fulfillment_channel_code": "DEFAULT", "quantity": 10}],
+    "purchasable_offer": [{"currency": "USD", "our_price": [{"schedule": [{"value_with_tax": 9.99}]}], "marketplace_id": "ATVPDKIKX0DER"}],
+    "list_price": [{"value": 19.99, "currency": "USD", "marketplace_id": "ATVPDKIKX0DER"}],
+    "number_of_items": [{"value": 50, "marketplace_id": "ATVPDKIKX0DER"}],
+    "unit_count": [{"value": 50, "type": {"value": "Count", "language_tag": "en_US"}, "marketplace_id": "ATVPDKIKX0DER"}],
+    "color": [{"value": "Multicolor", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "theme": [{"value": "Aesthetic", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "subject_character": [{"value": "Assorted", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "special_feature": [{"value": "Waterproof", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "surface_recommendation": [{"value": "Hard Surface", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "generic_keyword": [{"value": "vinyl stickers waterproof laptop water bottle aesthetic decals matte", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "model_name": [{"value": "Vinyl Sticker Pack", "language_tag": "en_US", "marketplace_id": "ATVPDKIKX0DER"}],
+    "model_number": [{"value": "INK-VSP-50", "marketplace_id": "ATVPDKIKX0DER"}],
+    "part_number": [{"value": "INK-VSP-50", "marketplace_id": "ATVPDKIKX0DER"}],
+    "required_product_compliance_certificate": [{"value": "Does Not Apply", "marketplace_id": "ATVPDKIKX0DER"}],
+    "main_product_image_locator__WHEN_CDN_READY": [{"media_location": "https://YOUR-CDN/main.jpg", "marketplace_id": "ATVPDKIKX0DER"}]
+  }
+}
