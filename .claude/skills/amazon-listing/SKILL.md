@@ -105,7 +105,7 @@ python .claude/skills/amazon-listing/scripts/pull_product.py --asin <ASIN> [<ASI
 
 ```bash
 python .claude/skills/amazon-listing/scripts/aplus.py list                                 # 列出所有 A+(名/状态/badge/key)
-python .claude/skills/amazon-listing/scripts/aplus.py bind <KEY> <ASIN> [<ASIN>...]   # 把 A+ 关联到 ASIN(默认提审;加 --no-submit 只关联不提审)
+python .claude/skills/amazon-listing/scripts/aplus.py bind <KEY> <ASIN|SKU> [...]   # 关联 A+(默认提审;--no-submit 只关联;**传 SKU 自动解析当前 ASIN,防 AC-1022,推荐**)
 python .claude/skills/amazon-listing/scripts/aplus.py create "<名称>" <ASIN> <img1.png> [img2...]  # 用图建标准A+→关联→提审
 ```
 - **绑定**用 `list` 拿 key(Premium A+ 也能绑,只是读不了内容)。绑前先 `pull_product` 确认 ASIN 没变。
@@ -114,12 +114,20 @@ python .claude/skills/amazon-listing/scripts/aplus.py create "<名称>" <ASIN> <
 
 ---
 
+## 辅助工具(scripts/)
+```bash
+python keywords.py cerebro.csv --exclude 竞品词 [--title "已定标题"]  # Helium10 CSV→分级埋词清单+后端串(≤249字节)
+python lint_listing.py <SKU> [...]        # 上架体检:专抓非必填但该有的(缺highlight/标题超长/图不足/后端词超字节...)
+python replace_images.py <SKU> show|main|gallery|all ...   # 换主图/副图(file: 自动传COS;会提醒"多余槽清不掉去后台删")
+python family_status.py <SKU> [...]       # 族状态一览(ASIN/状态/价/库存/图数)+ **ASIN 变更检测**(变了⚠️,防 AC-1022)
+```
+
 ## 典型完整流程
-1. 探针确认 product_type → 按上面字段拼 payload(图用 `file:`)。
-2. `create_listing.py validate` 迭代到 VALID → `create`(父→子)。
-3. `pull_product.py` 确认状态/当前 ASIN/字段齐全。
-4. `aplus.py create`(或 `bind` 已有文档)把 A+ 贴到**当前** ASIN → 提审。
-5. 确认无误后在 Seller Central 给子 SKU 加库存上架。
+1. `keywords.py` 处理关键词表(老板规矩:创建前必须先补关键词表)→ 探针确认 product_type。
+2. 拼 payload(图用 `file:`;**记得 title_differentiation**)→ 单品 `create_listing.py`、变体族 `create_family.py`:validate 到 VALID → create(父→子)。
+3. `lint_listing.py` 体检 + `family_status.py` 确认状态/当前 ASIN。
+4. `aplus.py create`(或 `bind` 已有文档,**直接传 SKU**)→ 提审。
+5. 确认无误后加库存上架:`edit_listing.py INK-A,INK-B,INK-C stock 100`(支持批量)。
 
 ## 运营技巧 / Playbook(怎么把 listing 做好)
 **做内容(标题/关键词/图片/变体/A+ 策略)前,先读 `references/tips.md`** —— 那里是踩出来的实战经验

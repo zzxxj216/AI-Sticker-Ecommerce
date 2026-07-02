@@ -7,6 +7,8 @@
   python edit_listing.py <SKU> price 12.99 [--list 16.99]
   # 改库存(0=下架草稿;>0=可售)
   python edit_listing.py <SKU> stock 50
+  # SKU 可逗号分隔批量(同一动作作用到每个,如上架全族)
+  python edit_listing.py INK-A,INK-B,INK-C stock 100
   # 任意 patch(完全控制):patches.json = [{"op":"replace","path":"/attributes/xxx","value":[...]}]
   python edit_listing.py <SKU> patches patches.json
 
@@ -98,4 +100,8 @@ if __name__ == "__main__":
     argv = [a for a in argv if a != "--dry"]
     if len(argv) < 2:
         print(__doc__); sys.exit(1)
-    run(argv[0], argv[1], argv[2:], ptype, dry)
+    # SKU 支持逗号分隔批量:INK-A,INK-B,INK-C stock 100(同一动作作用到每个)
+    for sku in argv[0].split(","):
+        if len(argv[0].split(",")) > 1:
+            print(f"--- {sku} ---")
+        run(sku.strip(), argv[1], argv[2:], ptype, dry)
