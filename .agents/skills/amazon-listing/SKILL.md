@@ -68,6 +68,10 @@ python .agents/skills/amazon-listing/scripts/create_listing.py create   payload.
 - **父体**:`parentage_level=[{value:"parent"}]` + variation_theme;**无 offer/无图/无 exemption**;仍要 brand/item_name/bullets/description/country/item_type_keyword/dg_hz/number_of_labels/model_number/part_number/batteries_required。
 - **子体**:`parentage_level=[{value:"child"}]` + `child_parent_sku_relationship=[{child_relationship_type:"variation",parent_sku:"<父SKU>",marketplace_id}]` + `color=[设计名]` + 完整 offer/图片/exemption。
 - 逐个 `create`(父先,子后)。SP-API 带图校验/创建偶发 read timeout → 重试。
+- **一键建族**:`scripts/create_family.py validate|create family.json` —— 一份 family.json
+  (common_attributes + variation_theme + children[{sku,color,main_image,覆盖字段}] + 族级共用 other_images)
+  自动展开成父+N子:父体自动剥 offer/图/color,子体自动加关系字段和图;父先子后,父体 GET 防覆盖,
+  父体失败即停。格式详见脚本 docstring。
 
 ---
 
