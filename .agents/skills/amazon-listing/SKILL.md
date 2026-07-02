@@ -54,12 +54,14 @@ python .agents/skills/amazon-listing/scripts/create_listing.py create   payload.
   `number_of_items`、`unit_count`(`type.value` 必须大写 **`Count`**)、`color`、`list_price`、
   `purchasable_offer`、`fulfillment_availability`(`fulfillment_channel_code=DEFAULT`=FBM)。
 - **STICKER_DECAL** 额外:`theme`/`subject_character`/`special_feature`/`surface_recommendation`/`material`/
-  `generic_keyword`/`model_name`/`model_number`/`part_number`/`required_product_compliance_certificate`(=Does Not Apply)。
+  `generic_keyword`/`model_name`/`model_number`/`part_number`/`required_product_compliance_certificate`(=Does Not Apply)/
+  `batteries_required`(=false,**必填**,缺了父子全 INVALID)。
 - **LABEL** 额外:`number_of_labels`、`model_number`、`part_number`、`batteries_required`(=false);
   **不要** `model_name`、`required_product_compliance_certificate`(LABEL 不适用)。
 - 字段值结构:数组,每项带 `marketplace_id`;文本类再带 `language_tag:"en_US"`。
 - 图片:`main_product_image_locator`(主图)+ `other_product_image_locator_1..8`(副图,共 ≤9 张);值 `{media_location,marketplace_id}`。
-- 标题建议 ≤75 字符;`title_differentiation`("Item Highlight",≤125 字符)放标题装不下的关键词。
+- 标题建议 ≤75 字符;`title_differentiation`("Item Highlight"/headline,≤125 字符)放标题装不下的关键词。
+  **创建时就要带上(父体+子体;LABEL/STICKER_DECAL 都支持)**——非必填、漏了校验照样过,事后只能逐 SKU 补 PATCH。
 
 ### 变体族(设计款,无数量维度示例)
 - `variation_theme=[{"name":"COLOR","marketplace_id":MP}]`(注意子字段是 **name**)。

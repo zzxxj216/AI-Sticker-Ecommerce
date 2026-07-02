@@ -11,7 +11,8 @@
 
 ## 标题 & Item Highlight
 - `[实证]` 标题**简洁 ≤75 字符**;变体族**统一模板,只换主题词**(`...Waterproof {主题} Stickers`)。
-- `[实证]` 标题装不下的关键词 → 放 **Item Highlight**(LABEL 字段名 `title_differentiation`,**≤125 字符**,标题被截断时才显示,写利益短语非整句)。
+- `[实证]` 标题装不下的关键词 → 放 **Item Highlight**(字段名 `title_differentiation`,后台叫 headline/Item Highlight;**LABEL 和 STICKER_DECAL 都支持**;**≤125 字符**,标题被截断时才显示,写利益短语非整句)。
+- `[实证]` **创建 listing 时就要带上 `title_differentiation`**(父体+子体都要)——它不是必填项、漏了校验照样 VALID,事后只能逐 SKU 补 PATCH(2026-07 建 3 个族 12 SKU 时漏配,补了 12 次)。**建 payload 时对照模板逐字段过,别只补必填。**
 - `[实证]` `bullet_point` 在后台显示名是 **"Key Product Features"**(≠Item Highlight,别混)。
 
 ## 图片
