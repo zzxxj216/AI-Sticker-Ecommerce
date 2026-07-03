@@ -106,11 +106,24 @@ def generate_aplus_banners(
     reference_image: 贴纸参考图(建议 master 主图/总览图),保证图生图保真。
     返回 {ok, banners:[{key, local_path, cos_url, prompt, error}]};
     ok = 至少 1 张成功且(若 upload)拿到 cos_url。单张失败不阻断。
+
+    出图走 AIRouter.image_edit(JieKou 图生图,本机实测可用;Gemini 直连在
+    本机地域被拒);size=1536x1024 宽幅,中间层再 fit 到 970x600。
     """
-    from src.services.ai.gemini_service import GeminiService
+    from src.services.ai.router import get_router
+    from src.utils.image_utils import compress_image_bytes_for_api
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    if not reference_image or not Path(reference_image).is_file():
+        return {"ok": False, "error": "缺参考图(reference_image)", "banners": []}
+    try:
+        ref_bytes = compress_image_bytes_for_api(
+            Path(reference_image).read_bytes(), max_side=1536, max_bytes=1_800_000,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"参考图读取失败: {e}", "banners": []}
 
     cdn = None
     if upload:
@@ -120,11 +133,7 @@ def generate_aplus_banners(
             logger.warning("COS not configured; banners saved locally only")
             cdn = None
 
-    try:
-        gemini = GeminiService()
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"Gemini not configured: {e}", "banners": []}
-
+    router = get_router()
     banners: list[dict[str, Any]] = []
     for idx, item in enumerate(APLUS_BANNER_STYLE):
         key = item["key"]
@@ -135,15 +144,14 @@ def generate_aplus_banners(
             "local_path": "", "cos_url": "", "error": "",
         }
         try:
-            res = gemini.generate_image(
-                prompt, reference_image=reference_image,
-                output_path=fpath, enforce_white_bg=False,
+            out_bytes = router.image_edit(
+                ref_bytes, prompt,
+                size="1536x1024", quality="medium",
+                task="amazon_aplus_style:edit",
+                related_table="amazon_aplus",
             )
-            if not res.get("success"):
-                rec["error"] = str(res.get("error") or "generate failed")[:200]
-                banners.append(rec)
-                continue
-            rec["local_path"] = res.get("image_path") or str(fpath)
+            fpath.write_bytes(out_bytes)
+            rec["local_path"] = str(fpath)
             if cdn is not None:
                 try:
                     rec["cos_url"] = cdn.upload_file(rec["local_path"])

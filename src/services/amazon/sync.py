@@ -229,13 +229,38 @@ def one_click_amazon(
         return _fail("asin", f"轮询超时未拿到 ASIN(SKU={sku});稍后重跑一键即可续传 A+")
     steps["asin"] = {"ok": True, "asin": asin}
 
-    # 3) A+:已有 content_ref_key 则跳过(避免重复文档)。
+    # 3) A+:已有 content_ref_key 则不重建文档;若还没提审成功(新 ASIN 进目录
+    #    要 15-60 分钟,首次提审常报 "ASIN does not exist in the catalog"),
+    #    重跑一键时自动补一次提审。
     aplus_row = svc.get_aplus(local_product_id)
-    if (aplus_row.get("content_ref_key") or "").strip():
-        steps["aplus"] = {"ok": True, "skipped": "已有 A+ 文档",
-                          "content_ref_key": aplus_row["content_ref_key"]}
+    existing_key = (aplus_row.get("content_ref_key") or "").strip()
+    if existing_key:
+        if (aplus_row.get("status") or "") == "submitted" or not submit_aplus:
+            steps["aplus"] = {"ok": True, "skipped": "已有 A+ 文档",
+                              "content_ref_key": existing_key}
+            return {"ok": True, "steps": steps, "asin": asin,
+                    "content_ref_key": existing_key}
+        # 补提审(绑定端点带 submit=true;绑定幂等)。
+        try:
+            r = requests.post(
+                _endpoint(f"/aplus/documents/{existing_key}/asins"),
+                params={"store": AMAZON_STORE},
+                json={"asins": [asin], "submit": True}, timeout=120,
+            )
+            data = (r.json() or {}).get("data") or {}
+        except (requests.RequestException, ValueError) as e:
+            data = {"submit_error": str(e)[:200]}
+        submitted = bool(data.get("submitted"))
+        svc.record_aplus_submit(
+            local_product_id, content_ref_key=existing_key,
+            status=("submitted" if submitted else "draft"),
+            last_error=("" if submitted else str(data.get("submit_error") or "")[:300]),
+        )
+        steps["aplus"] = {"ok": True, "content_ref_key": existing_key,
+                          "submitted": submitted,
+                          "resubmit_error": data.get("submit_error") or ""}
         return {"ok": True, "steps": steps, "asin": asin,
-                "content_ref_key": aplus_row["content_ref_key"]}
+                "content_ref_key": existing_key}
 
     # 3a) 固定样式横幅生成 + COS。参考图=已传 COS 的主图对应本地图,退主版本首图。
     from .aplus_style import generate_aplus_banners

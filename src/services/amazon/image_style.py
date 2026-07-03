@@ -109,11 +109,24 @@ def generate_amazon_images(
 
     返回 {ok, images:[{key, role, local_path, cos_url, prompt, error}]};
     ok = 主图成功。单张失败不阻断其余。
+
+    出图走 AIRouter.image_edit(JieKou 图生图,本机实测可用;Gemini 直连在
+    本机地域被拒),reference_image 为必需(image-to-image)。
     """
-    from src.services.ai.gemini_service import GeminiService
+    from src.services.ai.router import get_router
+    from src.utils.image_utils import compress_image_bytes_for_api
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    if not reference_image or not Path(reference_image).is_file():
+        return {"ok": False, "error": "缺参考图(reference_image)", "images": []}
+    try:
+        ref_bytes = compress_image_bytes_for_api(
+            Path(reference_image).read_bytes(), max_side=1536, max_bytes=1_800_000,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"参考图读取失败: {e}", "images": []}
 
     cdn = None
     if upload:
@@ -123,30 +136,33 @@ def generate_amazon_images(
             logger.warning("COS not configured; images saved locally only")
             cdn = None
 
-    try:
-        gemini = GeminiService()
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"Gemini not configured: {e}", "images": []}
+    router = get_router()
+    white_bg_clause = (
+        " The background must be pure solid white #FFFFFF edge to edge, "
+        "completely clean, no gradient, no texture."
+    )
 
     images: list[dict[str, Any]] = []
     for idx, item in enumerate(AMAZON_IMAGE_STYLE):
         key = item["key"]
         prompt = (item["prompt"] or "").strip() + _FIDELITY
+        if item.get("white_bg"):
+            prompt += white_bg_clause
         fpath = out / f"{idx:02d}_{key}_{int(time.time())}.png"
         rec: dict[str, Any] = {
             "key": key, "role": item["role"], "prompt": prompt,
             "local_path": "", "cos_url": "", "error": "",
         }
         try:
-            res = gemini.generate_image(
-                prompt, reference_image=reference_image,
-                output_path=fpath, enforce_white_bg=bool(item.get("white_bg")),
+            out_bytes = router.image_edit(
+                ref_bytes, prompt,
+                size="1024x1024",
+                quality=("high" if item["role"] == "main" else "medium"),
+                task="amazon_image_style:edit",
+                related_table="amazon_images",
             )
-            if not res.get("success"):
-                rec["error"] = str(res.get("error") or "generate failed")[:200]
-                images.append(rec)
-                continue
-            rec["local_path"] = res.get("image_path") or str(fpath)
+            fpath.write_bytes(out_bytes)
+            rec["local_path"] = str(fpath)
             if cdn is not None:
                 try:
                     rec["cos_url"] = cdn.upload_file(rec["local_path"])
