@@ -123,5 +123,65 @@
     <p class="muted">AI 生成 header / 图文 / 使用场景 / 对比表 / 收尾 模块,可视化预览。</p>
     <a class="amz-btn primary" href="/v2/amazon/packs/{{ pv.local_product_id }}/aplus">🅰️＋ 打开 A+ 制作/预览 →</a>
   </div>
+
+  <!-- 一键 · listing + A+ 全流程 -->
+  <div class="panel" style="border:1px solid var(--accent-glow);">
+    <h2><span class="step">⚡</span> 一键上传 + A+ <span class="muted">listing → ASIN → 固定样式 A+ 横幅 → 绑定提审</span></h2>
+    <p class="muted">
+      自动串联:建 listing 草稿(防覆盖,已推过会跳过)→ 轮询 ASIN → AI 生成 3 张固定样式
+      A+ 横幅(品牌 / 材质 / 场景,传 COS)→ 建 A+ 文档绑 ASIN 并提审。约 3–8 分钟,后台运行。
+    </p>
+    <div class="amz-actions">
+      <button class="amz-btn primary" type="button" id="oneclick-go"
+              {% if not pv.ready %}disabled title="先补齐缺项(文案/图/价格)"{% endif %}>⚡ 一键上传 + A+</button>
+      <span class="muted" id="oneclick-status"></span>
+    </div>
+  </div>
 </div>
+
+<script>
+(function () {
+  var btn = document.getElementById('oneclick-go');
+  var st = document.getElementById('oneclick-status');
+  if (!btn) return;
+  var lpid = {{ pv.local_product_id }};
+  var poll = null;
+  function setStatus(t) { if (st) st.textContent = t; }
+  function describe(d) {
+    var l = d.listing || {}, a = d.aplus || {};
+    var parts = [];
+    parts.push('listing:' + (l.asin ? ('✓ ' + l.asin) : (l.sync_status || '…')));
+    parts.push('A+:' + (a.content_ref_key ? ('✓ ' + a.status) : (a.status || '…')));
+    if (l.last_error) parts.push('⚠ ' + l.last_error.slice(0, 60));
+    if (a.last_error) parts.push('⚠ ' + a.last_error.slice(0, 60));
+    return parts.join(' · ');
+  }
+  function startPolling() {
+    if (poll) return;
+    poll = setInterval(function () {
+      fetch('/v2/amazon/packs/' + lpid + '/one-click-status')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.running) { setStatus('⏳ 后台执行中 — ' + describe(d)); return; }
+          clearInterval(poll); poll = null;
+          setStatus('完成:' + describe(d) + ' — 正在刷新…');
+          setTimeout(function () { window.location.reload(); }, 1200);
+        })
+        .catch(function () { /* keep polling */ });
+    }, 6000);
+  }
+  btn.addEventListener('click', function () {
+    if (!confirm('确认一键执行?\n真实写入 Amazon(只增不改):建 listing 草稿 → 生成并提交 A+(会进入亚马逊人工审核)。\n约 3-8 分钟,后台运行,可离开本页。')) return;
+    btn.disabled = true;
+    setStatus('启动中…');
+    fetch('/v2/amazon/packs/' + lpid + '/one-click', { method: 'POST', body: new FormData() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { setStatus('⏳ ' + (d.message || '已启动')); startPolling(); }
+        else { btn.disabled = false; setStatus('✗ ' + (d.error || '启动失败')); }
+      })
+      .catch(function () { btn.disabled = false; setStatus('✗ 网络错误'); });
+  });
+})();
+</script>
 {% endblock %}

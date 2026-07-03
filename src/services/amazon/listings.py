@@ -336,6 +336,31 @@ class AmazonListingService:
             "status": row.get("status") or "draft",
         }
 
+    def record_aplus_submit(
+        self, local_product_id: int, *,
+        content_ref_key: str = "", status: str = "submitted", last_error: str = "",
+    ) -> None:
+        """回写 A+ 提交结果(contentReferenceKey / 状态)。行不存在则先建空行。"""
+        now = _now()
+        with self._conn() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM amazon_aplus WHERE local_product_id=?", (local_product_id,)
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    """INSERT INTO amazon_aplus (local_product_id, modules_json, created_at, updated_at)
+                       VALUES (?, '{}', ?, ?)""",
+                    (local_product_id, now, now),
+                )
+            conn.execute(
+                """UPDATE amazon_aplus
+                      SET content_ref_key=COALESCE(NULLIF(?, ''), content_ref_key),
+                          status=?, last_error=?, updated_at=?
+                    WHERE local_product_id=?""",
+                (content_ref_key, status, last_error, now, local_product_id),
+            )
+            conn.commit()
+
     # ---- 推送结果回写 ----
     def record_push(
         self, local_product_id: int, *,

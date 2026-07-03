@@ -7121,6 +7121,53 @@ async def v2_amazon_push(request: Request, local_product_id: int):
     return _amazon_back(local_product_id, msg)
 
 
+@router.post("/amazon/packs/{local_product_id:int}/one-click")
+async def v2_amazon_one_click(request: Request, local_product_id: int):
+    """一键:建 listing(防覆盖)→ 轮询 ASIN → 固定样式 A+ 横幅(AI+COS)
+    → 建 A+ 文档 + 绑 ASIN + 提审。长任务(ASIN 轮询 + 3 张 AI 图),后台跑,
+    前端轮询 one-click-status。幂等:重跑会跳过已完成的步骤续传。"""
+    form = await request.form()
+    publish = (form.get("publish") or "").strip() in ("1", "true", "on")
+    task_id = f"amazon_one_click:{local_product_id}"
+    try:
+        started = run_async(
+            task_id,
+            amazon_sync.one_click_amazon, local_product_id,
+            publish=publish,
+            label=f"Amazon 一键上传+A+ (master #{local_product_id})",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "ok": True, "task_id": task_id, "started": bool(started),
+        "message": ("已在后台启动:listing → ASIN → A+ 横幅 → 绑定提审(约 3-8 分钟)"
+                    if started else "任务已在后台运行中"),
+    })
+
+
+@router.get("/amazon/packs/{local_product_id:int}/one-click-status")
+def v2_amazon_one_click_status(local_product_id: int):
+    """一键任务进度:running + DB 里的 listing / A+ 状态(管线边跑边回写)。"""
+    svc = get_amazon_service()
+    listing = svc.get_or_create(local_product_id)
+    aplus_row = svc.get_aplus(local_product_id)
+    return JSONResponse({
+        "ok": True,
+        "running": is_running(f"amazon_one_click:{local_product_id}"),
+        "listing": {
+            "sync_status": listing.get("sync_status"),
+            "status": listing.get("status"),
+            "asin": listing.get("asin") or "",
+            "last_error": listing.get("last_error") or "",
+        },
+        "aplus": {
+            "status": (aplus_row or {}).get("status") or "",
+            "content_ref_key": (aplus_row or {}).get("content_ref_key") or "",
+            "last_error": (aplus_row or {}).get("last_error") or "",
+        },
+    })
+
+
 # ---- Amazon A+ 内容(展示 + AI 制作)----
 
 @router.get("/amazon/packs/{local_product_id:int}/aplus", response_class=HTMLResponse)
