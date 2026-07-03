@@ -78,10 +78,17 @@
     {% else %}
     <p class="muted">还没上传图片到 COS。点下方按钮把 master 图集传上去。</p>
     {% endif %}
-    <form class="inline" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/upload-images"
-          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='上传中…';">
-      <button class="amz-btn" type="submit" style="margin-top:8px;">☁ 上传 master 图片到 COS</button>
-    </form>
+    <div class="amz-actions" style="margin-top:8px;">
+      <form class="inline" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/upload-images"
+            onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='上传中…';">
+        <button class="amz-btn" type="submit">☁ 上传 master 图片到 COS</button>
+      </form>
+      <button class="amz-btn" type="button" id="genimg-go"
+              title="固定 5 张样式:主图白底合规(85%占比/无文字无道具)+ 生活场景 + 尺寸参考 + 材质细节 + 全套展示。AI 生成并传 COS,覆盖现有 Amazon 图。">
+        🎨 一键生成主副图(固定样式)
+      </button>
+      <span class="muted" id="genimg-status"></span>
+    </div>
   </div>
 
   <!-- 步骤 3 · 价格 + SKU -->
@@ -140,6 +147,38 @@
 </div>
 
 <script>
+(function () {
+  // 一键生成主副图(固定样式):后台 + 轮询 + 完成刷新。
+  var gBtn = document.getElementById('genimg-go');
+  var gSt = document.getElementById('genimg-status');
+  var gLpid = {{ pv.local_product_id }};
+  var gPoll = null;
+  if (gBtn) gBtn.addEventListener('click', function () {
+    if (!confirm('用 AI 生成亚马逊固定样式 5 张主副图?\n将覆盖当前 Amazon 图集(不影响 master/TikTok/Shopify 的图)。后台运行,约 3-5 分钟。')) return;
+    gBtn.disabled = true;
+    if (gSt) gSt.textContent = '启动中…';
+    fetch('/v2/amazon/packs/' + gLpid + '/generate-images', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { gBtn.disabled = false; if (gSt) gSt.textContent = '✗ ' + (d.error || '启动失败'); return; }
+        if (gSt) gSt.textContent = '⏳ ' + (d.message || '已启动');
+        if (gPoll) return;
+        gPoll = setInterval(function () {
+          fetch('/v2/amazon/packs/' + gLpid + '/images-status')
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+              var n = (s.images || []).filter(function (i) { return i.cos_url; }).length;
+              if (s.running) { if (gSt) gSt.textContent = '⏳ 生成中…已完成 ' + n + ' 张(每张约 30-60s)'; return; }
+              clearInterval(gPoll); gPoll = null;
+              if (gSt) gSt.textContent = '✓ 完成 ' + n + ' 张,正在刷新…';
+              setTimeout(function () { window.location.reload(); }, 1000);
+            })
+            .catch(function () { /* keep polling */ });
+        }, 6000);
+      })
+      .catch(function () { gBtn.disabled = false; if (gSt) gSt.textContent = '✗ 网络错误'; });
+  });
+})();
 (function () {
   var btn = document.getElementById('oneclick-go');
   var st = document.getElementById('oneclick-status');

@@ -7121,6 +7121,38 @@ async def v2_amazon_push(request: Request, local_product_id: int):
     return _amazon_back(local_product_id, msg)
 
 
+@router.post("/amazon/packs/{local_product_id:int}/generate-images")
+async def v2_amazon_generate_images_fixed(request: Request, local_product_id: int):
+    """一键生成亚马逊固定样式主副图(main 白底合规 + 4 副图),AI+COS,
+    覆盖 amazon_images。长任务(5 张 AI 图),后台跑;沿用 one-click-status 轮询
+    看不到图片进度,前端用 images-status 轮询。"""
+    task_id = f"amazon_gen_images:{local_product_id}"
+    try:
+        started = run_async(
+            task_id,
+            get_amazon_service().regenerate_images_fixed, local_product_id,
+            label=f"Amazon 固定样式主副图 (master #{local_product_id}, 5 张)",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "ok": True, "task_id": task_id, "started": bool(started),
+        "message": ("已在后台启动:固定样式 5 张(主图白底合规),完成后自动刷新"
+                    if started else "任务已在后台运行中"),
+    })
+
+
+@router.get("/amazon/packs/{local_product_id:int}/images-status")
+def v2_amazon_images_status(local_product_id: int):
+    """固定样式主副图生成进度:{running, images(含 cos_url)}。"""
+    svc = get_amazon_service()
+    return JSONResponse({
+        "ok": True,
+        "running": is_running(f"amazon_gen_images:{local_product_id}"),
+        "images": svc.get_images(local_product_id),
+    })
+
+
 @router.post("/amazon/packs/{local_product_id:int}/one-click")
 async def v2_amazon_one_click(request: Request, local_product_id: int):
     """一键:建 listing(防覆盖)→ 轮询 ASIN → 固定样式 A+ 横幅(AI+COS)

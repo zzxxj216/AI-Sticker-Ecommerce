@@ -2,11 +2,13 @@
 
 中间层的 A+ 端点(POST /api/v1/amazon/aplus/documents)把每张公网图变成一个
 STANDARD_HEADER_IMAGE_TEXT 模块(等比缩放+补白到 970x600,单文档 <=7 模块),
-所以「A+ 固定样式」= 固定生成 3 张宽幅横幅设计图,顺序即模块顺序:
+所以「A+ 固定样式」= 固定生成 5 张宽幅横幅设计图,顺序即模块顺序:
 
   1. brand_banner   — 品牌横幅:全套贴纸铺开 + 主题氛围(第一屏)
   2. quality_detail — 材质细节:防水/哑光/die-cut 白边特写(信任)
   3. usage_scene    — 使用场景:笔电/水杯/手账多场景拼贴(种草)
+  4. size_guide     — 尺寸导购:小到大排开 + 手/硬币比例(打消尺寸疑虑)
+  5. gift_promise   — 品牌承诺/礼赠:牛皮纸信封+礼包感(小商家温度/收尾)
 
 全部 AI 图生图(以 pack 真实贴纸为参考),Gemini 生成;提示词固定,改这里即可
 全局调整样式。生成 → 存盘(output/packs/<uid>/products/amazon/aplus/)→ 传 COS
@@ -66,6 +68,27 @@ APLUS_BANNER_STYLE: list[dict[str, Any]] = [
             "laptop lid, a stainless-steel water bottle, and an open journal "
             "page, all visible together in a single wide shot with natural "
             "window light. Warm, aspirational, everyday-use feeling."
+        ),
+    },
+    {
+        "key": "size_guide",
+        "prompt": _WIDE + (
+            "Size and scale banner: a top-down wide flat-lay on a clean white "
+            "surface with 6-8 die-cut vinyl stickers from the reference laid "
+            "out in a row from smallest to largest, a hand placing one "
+            "sticker and a US quarter coin beside them for scale, generous "
+            "even spacing. Helps buyers judge real sticker sizes at a glance. "
+            "No baked-in text or numbers."
+        ),
+    },
+    {
+        "key": "gift_promise",
+        "prompt": _WIDE + (
+            "Brand promise / gift banner: the sticker pack from the reference "
+            "presented beside a kraft paper envelope and simple gift wrapping "
+            "on a warm neutral surface, a few stickers fanned out of the "
+            "envelope, soft cozy light. Small-business, gift-ready, "
+            "quality-guarantee feeling. No text overlay."
         ),
     },
 ]

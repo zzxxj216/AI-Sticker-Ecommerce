@@ -223,6 +223,41 @@ class AmazonListingService:
                 conn.commit()
         return result
 
+    def regenerate_images_fixed(self, local_product_id: int) -> dict:
+        """固定样式版主副图:main 白底合规 + lifestyle/size_chart/material/full_set。
+
+        与 regenerate_images_ai(GPT 临时规划)不同,提示词固定(image_style.py),
+        每个产品风格一致。生成 → COS → 覆盖写入 amazon_images(main 在前)。
+        """
+        from .image_style import generate_amazon_images
+        master = self._master(local_product_id)
+        if not master:
+            return {"ok": False, "error": "本地产品不存在"}
+        out_dir = os.path.join("output", "amazon", str(local_product_id), "fixed")
+        ref = self._master_reference_image(master)
+        result = generate_amazon_images(
+            master, output_dir=out_dir, reference_image=ref or None, upload=True,
+        )
+        rows = [r for r in result.get("images") or [] if r.get("local_path")]
+        if rows:
+            self.get_or_create(local_product_id)
+            now = _now()
+            with self._conn() as conn:
+                conn.execute(
+                    "DELETE FROM amazon_images WHERE local_product_id=?", (local_product_id,)
+                )
+                for idx, r in enumerate(rows):
+                    conn.execute(
+                        """INSERT INTO amazon_images
+                           (local_product_id, role, local_path, cos_url, sort_order, created_at)
+                           VALUES (?,?,?,?,?,?)""",
+                        (local_product_id,
+                         "main" if r.get("role") == "main" or idx == 0 else "other",
+                         r.get("local_path") or "", r.get("cos_url") or "", idx, now),
+                    )
+                conn.commit()
+        return result
+
     # ---- 预览(详情页数据) ----
     def build_preview(self, local_product_id: int, *, force_regen: bool = False) -> dict:
         master = self._master(local_product_id)
