@@ -324,5 +324,58 @@ def one_click_amazon(
     return {"ok": True, "steps": steps, "asin": asin, "content_ref_key": key}
 
 
+def resubmit_pending_aplus() -> dict:
+    """扫描所有「已建档未提审」的 A+,自动补提审(定时任务用)。
+
+    新 ASIN 进目录要 15-60 分钟,首次提审常报 "ASIN does not exist in the
+    catalog" — 本函数由 web 应用的 APScheduler 周期执行,目录就绪后自动
+    完成提审,无需人工。每行每轮最多试一次;成功即标 submitted。
+    返回 {checked, submitted, still_pending, errors}。
+    """
+    svc = get_amazon_service()
+    import sqlite3
+    conn = sqlite3.connect("data/ops_workbench.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT ap.local_product_id, ap.content_ref_key, al.asin
+                 FROM amazon_aplus ap
+                 JOIN amazon_listings al ON al.local_product_id = ap.local_product_id
+                WHERE ap.content_ref_key != '' AND ap.status != 'submitted'
+                  AND al.asin != ''""",
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return {"checked": 0, "submitted": 0, "still_pending": 0, "errors": []}
+
+    submitted, pending, errors = 0, 0, []
+    for r in rows:
+        lp_id, key, asin = r["local_product_id"], r["content_ref_key"], r["asin"]
+        try:
+            resp = requests.post(
+                _endpoint(f"/aplus/documents/{key}/asins"),
+                params={"store": AMAZON_STORE},
+                json={"asins": [asin], "submit": True}, timeout=120,
+            )
+            data = (resp.json() or {}).get("data") or {}
+        except (requests.RequestException, ValueError) as e:
+            errors.append({"local_product_id": lp_id, "error": str(e)[:150]})
+            continue
+        if data.get("submitted"):
+            svc.record_aplus_submit(lp_id, content_ref_key=key, status="submitted")
+            submitted += 1
+            logger.info("aplus auto-resubmit ok: lp #%s asin=%s", lp_id, asin)
+        else:
+            pending += 1
+            err = str(data.get("submit_error") or "")[:300]
+            svc.record_aplus_submit(lp_id, content_ref_key=key,
+                                    status="draft", last_error=err)
+    result = {"checked": len(rows), "submitted": submitted,
+              "still_pending": pending, "errors": errors}
+    logger.info("aplus auto-resubmit: %s", result)
+    return result
+
+
 def get_sync():
     return push_one
