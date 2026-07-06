@@ -1,0 +1,57 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .cust { padding-top:14px; }
+  .cust .head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .cust .sub { color:var(--text-muted); font-size:13px; margin:0 0 16px; }
+  .cust-new { padding:9px 18px; border-radius:var(--radius-pill); background:var(--accent); color:#fff; font-weight:700; font-size:13px; text-decoration:none; }
+  .cust-new:hover { background:var(--accent-dark); }
+
+  .cust-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; }
+  .cust-card { background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-md); overflow:hidden; transition:box-shadow .14s, transform .14s; text-decoration:none; color:inherit; display:flex; flex-direction:column; }
+  .cust-card:hover { box-shadow:0 8px 24px rgba(0,0,0,.08); transform:translateY(-2px); }
+  .cust-cover { aspect-ratio:16/10; background:var(--bg-subtle); object-fit:cover; width:100%; }
+  .cust-body { padding:14px 16px; }
+  .cust-name { font-weight:700; font-size:15px; margin:0 0 8px; }
+  .cust-meta { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .cust-chip { font-size:11px; padding:3px 9px; border-radius:var(--radius-pill); background:var(--bg-subtle); border:1px solid var(--line-soft); color:var(--text-muted); }
+  .cust-chip.aplus { background:#eef2ff; color:#4338ca; border-color:#e0e7ff; }
+  .cust-foot { display:flex; align-items:center; justify-content:space-between; }
+  .pill { font-size:11px; font-weight:700; padding:2px 9px; border-radius:var(--radius-pill); }
+  .pill.draft { background:var(--bg-subtle); color:var(--text-muted); }
+  .pill.pushed { background:#dcfce7; color:#166534; }
+  .cust-price { font-weight:800; font-size:15px; }
+</style>
+
+<div class="cust">
+  <div class="head">
+    <h1 class="page-title" style="margin:0;">🧩 半定制产品</h1>
+    <a class="cust-new" href="#">+ 新建半定制产品</a>
+  </div>
+  <p class="sub">独立模块:每个产品 = 一个父 listing + 多个设计款变体(color_name);A+ 可引用共享库模块 + 加专属模块。</p>
+
+  <div class="cust-grid">
+    {% for p in products %}
+    <a class="cust-card" href="/v2/amazon/custom/{{ p.id }}">
+      <img class="cust-cover" src="{{ p.cover or mock_img }}" alt="{{ p.name }}" loading="lazy">
+      <div class="cust-body">
+        <div class="cust-name">{% if p.is_case %}<span class="cust-chip" style="background:#fef3c7;color:#92400e;border:none;">案例</span> {% endif %}{{ p.name }}</div>
+        <div class="cust-meta">
+          <span class="cust-chip">🎨 {{ p.variants }} 设计款</span>
+          <span class="cust-chip aplus">A+ {{ p.aplus }}</span>
+          <span class="cust-chip">{{ p.brand }}</span>
+        </div>
+        <div class="cust-foot">
+          <span class="cust-price">${{ p.price }}</span>
+          <span class="pill {{ 'pushed' if p.status=='pushed' else 'draft' }}">{{ '已推送' if p.status=='pushed' else '草稿' }}</span>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+
+    <a class="cust-card" href="#" style="border-style:dashed; align-items:center; justify-content:center; min-height:220px; color:var(--text-muted);">
+      <div style="text-align:center;"><div style="font-size:32px;">＋</div><div style="font-weight:700;">新建半定制产品</div></div>
+    </a>
+  </div>
+</div>
+{% endblock %}

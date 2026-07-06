@@ -92,6 +92,12 @@ app.mount(
     StaticFiles(directory=str(DAILY_STICKER_ASSETS_DIR)),
     name="daily-sticker-assets",
 )
+# Amazon 半定制素材(本地主副图 + A+),供前端预览引用。可用 AMAZON_ASSETS_DIR 覆盖路径。
+import os as _os
+AMAZON_ASSETS_DIR = Path(_os.getenv("AMAZON_ASSETS_DIR", r"C:\Users\zane\Desktop\amazon4"))
+if AMAZON_ASSETS_DIR.is_dir():
+    app.mount("/amazon4-assets", StaticFiles(directory=str(AMAZON_ASSETS_DIR)), name="amazon4-assets")
+
 app.include_router(v2_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -136,6 +142,22 @@ def start_scheduler():
         hour=daily_topic_hour,
         minute=daily_topic_minute,
         id='daily_sticker_topic_collect',
+        replace_existing=True,
+    )
+
+    # Amazon A+ 自动补提审:新 ASIN 进目录要 15-60 分钟,首次提审会被
+    # "ASIN not in catalog" 拒;每 20 分钟扫一遍 pending 的 A+ 自动补提审。
+    def _aplus_resubmit_job():
+        try:
+            from src.services.amazon.sync import resubmit_pending_aplus
+            resubmit_pending_aplus()
+        except Exception as e:  # noqa: BLE001 — scheduler job must not raise
+            logger.warning("aplus auto-resubmit job failed: %s", str(e)[:200])
+    scheduler.add_job(
+        _aplus_resubmit_job,
+        'interval',
+        minutes=20,
+        id='amazon_aplus_resubmit',
         replace_existing=True,
     )
     scheduler.start()

@@ -49,6 +49,8 @@ from src.services.tk_videos.service import (
 )
 from src.services.tkshop import get_tkshop_service
 from src.services.shopify.sync import get_shopify_sync
+from src.services.amazon.listings import get_amazon_service
+from src.services.amazon import sync as amazon_sync
 from src.services.tkshop.service import (
     TKSHOP_DEFAULT_SHOP,
     TKSHOP_SHOPS,
@@ -7116,4 +7118,369 @@ def v2_ads_audiences(request: Request, pack_id: int | None = None):
             "pack_id_filter": pack_id,
             "hint": hint,
         },
+    )
+
+
+# ======================================================================
+# Amazon 上架(卡贴包线)—— 列表 / 专属预览编辑页 / 文案·图片·推送
+# 内容侧:文案(两步 AI)+ 图片(本地→COS)+ 推送(中间层 store=main)。
+# ======================================================================
+
+@router.get("/amazon/packs", response_class=HTMLResponse)
+def v2_amazon_packs_list(request: Request):
+    """卡贴包 Amazon 列表:每个本地产品一行 + Amazon 上架状态。"""
+    rows = get_amazon_service().list_all()
+    return templates.TemplateResponse(
+        "v2_amazon_packs_list.html",
+        {
+            "request": request,
+            "page_title": "Amazon · 卡贴包 Listing",
+            "rows": rows,
+            "summary": (request.query_params.get("summary") or "").strip(),
+        },
+    )
+
+
+@router.get("/amazon/packs/{local_product_id:int}", response_class=HTMLResponse)
+def v2_amazon_pack_detail(request: Request, local_product_id: int):
+    """专属预览/编辑页:文案(可编辑)/ 图片图集 / 推送。首访自动生成文案。"""
+    pv = get_amazon_service().build_preview(local_product_id)
+    if not pv.get("ok"):
+        raise HTTPException(status_code=404, detail=pv.get("error", "not found"))
+    return templates.TemplateResponse(
+        "v2_amazon_pack_detail.html",
+        {
+            "request": request,
+            "page_title": f"Amazon Listing · 本地 #{local_product_id}",
+            "pv": pv,
+            "back_url": "/v2/amazon/packs",
+            "summary": (request.query_params.get("summary") or "").strip(),
+        },
+    )
+
+
+def _amazon_back(local_product_id: int, msg: str) -> RedirectResponse:
+    sep = "?"
+    url = f"/v2/amazon/packs/{local_product_id}"
+    return RedirectResponse(url=f"{url}{sep}summary={msg}", status_code=303)
+
+
+@router.post("/amazon/packs/{local_product_id:int}/regenerate")
+async def v2_amazon_regenerate(request: Request, local_product_id: int):
+    """重新生成 Amazon 文案(同步,一次 AI),回详情页。"""
+    copy = get_amazon_service().regenerate_content(local_product_id)
+    msg = "文案已重新生成" if copy else "生成失败:本地产品不存在"
+    return _amazon_back(local_product_id, msg)
+
+
+@router.post("/amazon/packs/{local_product_id:int}/set-price")
+async def v2_amazon_set_price(request: Request, local_product_id: int):
+    form = await request.form()
+    raw = (form.get("price") or "").strip()
+    ok = get_amazon_service().set_price(local_product_id, raw)
+    return _amazon_back(local_product_id, f"价格已设为 ${raw}" if ok else "价格非法")
+
+
+@router.post("/amazon/packs/{local_product_id:int}/upload-images")
+async def v2_amazon_upload_images(request: Request, local_product_id: int):
+    """把 master 图片上传到 COS(拿公网 URL 供 Amazon 抓取)。"""
+    res = get_amazon_service().upload_images_from_master(local_product_id)
+    if res.get("ok"):
+        msg = f"已上传 {len(res.get('uploaded', []))} 张图到 COS"
+        if res.get("errors"):
+            msg += f"({len(res['errors'])} 张失败)"
+    else:
+        msg = "图片上传失败:" + str(res.get("error") or res.get("errors"))[:120]
+    return _amazon_back(local_product_id, msg)
+
+
+@router.post("/amazon/packs/{local_product_id:int}/validate")
+async def v2_amazon_validate(request: Request, local_product_id: int):
+    """干跑校验(VALIDATION_PREVIEW,零写入)。"""
+    res = amazon_sync.push_one(local_product_id, dry_run=True)
+    if res.get("ok"):
+        msg = "校验通过(VALID/ACCEPTED,可推送)"
+    elif res.get("problems"):
+        msg = "未就绪:" + "、".join(res["problems"])
+    else:
+        msg = "校验未过:" + str(res.get("error") or [i.get("message") for i in res.get("issues", [])])[:160]
+    return _amazon_back(local_product_id, msg)
+
+
+@router.post("/amazon/packs/{local_product_id:int}/push")
+async def v2_amazon_push(request: Request, local_product_id: int):
+    """真实创建草稿(先 GET 防覆盖)。默认库存 0=不可售草稿;勾选 publish 才带库存。"""
+    form = await request.form()
+    publish = (form.get("publish") or "").strip() in ("1", "true", "on")
+    qty = 10 if publish else 0
+    res = amazon_sync.push_one(local_product_id, dry_run=False, quantity=qty)
+    if res.get("ok"):
+        msg = f"已推送:status={res.get('status')}" + (f" submissionId={res.get('submission_id')}" if res.get("submission_id") else "")
+    elif res.get("problems"):
+        msg = "未就绪:" + "、".join(res["problems"])
+    else:
+        msg = "推送失败:" + str(res.get("error") or "")[:160]
+    return _amazon_back(local_product_id, msg)
+
+
+@router.post("/amazon/packs/{local_product_id:int}/generate-images")
+async def v2_amazon_generate_images_fixed(request: Request, local_product_id: int):
+    """一键生成亚马逊固定样式主副图(main 白底合规 + 4 副图),AI+COS,
+    覆盖 amazon_images。长任务(5 张 AI 图),后台跑;沿用 one-click-status 轮询
+    看不到图片进度,前端用 images-status 轮询。"""
+    task_id = f"amazon_gen_images:{local_product_id}"
+    try:
+        started = run_async(
+            task_id,
+            get_amazon_service().regenerate_images_fixed, local_product_id,
+            label=f"Amazon 固定样式主副图 (master #{local_product_id}, 5 张)",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "ok": True, "task_id": task_id, "started": bool(started),
+        "message": ("已在后台启动:固定样式 5 张(主图白底合规),完成后自动刷新"
+                    if started else "任务已在后台运行中"),
+    })
+
+
+@router.get("/amazon/packs/{local_product_id:int}/images-status")
+def v2_amazon_images_status(local_product_id: int):
+    """固定样式主副图生成进度:{running, images(含 cos_url)}。"""
+    svc = get_amazon_service()
+    return JSONResponse({
+        "ok": True,
+        "running": is_running(f"amazon_gen_images:{local_product_id}"),
+        "images": svc.get_images(local_product_id),
+    })
+
+
+@router.post("/amazon/packs/{local_product_id:int}/one-click")
+async def v2_amazon_one_click(request: Request, local_product_id: int):
+    """一键:建 listing(防覆盖)→ 轮询 ASIN → 固定样式 A+ 横幅(AI+COS)
+    → 建 A+ 文档 + 绑 ASIN + 提审。长任务(ASIN 轮询 + 3 张 AI 图),后台跑,
+    前端轮询 one-click-status。幂等:重跑会跳过已完成的步骤续传。"""
+    form = await request.form()
+    publish = (form.get("publish") or "").strip() in ("1", "true", "on")
+    task_id = f"amazon_one_click:{local_product_id}"
+    try:
+        started = run_async(
+            task_id,
+            amazon_sync.one_click_amazon, local_product_id,
+            publish=publish,
+            label=f"Amazon 一键上传+A+ (master #{local_product_id})",
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "ok": True, "task_id": task_id, "started": bool(started),
+        "message": ("已在后台启动:listing → ASIN → A+ 横幅 → 绑定提审(约 3-8 分钟)"
+                    if started else "任务已在后台运行中"),
+    })
+
+
+@router.get("/amazon/packs/{local_product_id:int}/one-click-status")
+def v2_amazon_one_click_status(local_product_id: int):
+    """一键任务进度:running + DB 里的 listing / A+ 状态(管线边跑边回写)。"""
+    svc = get_amazon_service()
+    listing = svc.get_or_create(local_product_id)
+    aplus_row = svc.get_aplus(local_product_id)
+    return JSONResponse({
+        "ok": True,
+        "running": is_running(f"amazon_one_click:{local_product_id}"),
+        "listing": {
+            "sync_status": listing.get("sync_status"),
+            "status": listing.get("status"),
+            "asin": listing.get("asin") or "",
+            "last_error": listing.get("last_error") or "",
+        },
+        "aplus": {
+            "status": (aplus_row or {}).get("status") or "",
+            "content_ref_key": (aplus_row or {}).get("content_ref_key") or "",
+            "last_error": (aplus_row or {}).get("last_error") or "",
+        },
+    })
+
+
+# ---- Amazon A+ 内容(展示 + AI 制作)----
+
+@router.get("/amazon/packs/{local_product_id:int}/aplus", response_class=HTMLResponse)
+def v2_amazon_aplus(request: Request, local_product_id: int):
+    """A+ 内容专属页:可视化预览模块化图文,可 AI 生成/重生成。"""
+    pv = get_amazon_service().build_aplus_preview(local_product_id)
+    if not pv.get("ok"):
+        raise HTTPException(status_code=404, detail=pv.get("error", "not found"))
+    return templates.TemplateResponse(
+        "v2_amazon_aplus.html",
+        {
+            "request": request,
+            "page_title": f"Amazon A+ · 本地 #{local_product_id}",
+            "pv": pv,
+            "back_url": f"/v2/amazon/packs/{local_product_id}",
+            "summary": (request.query_params.get("summary") or "").strip(),
+        },
+    )
+
+
+@router.post("/amazon/packs/{local_product_id:int}/aplus/regenerate")
+async def v2_amazon_aplus_regenerate(request: Request, local_product_id: int):
+    """AI 生成 / 重新生成 A+ 模块(同步,一次 AI),回 A+ 页。"""
+    mods = get_amazon_service().regenerate_aplus(local_product_id)
+    n = len((mods or {}).get("modules", []))
+    msg = f"A+ 已生成 {n} 个模块" if n else "生成失败:本地产品不存在"
+    return RedirectResponse(url=f"/v2/amazon/packs/{local_product_id}/aplus?summary={msg}", status_code=303)
+
+
+# ======================================================================
+# 半定制产品(独立模块)—— 纯前端布局预览(假数据,后端后续接)
+# ======================================================================
+
+_AMZ_MOCK_IMG = "https://amazon-1303982902.cos.accelerate.myqcloud.com/amazon/test/main_test_1500.png"
+
+_AMZ_CUSTOM_PRODUCTS = [
+    {"id": 1, "name": "Custom Pet Stickers", "brand": "Inkelligent",
+     "variants": 8, "aplus": "共享 3 + 专属 1", "price": "7.99", "status": "draft"},
+    {"id": 2, "name": "Wedding Favor Labels", "brand": "Inkelligent",
+     "variants": 12, "aplus": "共享 3", "price": "9.99", "status": "pushed"},
+    {"id": 3, "name": "Business Logo Stickers", "brand": "Inkelligent",
+     "variants": 6, "aplus": "共享 2 + 专属 2", "price": "12.99", "status": "draft"},
+]
+
+_AMZ_CUSTOM_DETAIL = {
+    "id": 1, "name": "Custom Pet Stickers", "brand": "Inkelligent",
+    "variation_theme": "color_name", "price": "7.99", "status": "draft",
+    "img": _AMZ_MOCK_IMG,
+    "progress": {"copy": True, "images": True, "aplus": "共享3+专属1", "variants": 8},
+    "variants": [
+        {"name": "Magical Cats", "sku": "INK-MAGICALCATS-1", "price": "7.99"},
+        {"name": "Dark Academia", "sku": "INK-DARKACADEMIA-2", "price": "7.99"},
+        {"name": "Cottagecore", "sku": "INK-COTTAGECORE-3", "price": "7.99"},
+        {"name": "Y2K Retro", "sku": "INK-Y2KRETRO-4", "price": "8.99"},
+        {"name": "Floral", "sku": "INK-FLORAL-5", "price": "7.99"},
+        {"name": "Space Galaxy", "sku": "INK-SPACE-6", "price": "8.99"},
+    ],
+    "copy": {
+        "item_name": "Inkelligent Custom Pet Stickers - 8 Designs Waterproof Vinyl Decals for Laptop Water Bottle Journal",
+        "bullets": [
+            "PREMIUM MATTE VINYL: waterproof, fade-resistant pet sticker designs",
+            "8 DESIGN STYLES: choose your favorite from cats to galaxy themes",
+            "PERFECT FOR: laptops, water bottles, notebooks, planners and phone cases",
+            "EASY TO APPLY: peel and stick on any clean smooth surface",
+            "GREAT GIFT: a fun present for pet lovers and students",
+        ],
+        "description": "Decorate everything with this customizable pet sticker series. Each design is printed on durable waterproof matte vinyl.",
+        "search_terms": "pet stickers vinyl waterproof laptop water bottle cat dog aesthetic decals",
+    },
+    "aplus_modules": [
+        {"title": "品牌横幅", "type": "header", "scope": "shared"},
+        {"title": "材质对比表", "type": "comparison", "scope": "shared"},
+        {"title": "本品使用场景", "type": "three_image_text", "scope": "specific"},
+    ],
+}
+
+_AMZ_SHARED_LIB = [
+    {"name": "品牌横幅", "type": "header", "used": 12, "checked": True},
+    {"name": "材质对比表", "type": "comparison", "used": 12, "checked": True},
+    {"name": "防水耐久说明", "type": "single_image_text", "used": 5, "checked": False},
+    {"name": "使用场景三卡", "type": "three_image_text", "used": 9, "checked": False},
+    {"name": "收尾 CTA", "type": "closing", "used": 7, "checked": False},
+]
+
+
+@router.get("/amazon/custom", response_class=HTMLResponse)
+def v2_amazon_custom_list(request: Request):
+    case = _load_amazon_case()
+    products = [dict(x) for x in _AMZ_CUSTOM_PRODUCTS]
+    # 第 1 个产品 = 真实案例(B0H1R7RVW8)
+    products[0] = {
+        "id": 1, "name": case.get("name", products[0]["name"]),
+        "brand": case.get("brand", "Inkelligent"),
+        "variants": len(case.get("variants", [])) or products[0]["variants"],
+        "aplus": "共享 3 + 专属 1", "price": case.get("price", "8.63"),
+        "status": "draft", "cover": case.get("img", _AMZ_MOCK_IMG),
+        "is_case": True,
+    }
+    teddy = _load_teddy_case()
+    if teddy and teddy.get("themes"):
+        n_design = len(teddy["themes"]); n_qty = len(teddy.get("dimensions", {}).get("quantity", []))
+        products.insert(1, {
+            "id": 2, "name": teddy.get("title", "Kids Name Labels"),
+            "brand": teddy.get("brand", "Inkelligent Kids"),
+            "variants": n_design * (n_qty or 1),
+            "aplus": "%d 主题各自 A+" % n_design, "price": teddy.get("price", "12.99"),
+            "status": "draft", "cover": teddy["themes"][0].get("thumb", _AMZ_MOCK_IMG),
+            "is_case": True,
+        })
+    return templates.TemplateResponse(
+        "v2_amazon_custom_list.html",
+        {"request": request, "page_title": "半定制产品",
+         "products": products, "mock_img": _AMZ_MOCK_IMG},
+    )
+
+
+def _load_amazon_case() -> dict:
+    """真实案例(B0H1R7RVW8 抓取)→ 详情页 mock。文件缺失时回退内置 mock。"""
+    fp = Path(__file__).resolve().parent / "_amazon_case.json"
+    try:
+        case = _json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return _AMZ_CUSTOM_DETAIL
+    variants = []
+    for v in case.get("variants", []):
+        variants.append({"name": v.get("name", ""), "sku": v.get("sku", ""),
+                         "price": case.get("price", ""), "img": v.get("img", "")})
+    return {
+        "id": case.get("id", 1),
+        "name": case.get("title", ""),
+        "brand": case.get("brand", "Inkelligent"),
+        "variation_theme": case.get("variation_theme", "color_name"),
+        "price": case.get("price", ""),
+        "status": case.get("status", "draft"),
+        "img": (case.get("main_images") or [_AMZ_MOCK_IMG])[0],
+        "main_images": case.get("main_images", []),
+        "source_url": case.get("source_url", ""),
+        "progress": {"copy": True, "images": True,
+                     "aplus": "共享 3 + 专属 1", "variants": len(variants)},
+        "variants": variants,
+        "copy": {
+            "item_name": case.get("title", ""),
+            "bullets": case.get("bullets", []),
+            "description": case.get("description", "") or "(竞品详情页无纯文本描述,内容在 A+ 中)",
+            "search_terms": "custom stickers logo labels waterproof vinyl business wedding",
+        },
+        "aplus_modules": _AMZ_CUSTOM_DETAIL["aplus_modules"],
+    }
+
+
+def _load_teddy_case():
+    """TeddyLabels 风格 listing(本地 amazon4 素材构建)。缺失返回 None。"""
+    fp = Path(__file__).resolve().parent / "_amazon_case_teddy.json"
+    try:
+        return _json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+@router.get("/amazon/custom/{product_id:int}", response_class=HTMLResponse)
+def v2_amazon_custom_detail(request: Request, product_id: int):
+    if product_id == 2:
+        teddy = _load_teddy_case()
+        if teddy:
+            return templates.TemplateResponse(
+                "v2_amazon_listing_teddy.html",
+                {"request": request, "page_title": teddy.get("title", "半定制 listing"),
+                 "p": teddy},
+            )
+    return templates.TemplateResponse(
+        "v2_amazon_custom_detail.html",
+        {"request": request, "page_title": "半定制产品详情",
+         "p": _load_amazon_case(), "shared_lib": _AMZ_SHARED_LIB},
+    )
+
+
+@router.get("/amazon/aplus-library", response_class=HTMLResponse)
+def v2_amazon_aplus_library(request: Request):
+    return templates.TemplateResponse(
+        "v2_amazon_aplus_library.html",
+        {"request": request, "page_title": "A+ 共享库", "modules": _AMZ_SHARED_LIB},
     )

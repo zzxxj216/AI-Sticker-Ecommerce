@@ -1,0 +1,226 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .amz-d { padding-top:14px; }
+  .amz-d .panel { padding:18px 22px; margin-bottom:16px; }
+  .amz-d h2 { font-size:14px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .amz-d .step { font-size:11px; background:var(--accent); color:#fff; border-radius:50%; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+  .amz-d .muted { color:var(--text-muted); font-size:12px; }
+  .amz-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border:1px solid var(--line); border-radius:var(--radius-pill); background:var(--surface); color:var(--text); font-size:13px; font-weight:700; cursor:pointer; }
+  .amz-btn:hover:not([disabled]) { background:var(--bg-subtle); }
+  .amz-btn.primary { background:var(--accent); color:#fff; border:none; }
+  .amz-btn.primary:hover:not([disabled]) { background:var(--accent-dark); }
+  .amz-btn[disabled] { opacity:.5; cursor:not-allowed; }
+  .amz-field { margin-bottom:12px; }
+  .amz-field label { display:block; font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase; margin-bottom:4px; }
+  .amz-field .val { font-size:13px; line-height:1.5; }
+  .amz-bullets { margin:0; padding-left:18px; }
+  .amz-bullets li { margin-bottom:4px; font-size:13px; }
+  .amz-attrs { display:flex; flex-wrap:wrap; gap:6px; }
+  .amz-attrs .chip { background:var(--bg-subtle); border:1px solid var(--line-soft); border-radius:var(--radius-pill); padding:3px 10px; font-size:11px; }
+  .amz-gallery { display:flex; gap:10px; flex-wrap:wrap; }
+  .amz-gallery img { width:120px; height:120px; object-fit:contain; border:1px solid var(--line-soft); border-radius:var(--radius-md); background:var(--bg-subtle); }
+  .amz-summary { margin:0 0 14px; padding:10px 14px; border-radius:var(--radius-md); background:#eff6ff; color:#1e40af; font-size:13px; font-weight:600; }
+  .amz-problems { background:#fef9c3; color:#854d0e; border-radius:var(--radius-md); padding:10px 14px; font-size:12px; margin-bottom:12px; }
+  .amz-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  form.inline { display:inline; }
+</style>
+
+{% set m = pv['master'] %}
+{% set c = pv['copy'] %}
+<div class="amz-d">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+    <h1 class="page-title" style="margin:0;">🟧 Amazon Listing · #{{ pv.local_product_id }}</h1>
+    <a class="amz-btn" href="{{ back_url }}">← 返回列表</a>
+  </div>
+  {% if summary %}<div class="amz-summary" style="margin-top:12px;">{{ summary }}</div>{% endif %}
+
+  {% if pv.problems %}
+  <div class="amz-problems">⚠ 推送前还缺:{{ pv.problems | join('、') }}</div>
+  {% endif %}
+
+  <!-- 步骤 1 · 文案 -->
+  <div class="panel">
+    <h2><span class="step">1</span> 文案 <span class="muted">item_name / 五点 / 描述 / 属性</span></h2>
+    {% if c.item_name %}
+    <div class="amz-field"><label>标题 (item_name)</label><div class="val">{{ c.item_name }}</div></div>
+    <div class="amz-field"><label>五点描述 (bullet_point)</label>
+      <ul class="amz-bullets">{% for b in c.bullet_points %}<li>{{ b }}</li>{% endfor %}</ul>
+    </div>
+    <div class="amz-field"><label>产品描述</label><div class="val">{{ c.product_description }}</div></div>
+    <div class="amz-field"><label>搜索词 (search_terms)</label><div class="val muted">{{ c.search_terms }}</div></div>
+    <div class="amz-field"><label>属性</label>
+      <div class="amz-attrs">
+        <span class="chip">color: {{ c.color }}</span>
+        <span class="chip">theme: {{ c.theme }}</span>
+        <span class="chip">material: {{ c.material }}</span>
+        <span class="chip">special_feature: {{ c.special_feature }}</span>
+        <span class="chip">number_of_items: {{ c.number_of_items }}</span>
+      </div>
+    </div>
+    {% else %}
+    <p class="muted">尚无文案。</p>
+    {% endif %}
+    <form class="inline" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/regenerate"
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='生成中…(约15s)';">
+      <button class="amz-btn" type="submit">↻ {{ '重新生成文案' if c.item_name else '生成文案' }}</button>
+    </form>
+  </div>
+
+  <!-- 步骤 2 · 图片 -->
+  <div class="panel">
+    <h2><span class="step">2</span> 图片 <span class="muted">本地图 → 腾讯 COS 公网 URL(Amazon 抓取)</span></h2>
+    {% if pv.image_urls %}
+    <div class="amz-gallery">
+      {% for u in pv.image_urls %}<img src="{{ u }}" alt="amazon image" loading="lazy">{% endfor %}
+    </div>
+    <p class="muted" style="margin-top:8px;">{{ pv.image_urls|length }} 张已在 COS(主图为第 1 张)。</p>
+    {% else %}
+    <p class="muted">还没上传图片到 COS。点下方按钮把 master 图集传上去。</p>
+    {% endif %}
+    <div class="amz-actions" style="margin-top:8px;">
+      <form class="inline" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/upload-images"
+            onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='上传中…';">
+        <button class="amz-btn" type="submit">☁ 上传 master 图片到 COS</button>
+      </form>
+      <button class="amz-btn" type="button" id="genimg-go"
+              title="固定 5 张样式:主图白底合规(85%占比/无文字无道具)+ 生活场景 + 尺寸参考 + 材质细节 + 全套展示。AI 生成并传 COS,覆盖现有 Amazon 图。">
+        🎨 一键生成主副图(固定样式)
+      </button>
+      <span class="muted" id="genimg-status"></span>
+    </div>
+  </div>
+
+  <!-- 步骤 3 · 价格 + SKU -->
+  <div class="panel">
+    <h2><span class="step">3</span> 价格 & SKU</h2>
+    <p class="amz-field"><label>SKU(跨渠道统一)</label><code>{{ pv.seller_sku or '（未设)' }}</code></p>
+    <form class="inline amz-actions" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/set-price">
+      <label class="muted">售价 USD:</label>
+      <input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(pv.price) if pv.price else '' }}"
+             style="width:110px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;">
+      <button class="amz-btn" type="submit">保存价格</button>
+    </form>
+  </div>
+
+  <!-- 步骤 4 · 推送 -->
+  <div class="panel">
+    <h2><span class="step">4</span> 推送上架 <span class="muted">store=main(inkelligent) · 先校验再真建</span></h2>
+    <div class="amz-actions">
+      <form class="inline" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/validate">
+        <button class="amz-btn" type="submit">✓ 干跑校验(零写入)</button>
+      </form>
+      <form class="inline amz-actions" method="post" action="/v2/amazon/packs/{{ pv.local_product_id }}/push"
+            onsubmit="return confirm('确认真实创建 Amazon listing?这是真实写入(只增不改),创建后无法删除。');">
+        <label class="muted" style="display:flex;align-items:center;gap:5px;">
+          <input type="checkbox" name="publish" value="1"> 带库存(可售,默认仅草稿不可售)
+        </label>
+        <button class="amz-btn primary" type="submit" {% if not pv.ready %}disabled title="先补齐缺项"{% endif %}>🚀 真实推送(草稿)</button>
+      </form>
+    </div>
+    <p class="muted" style="margin-top:10px;">
+      {% if pv.ready %}就绪 ✓ 可推送。{% else %}未就绪:先补齐上方缺项。{% endif %}
+      推送默认创建为草稿(库存 0、不可售);确认无误后再勾「带库存」上架。
+    </p>
+  </div>
+
+  <!-- 步骤 5 · A+ 内容 -->
+  <div class="panel">
+    <h2><span class="step">5</span> A+ 内容 <span class="muted">模块化图文详情(品牌已备案)</span></h2>
+    <p class="muted">AI 生成 header / 图文 / 使用场景 / 对比表 / 收尾 模块,可视化预览。</p>
+    <a class="amz-btn primary" href="/v2/amazon/packs/{{ pv.local_product_id }}/aplus">🅰️＋ 打开 A+ 制作/预览 →</a>
+  </div>
+
+  <!-- 一键 · listing + A+ 全流程 -->
+  <div class="panel" style="border:1px solid var(--accent-glow);">
+    <h2><span class="step">⚡</span> 一键上传 + A+ <span class="muted">listing → ASIN → 固定样式 A+ 横幅 → 绑定提审</span></h2>
+    <p class="muted">
+      自动串联:建 listing 草稿(防覆盖,已推过会跳过)→ 轮询 ASIN → AI 生成 3 张固定样式
+      A+ 横幅(品牌 / 材质 / 场景,传 COS)→ 建 A+ 文档绑 ASIN 并提审。约 3–8 分钟,后台运行。
+    </p>
+    <div class="amz-actions">
+      <button class="amz-btn primary" type="button" id="oneclick-go"
+              {% if not pv.ready %}disabled title="先补齐缺项(文案/图/价格)"{% endif %}>⚡ 一键上传 + A+</button>
+      <span class="muted" id="oneclick-status"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // 一键生成主副图(固定样式):后台 + 轮询 + 完成刷新。
+  var gBtn = document.getElementById('genimg-go');
+  var gSt = document.getElementById('genimg-status');
+  var gLpid = {{ pv.local_product_id }};
+  var gPoll = null;
+  if (gBtn) gBtn.addEventListener('click', function () {
+    if (!confirm('用 AI 生成亚马逊固定样式 5 张主副图?\n将覆盖当前 Amazon 图集(不影响 master/TikTok/Shopify 的图)。后台运行,约 3-5 分钟。')) return;
+    gBtn.disabled = true;
+    if (gSt) gSt.textContent = '启动中…';
+    fetch('/v2/amazon/packs/' + gLpid + '/generate-images', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { gBtn.disabled = false; if (gSt) gSt.textContent = '✗ ' + (d.error || '启动失败'); return; }
+        if (gSt) gSt.textContent = '⏳ ' + (d.message || '已启动');
+        if (gPoll) return;
+        gPoll = setInterval(function () {
+          fetch('/v2/amazon/packs/' + gLpid + '/images-status')
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+              var n = (s.images || []).filter(function (i) { return i.cos_url; }).length;
+              if (s.running) { if (gSt) gSt.textContent = '⏳ 生成中…已完成 ' + n + ' 张(每张约 30-60s)'; return; }
+              clearInterval(gPoll); gPoll = null;
+              if (gSt) gSt.textContent = '✓ 完成 ' + n + ' 张,正在刷新…';
+              setTimeout(function () { window.location.reload(); }, 1000);
+            })
+            .catch(function () { /* keep polling */ });
+        }, 6000);
+      })
+      .catch(function () { gBtn.disabled = false; if (gSt) gSt.textContent = '✗ 网络错误'; });
+  });
+})();
+(function () {
+  var btn = document.getElementById('oneclick-go');
+  var st = document.getElementById('oneclick-status');
+  if (!btn) return;
+  var lpid = {{ pv.local_product_id }};
+  var poll = null;
+  function setStatus(t) { if (st) st.textContent = t; }
+  function describe(d) {
+    var l = d.listing || {}, a = d.aplus || {};
+    var parts = [];
+    parts.push('listing:' + (l.asin ? ('✓ ' + l.asin) : (l.sync_status || '…')));
+    parts.push('A+:' + (a.content_ref_key ? ('✓ ' + a.status) : (a.status || '…')));
+    if (l.last_error) parts.push('⚠ ' + l.last_error.slice(0, 60));
+    if (a.last_error) parts.push('⚠ ' + a.last_error.slice(0, 60));
+    return parts.join(' · ');
+  }
+  function startPolling() {
+    if (poll) return;
+    poll = setInterval(function () {
+      fetch('/v2/amazon/packs/' + lpid + '/one-click-status')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.running) { setStatus('⏳ 后台执行中 — ' + describe(d)); return; }
+          clearInterval(poll); poll = null;
+          setStatus('完成:' + describe(d) + ' — 正在刷新…');
+          setTimeout(function () { window.location.reload(); }, 1200);
+        })
+        .catch(function () { /* keep polling */ });
+    }, 6000);
+  }
+  btn.addEventListener('click', function () {
+    if (!confirm('确认一键执行?\n真实写入 Amazon(只增不改):建 listing 草稿 → 生成并提交 A+(会进入亚马逊人工审核)。\n约 3-8 分钟,后台运行,可离开本页。')) return;
+    btn.disabled = true;
+    setStatus('启动中…');
+    fetch('/v2/amazon/packs/' + lpid + '/one-click', { method: 'POST', body: new FormData() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { setStatus('⏳ ' + (d.message || '已启动')); startPolling(); }
+        else { btn.disabled = false; setStatus('✗ ' + (d.error || '启动失败')); }
+      })
+      .catch(function () { btn.disabled = false; setStatus('✗ 网络错误'); });
+  });
+})();
+</script>
+{% endblock %}

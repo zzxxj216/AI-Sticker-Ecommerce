@@ -92,3 +92,8 @@ _test_*.py
 check_*.py
 error_log.txt
 full_logs.txt
+
+# Amazon listing 工作产物(临时,不入库)
+/_amazon_probe_out/
+/_kidlabel_*.json
+.asin_cache.json

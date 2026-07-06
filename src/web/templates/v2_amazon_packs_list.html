@@ -1,0 +1,64 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+<style>
+  .amz-list { padding-top:14px; }
+  .amz-list .panel { padding:18px 22px; }
+  .amz-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .amz-table th, .amz-table td { padding:10px 12px; border-bottom:1px solid var(--line-soft); text-align:left; vertical-align:middle; }
+  .amz-table th { font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+  .amz-table tr:hover td { background:var(--bg-subtle); }
+  .amz-title { font-weight:600; max-width:520px; }
+  .amz-pill { display:inline-block; padding:2px 9px; border-radius:var(--radius-pill); font-size:11px; font-weight:700; }
+  .amz-pill.ok { background:#dcfce7; color:#166534; }
+  .amz-pill.warn { background:#fef9c3; color:#854d0e; }
+  .amz-pill.err { background:#fee2e2; color:#991b1b; }
+  .amz-pill.muted { background:var(--bg-subtle); color:var(--text-muted); }
+  .amz-go { padding:7px 14px; border-radius:var(--radius-pill); background:var(--accent); color:#fff; font-weight:700; font-size:12px; text-decoration:none; white-space:nowrap; }
+  .amz-go:hover { background:var(--accent-dark); }
+  .amz-summary { margin:0 0 14px; padding:10px 14px; border-radius:var(--radius-md); background:#eff6ff; color:#1e40af; font-size:13px; font-weight:600; }
+</style>
+
+<div class="amz-list">
+  <h1 class="page-title" style="margin-bottom:6px;">🟧 Amazon · 卡贴包 Listing</h1>
+  <p style="color:var(--text-muted);font-size:13px;margin-top:0;">
+    内容侧:文案 + 图片 + 推送上架(美国站 · store=main · FBM)。点「进入」生成/预览/推送。
+  </p>
+  {% if summary %}<div class="amz-summary">{{ summary }}</div>{% endif %}
+
+  <div class="panel">
+    <table class="amz-table">
+      <thead>
+        <tr>
+          <th>#</th><th>标题</th><th>SKU</th><th>文案</th><th>图片</th><th>价格</th><th>状态</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.local_product_id }}</td>
+          <td class="amz-title">{{ r.title or '—' }}</td>
+          <td><code style="font-size:11px;">{{ r.master_sku or '（未设）' }}</code></td>
+          <td>
+            {% if r.has_copy %}<span class="amz-pill ok">已生成</span>
+            {% else %}<span class="amz-pill muted">未生成</span>{% endif %}
+          </td>
+          <td>
+            {% if r.image_count and r.image_count > 0 %}<span class="amz-pill ok">{{ r.image_count }} 张</span>
+            {% else %}<span class="amz-pill muted">0</span>{% endif %}
+          </td>
+          <td>{% if r.amazon_price %}${{ '%.2f'|format(r.amazon_price) }}{% elif r.default_price %}${{ '%.2f'|format(r.default_price) }}<span style="color:var(--text-muted);font-size:11px;">(继承)</span>{% else %}<span class="amz-pill warn">未设</span>{% endif %}</td>
+          <td>
+            {% if r.sync_status == 'pushed' %}<span class="amz-pill ok">已推送</span>
+            {% elif r.sync_status == 'failed' %}<span class="amz-pill err">失败</span>
+            {% elif r.status %}<span class="amz-pill muted">{{ r.status }}</span>
+            {% else %}<span class="amz-pill muted">草稿</span>{% endif %}
+          </td>
+          <td><a class="amz-go" href="/v2/amazon/packs/{{ r.local_product_id }}">进入 →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not rows %}<p style="color:var(--text-muted);padding:20px;text-align:center;">暂无本地产品</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

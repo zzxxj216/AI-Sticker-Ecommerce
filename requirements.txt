@@ -51,6 +51,7 @@ playwright>=1.40.0
 requests>=2.32.4            # 2.32.4 fixes CVE-2024-47081 (.netrc credential leak)
 httpx>=0.27.0               # direct HTTP client (AI media fetch / API calls)
 urllib3>=2.0.0              # retry helper in trend fetcher; also bundled by requests
+cos-python-sdk-v5>=1.9.0   # 腾讯云 COS image hosting for Amazon listings (src/services/amazon/cdn.py)
 
 # Testing (dev)
 pytest>=8.0.0

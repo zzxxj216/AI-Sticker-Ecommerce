@@ -422,6 +422,26 @@
             </div>
           </div>
 
+          <!-- 📦 Amazon 上架 -->
+          {% set _is_amazon = request.url.path.startswith('/v2/amazon') %}
+          <div class="nav-group {% if not _is_amazon %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                Amazon 上架
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/amazon/packs') %}active{% endif %}"
+                 href="/v2/amazon/packs">🟧 卡贴包 Listing</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/amazon/custom') %}active{% endif %}"
+                 href="/v2/amazon/custom">🧩 半定制产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/amazon/aplus-library') %}active{% endif %}"
+                 href="/v2/amazon/aplus-library">🅰️＋ A+ 共享库</a>
+            </div>
+          </div>
+
           <!-- 📣 广告投放 -->
           <div class="nav-group {% if not request.url.path.startswith('/v2/ads') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
