@@ -484,6 +484,24 @@ class ShopifyProductSync:
 
     # -- sync (network) -----------------------------------------------------
 
+    def _delete_remote_product(self, shopify_product_id: str) -> bool:
+        """Best-effort delete of a Shopify product via the middle layer (used on
+        re-upload to avoid duplicates). Never raises."""
+        if not shopify_product_id:
+            return False
+        url = (f"{TKSHOP_SERVER_URL.rstrip('/')}"
+               f"/api/v1/shopify/products/{shopify_product_id}")
+        try:
+            resp = requests.delete(url, timeout=TKSHOP_SERVER_TIMEOUT)
+            ok = 200 <= resp.status_code < 300
+            logger.info("shopify delete old product %s -> %s",
+                        shopify_product_id, resp.status_code)
+            return ok
+        except requests.RequestException as e:
+            logger.warning("shopify delete old product %s failed: %s",
+                           shopify_product_id, str(e)[:150])
+            return False
+
     def sync_one(self, local_product_id: int, *, status: str = "draft") -> dict:
         """Sync one local product to Shopify via the middle layer.
 
@@ -516,6 +534,21 @@ class ShopifyProductSync:
         except ValueError as e:
             return {"ok": False, "error": str(e),
                     "local_product_id": local_product_id}
+
+        # Re-upload = clean replace: if this product was already pushed, delete
+        # the old Shopify draft first so we don't create a duplicate (the
+        # create endpoint always makes a new product). Best-effort.
+        prior = self.get_sync_status(local_product_id)
+        prior_pid = (prior or {}).get("shopify_product_id") or ""
+        if prior_pid:
+            self._delete_remote_product(prior_pid)
+
+        # Re-upload: if this product was already synced, delete the old Shopify
+        # draft first so we replace it cleanly instead of creating a duplicate.
+        prior = self.get_sync_status(local_product_id)
+        prior_pid = (prior or {}).get("shopify_product_id") or ""
+        if prior_pid:
+            self._delete_remote_product(str(prior_pid))
 
         self._upsert_syncing(local_product_id, sku)
 
