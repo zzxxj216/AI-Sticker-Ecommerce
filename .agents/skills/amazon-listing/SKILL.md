@@ -18,11 +18,12 @@ description: 在 Amazon(inkelligent 等店/美国站)创建 listing(单品或设
    - 不依赖本仓 :8888 web 应用。
 
 ## 店铺选择与权限
-- **指定店铺**:每个脚本支持 `--store <name>`,默认 `main`(=inkelligent)。可用店铺:`main / qifengz / serenorch / bfpeaky`(中间层 `AMAZON_STORES_JSON`)。
+- **指定店铺**:每个脚本支持 `--store <name>`,默认 `main`(=inkelligent)。
   - 例:`python ... pull_product.py --store qifengz <SKU>`
-  - 非白名单店铺**直接拒绝**;白名单可用 env `AMAZON_ALLOWED_STORES` 覆盖。
+  - **可用店铺动态取自中间层 `GET /amazon/stores`**(=中间层 `.env` 里 `AMAZON_STORES_JSON` 真正注册了 SP-API 授权的店 + main)。不在列表**直接拒绝**;env `AMAZON_ALLOWED_STORES` 显式设置时优先(临时放行/收紧);中间层连不上退回内置兜底名单。
   - 每次运行**醒目打印目标店铺**(`[store = X]`,非默认店额外 `⚠️ 非默认店!`),防误操作。
-- **权限模型**:这是本地脚本工具,**无 RBAC**;真正的卖家凭证只在**中间层 `.env`**(`AMAZON_STORES_JSON`),skill 不持有密钥。要控制"谁能操作哪个店",靠:① 谁能跑脚本/起中间层 ② `AMAZON_ALLOWED_STORES` 白名单 ③ 默认锁 main + 非默认店要显式 `--store`。
+- **加新店(后台已授权的)**:在**中间层 `.env` 的 `AMAZON_STORES_JSON`** 加一个条目(store 名 + refresh_token/lwa_app_id/lwa_client_secret/seller_id/marketplace_id)→ 重启中间层 → skill 自动放行,零改动。
+- **权限模型**:这是本地脚本工具,**无 RBAC**;真正的卖家凭证只在**中间层 `.env`**(`AMAZON_STORES_JSON`),skill 不持有密钥。要控制"谁能操作哪个店",靠:① 谁能跑脚本/起中间层 ② 中间层注册哪些店(skill 白名单自动跟随)③ 默认锁 main + 非默认店要显式 `--store`。
 
 ## 🔴 安全红线(不可破)
 - **只用 store=main(=inkelligent)**,美国站 `ATVPDKIKX0DER`。

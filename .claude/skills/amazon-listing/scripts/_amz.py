@@ -22,11 +22,29 @@ STORE = os.getenv("AMAZON_STORE", "main")             # 当前店铺,默认 main
 BASE = os.getenv("AMAZON_MCA_URL", os.getenv("TKSHOP_SERVER_URL", "http://localhost:8000")).rstrip("/")
 BRAND = os.getenv("AMAZON_BRAND", "Inkelligent")      # 必须用已备案品牌,否则丢 GTIN 豁免
 
-# 允许的店铺白名单(env AMAZON_ALLOWED_STORES 逗号分隔可覆盖)。非白名单一律拒,防误操作别的店。
-ALLOWED_STORES = set(
-    (os.getenv("AMAZON_ALLOWED_STORES") or "main,qifengz,serenorch,bfpeaky").split(",")
-)
+# 店铺白名单:**动态取自中间层 /stores**(=真正配了 SP-API 授权的店),
+# 中间层挂了才退回内置兜底;env AMAZON_ALLOWED_STORES 显式设置时优先级最高。
+# 加新店只需改中间层 .env 的 AMAZON_STORES_JSON 并重启,skill 零改动。
+_FALLBACK_STORES = "main,qifengz,serenorch,bfpeaky"
 DEFAULT_STORE = "main"
+
+
+def _allowed_stores() -> set:
+    env = (os.getenv("AMAZON_ALLOWED_STORES") or "").strip()
+    if env:
+        return {s.strip() for s in env.split(",") if s.strip()}
+    try:
+        req = urllib.request.Request(f"{BASE}/api/v1/amazon/stores",
+                                     headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            o = json.loads(r.read().decode())
+        stores = o.get("data") or []
+        if o.get("success") and stores:
+            return set(stores)
+    except Exception:
+        pass
+    print(f"[warn] 取不到中间层店铺列表({BASE}),用内置兜底白名单")
+    return set(_FALLBACK_STORES.split(","))
 
 
 def consume_store(argv: list) -> list:
@@ -42,9 +60,11 @@ def consume_store(argv: list) -> list:
         if argv[i].startswith("--store="):
             store = argv[i].split("=", 1)[1].strip(); i += 1; continue
         out.append(argv[i]); i += 1
-    if store not in ALLOWED_STORES:
-        raise SystemExit(f"[拒绝] 店铺 '{store}' 不在白名单 {sorted(ALLOWED_STORES)};"
-                         f"如确需,改 env AMAZON_ALLOWED_STORES。")
+    allowed = _allowed_stores()
+    if store not in allowed:
+        raise SystemExit(f"[拒绝] 店铺 '{store}' 不在授权列表 {sorted(allowed)}"
+                         f"(来自中间层 /stores)。新店先在中间层 .env 的 AMAZON_STORES_JSON 注册并重启;"
+                         f"临时放行可设 env AMAZON_ALLOWED_STORES。")
     STORE = store
     flag = "" if store == DEFAULT_STORE else "  ⚠️ 非默认店!"
     print(f"[store = {store}]{flag}")
