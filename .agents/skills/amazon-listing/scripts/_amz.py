@@ -7,6 +7,9 @@ from __future__ import annotations
 import json, os, sys, hashlib, urllib.request, urllib.error
 from urllib.parse import urlencode
 
+# 中间层是内网服务:请求**绕过系统代理**(否则挂梯子的机器会把 192.168.x 发给代理导致连不上)
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 # --- 载入本仓 .env(为了 COS 凭证 + 中间层地址)---
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 try:
@@ -36,7 +39,7 @@ def _allowed_stores() -> set:
     try:
         req = urllib.request.Request(f"{BASE}/api/v1/amazon/stores",
                                      headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=8) as r:
+        with _OPENER.open(req, timeout=8) as r:
             o = json.loads(r.read().decode())
         stores = o.get("data") or []
         if o.get("success") and stores:
@@ -91,7 +94,7 @@ def api(method: str, path: str, *, params: dict | None = None, body: dict | None
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={"Content-Type": "application/json", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         try:
@@ -99,7 +102,7 @@ def api(method: str, path: str, *, params: dict | None = None, body: dict | None
         except Exception:
             return {"success": False, "message": f"HTTP {e.code}", "_status": e.code}
     except urllib.error.URLError as e:
-        return {"success": False, "message": f"NETWORK: {e.reason}; 中间层 {BASE} 没起?"}
+        return {"success": False, "message": f"NETWORK: {e.reason}; 中间层 {BASE} 连不上——检查:①服务是否在跑 ②本机与服务器是否同网可达(ping) ③系统代理是否劫持内网(本 skill 已绕过,若仍失败多为网络不通)"}
 
 
 def get_listing(sku: str) -> dict:
@@ -136,7 +139,7 @@ def upload_image_cos(path_or_bytes, key_prefix: str = "amazon") -> str:
     **运营端无需 COS 凭证**(COS 在中间层/服务端持有)。"""
     import requests  # 仅上传时用
     data = path_or_bytes if isinstance(path_or_bytes, (bytes, bytearray)) else open(path_or_bytes, "rb").read()
-    r = requests.post(f"{BASE}/api/v1/amazon/images/upload",
+    r = requests.post(f"{BASE}/api/v1/amazon/images/upload", proxies={"http": None, "https": None},
                       files={"file": ("img.png", bytes(data), "image/png")}, timeout=120)
     try:
         o = r.json()

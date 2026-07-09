@@ -23,7 +23,7 @@ def _sellfox_listings(params: dict) -> dict:
     """中间层 /api/v1/sellfox/listings(_amz.api 固定 /amazon 前缀,这里单独请求)。"""
     url = f"{_amz.BASE}/api/v1/sellfox/listings?" + urlencode(params)
     try:
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=120) as r:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(urllib.request.Request(url), timeout=120) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         try:
