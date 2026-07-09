@@ -61,10 +61,13 @@ def consume_store(argv: list) -> list:
             store = argv[i].split("=", 1)[1].strip(); i += 1; continue
         out.append(argv[i]); i += 1
     allowed = _allowed_stores()
-    if store not in allowed:
+    # 二维寻址 store@SITE(如 byane@UK):白名单按店名部分校验;站点由中间层解析,
+    # 未授权区域中间层会给出清晰报错(缺哪个条目)。白名单里写 byane@UK 则只放行该站点。
+    base = store.split("@", 1)[0]
+    if store not in allowed and base not in allowed:
         raise SystemExit(f"[拒绝] 店铺 '{store}' 不在授权列表 {sorted(allowed)}"
                          f"(来自中间层 /stores)。新店先在中间层 .env 的 AMAZON_STORES_JSON 注册并重启;"
-                         f"临时放行可设 env AMAZON_ALLOWED_STORES。")
+                         f"临时放行可设 env AMAZON_ALLOWED_STORES。用法:--store 店名[@站点],如 byane@UK。")
     STORE = store
     flag = "" if store == DEFAULT_STORE else "  ⚠️ 非默认店!"
     print(f"[store = {store}]{flag}")

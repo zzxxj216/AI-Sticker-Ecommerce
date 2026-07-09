@@ -18,9 +18,15 @@ description: 在 Amazon(inkelligent 等店/美国站)创建 listing(单品或设
    - 不依赖本仓 :8888 web 应用。
 
 ## 店铺选择与权限
-- **指定店铺**:每个脚本支持 `--store <name>`,默认 `main`(=inkelligent)。
-  - 例:`python ... pull_product.py --store qifengz <SKU>`
-  - **可用店铺动态取自中间层 `GET /amazon/stores`**(=中间层 `.env` 里 `AMAZON_STORES_JSON` 真正注册了 SP-API 授权的店 + main)。不在列表**直接拒绝**;env `AMAZON_ALLOWED_STORES` 显式设置时优先(临时放行/收紧);中间层连不上退回内置兜底名单。
+- **指定店铺:`--store 店名[@站点]`**,默认 `main`(=inkelligent 美国站)。
+  - **二维寻址(推荐)**:`--store byane@UK`、`--store inkelligent@CA`、`--store huhole@US`。
+    站点码:US/CA/MX(北美)、UK/DE/FR/IT/ES(欧洲)、JP/AU/SG(远东)。SP-API token 按**区域**签发,
+    中间层自动选对区域条目 + 站点 marketplace;同店不同区域 seller_id 不同,**全部内部处理,无需关心**。
+  - **先看有哪些店/站点**:`python stores.py` 列「店铺×站点」矩阵(seller_id/是否已授权/寻址写法;
+    数据=赛狐注册表+本地授权,Tootoo/Xingnest 已排除)。❌未授权 = 该区域缺 SP-API token。
+  - 旧写法全兼容:`--store byane_eu` / `--store qifengz` 照常;别名 inkelligent→main、huhole→qifengz。
+  - **可用店铺动态取自中间层 `GET /amazon/stores`**。不在列表**直接拒绝**;env `AMAZON_ALLOWED_STORES`
+    显式设置时优先(可写 `byane` 放行全站点,或 `byane@UK` 只放行英国站);中间层连不上退内置兜底。
   - 每次运行**醒目打印目标店铺**(`[store = X]`,非默认店额外 `⚠️ 非默认店!`),防误操作。
 - **加新店(后台已授权的)**:在**中间层 `.env` 的 `AMAZON_STORES_JSON`** 加一个条目(store 名 + refresh_token/lwa_app_id/lwa_client_secret/seller_id/marketplace_id)→ 重启中间层 → skill 自动放行,零改动。
 - **权限模型**:这是本地脚本工具,**无 RBAC**;真正的卖家凭证只在**中间层 `.env`**(`AMAZON_STORES_JSON`),skill 不持有密钥。要控制"谁能操作哪个店",靠:① 谁能跑脚本/起中间层 ② 中间层注册哪些店(skill 白名单自动跟随)③ 默认锁 main + 非默认店要显式 `--store`。
@@ -121,6 +127,7 @@ python keywords.py cerebro.csv --exclude 竞品词 [--title "已定标题"]  # H
 python lint_listing.py <SKU> [...]        # 上架体检:专抓非必填但该有的(缺highlight/标题超长/图不足/后端词超字节...)
 python replace_images.py <SKU> show|main|gallery|all ...   # 换主图/副图(file: 自动传COS;会提醒"多余槽清不掉去后台删")
 python family_status.py <SKU> [...]       # 族状态一览(ASIN/状态/价/库存/图数)+ **ASIN 变更检测**(变了⚠️,防 AC-1022)
+python stores.py [--refresh]              # 店铺×站点矩阵(seller_id/授权状态/寻址写法);选店前先看它
 ```
 
 ## 典型完整流程
