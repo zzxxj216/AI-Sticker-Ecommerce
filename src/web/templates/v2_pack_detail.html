@@ -105,7 +105,40 @@
         </button>
         <a class="button ghost v2-button-full" href="/v2/videos?pack_id={{ pack.id }}">查看已有视频</a>
         <a class="button ghost v2-button-full" href="/v2/local-products/?pack_id={{ pack.id }}">查看已有本地产品</a>
+        <button type="button" class="button ghost v2-button-full" onclick="syncEtsy(this)"
+                style="border-color:rgba(217,119,6,.55);color:#b45309;font-weight:700;">
+          {% if etsy and etsy.etsy_listing_id %}✓ Etsy 已同步 · 重新同步{% else %}同步到 Etsy →{% endif %}
+        </button>
       </div>
+      {% if etsy and etsy.etsy_listing_id %}
+      <div style="margin-top:8px;font-size:12px;color:#059669;">
+        ✓ 已同步 Etsy · <a href="https://www.etsy.com/listing/{{ etsy.etsy_listing_id }}" target="_blank">listing {{ etsy.etsy_listing_id }} →</a>
+        {% if etsy.price %} · ${{ '%.2f'|format(etsy.price) }}{% endif %} · {{ etsy.sync_status }}
+      </div>
+      {% endif %}
+      <div id="etsyResult" style="margin-top:8px;font-size:12px;line-height:1.6;"></div>
+      <script>
+      async function syncEtsy(btn){
+        var orig=btn.textContent, box=document.getElementById('etsyResult');
+        btn.disabled=true; btn.textContent='⏳ 生成文案 → 建草稿 → 传图/视频…';
+        box.innerHTML='<span style="color:#b45309;">同步中，约 20-40 秒（生成 Etsy 文案 + 建草稿 + 传主副图/视频），请勿离开…</span>';
+        try{
+          var r=await fetch('/v2/packs/{{ pack.id }}/sync-etsy',{method:'POST'});
+          var d=await r.json();
+          if(d.ok){
+            btn.textContent='✓ Etsy 已同步 · 重新同步';
+            var v=(d.video&&d.video.attached)?' +视频':'';
+            box.innerHTML='<span style="color:#059669;">✓ 草稿已建：<a href="'+d.url+'" target="_blank">listing '+d.listing_id+' →</a> （图 '+(d.images_ok||'?')+' 张'+v+'，$'+d.price+'）。请到 Etsy 后台检查后再上架。</span>';
+          }else{
+            btn.disabled=false; btn.textContent=orig;
+            box.innerHTML='<span style="color:#dc2626;">✗ '+(d.message||d.error||'同步失败')+'</span>';
+          }
+        }catch(e){
+          btn.disabled=false; btn.textContent=orig;
+          box.innerHTML='<span style="color:#dc2626;">✗ '+e+'</span>';
+        }
+      }
+      </script>
 
       <!-- 新建产品三选一(单SKU / 多SKU新建 / 多SKU加到已有) -->
       <div id="newProductChooser" style="display:none;margin-top:12px;padding:14px;border:1px dashed rgba(139,92,246,.45);border-radius:9px;background:rgba(139,92,246,.05);">

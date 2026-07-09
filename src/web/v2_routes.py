@@ -2547,15 +2547,33 @@ def v2_pack_detail(request: Request, pack_id: int):
     pack = _decorate_pack_for_ui(svc.get_pack_with_downstream(pack_id))
     if not pack:
         raise HTTPException(status_code=404, detail="pack not found")
+    try:
+        from src.services.etsy.service import get_etsy_service
+        etsy = get_etsy_service().get_for_pack(pack_id)
+    except Exception:  # noqa: BLE001 — Etsy 状态是附加信息, 不该拖垮页面
+        etsy = None
     return templates.TemplateResponse(
         "v2_pack_detail.html",
         {
             "request": request,
             "page_title": f"卡包 {pack['display_name']}",
             "pack": pack,
+            "etsy": etsy,
             "return_to": f"/v2/packs/{pack_id}",
         },
     )
+
+
+@router.post("/packs/{pack_id:int}/sync-etsy")
+def v2_pack_sync_etsy(pack_id: int):
+    """一键同步贴纸包到 Etsy(建草稿 listing + 传主副图 + 可选视频)。
+
+    同步阻塞(生成文案 → 调中间层建 listing → 传图/视频, 约 20-40 秒),
+    前端 fetch 后显示结果。返回 dict 自动转 JSON。
+    """
+    from src.services.etsy.service import get_etsy_service
+
+    return get_etsy_service().sync_pack(pack_id)
 
 
 @router.get("/packs/{pack_id:int}/stickers.zip")
