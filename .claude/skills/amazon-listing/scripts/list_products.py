@@ -68,7 +68,7 @@ def main(store: str, show_all: bool, csv_path: str | None):
     print(f"共 {len(out)} 个产品(store={store} shopId={shop} {'全部状态' if show_all else '仅active'})\n")
     print(f"{'SKU':<28} {'ASIN':<12} {'父ASIN':<12} {'价格':<10} {'库存':<6} {'BB':<3} 标题")
     for x in out:
-        sku = x.get("msku") or x.get("commoditySku") or "?"
+        sku = x.get("sku") or x.get("msku") or x.get("commoditySku") or "?"
         price = f"{x.get('currency','')}{x.get('listingPrice','?')}"
         bb = "Y" if x.get("buyBoxWinner") else "-"
         print(f"{sku:<28} {x.get('asin','?'):<12} {x.get('parentAsin') or '-':<12} {price:<10} "
@@ -79,7 +79,7 @@ def main(store: str, show_all: bool, csv_path: str | None):
             w.writerow(["sku", "asin", "parent_asin", "price", "currency", "quantity",
                         "buybox", "status", "open_date", "title"])
             for x in out:
-                w.writerow([x.get("msku") or x.get("commoditySku"), x.get("asin"), x.get("parentAsin"),
+                w.writerow([x.get("sku") or x.get("msku") or x.get("commoditySku"), x.get("asin"), x.get("parentAsin"),
                             x.get("listingPrice"), x.get("currency"), x.get("quantity"),
                             x.get("buyBoxWinner"), x.get("onlineStatus"), x.get("openDate"), x.get("title")])
         print(f"\n已导出 {csv_path}")
