@@ -1,0 +1,223 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .pl-page { padding-top:14px; }
+  .pl-grid { display:grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap:16px; align-items:start; }
+  .pl-panel { padding:16px 20px; margin-bottom:16px; }
+  .pl-panel h3 { margin:0 0 12px; font-size:15px; }
+  .pl-kv { display:flex; flex-direction:column; gap:8px; font-size:13px; }
+  .pl-kv .row { display:flex; justify-content:space-between; gap:12px; }
+  .pl-kv .k { color:var(--text-muted); flex:none; }
+  .pl-kv .v { text-align:right; word-break:break-all; }
+  .pl-id-mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  .pl-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft); }
+  .pl-btn {
+    padding:7px 13px; border-radius:var(--radius-md); font-size:12.5px; font-weight:600;
+    border:1px solid var(--line); background:var(--surface); color:var(--text); cursor:pointer; text-decoration:none;
+  }
+  .pl-btn:hover { border-color:var(--accent-glow); background:var(--bg-subtle); }
+  .pl-btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .pl-btn.primary:hover { background:var(--accent-dark); }
+  .pl-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .pl-chip {
+    padding:2px 10px; border-radius:var(--radius-pill); font-size:11.5px; font-weight:600;
+    background:var(--accent-bg); color:var(--accent-dark); border:1px solid var(--accent-glow);
+  }
+  .pl-chip.gray { background:var(--bg-subtle); color:var(--text-secondary); border-color:var(--line); }
+  .pl-desc {
+    margin-top:8px; padding:12px; max-height:340px; overflow:auto;
+    background:var(--bg-subtle); border:1px solid var(--line-soft); border-radius:var(--radius-md);
+    font-size:12.5px; line-height:1.75; white-space:pre-wrap; color:var(--text-secondary);
+  }
+  .pl-img-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:10px; }
+  .pl-img-grid img {
+    width:100%; aspect-ratio:1/1; object-fit:cover;
+    border-radius:var(--radius-md); border:1px solid var(--line); background:var(--bg-subtle);
+  }
+  .pl-empty { padding:28px 16px; text-align:center; color:var(--text-muted); font-size:13px; }
+</style>
+
+<div class="pl-page">
+  <section class="page-header" style="margin-bottom:14px;">
+    <div>
+      <p class="eyebrow">{{ platform_label }} · Listing</p>
+      <h1>{{ platform_emoji }} {{ platform_label }} Listing 管理</h1>
+      <p class="page-subtitle">
+        本地产品 <a href="/v2/local-products/{{ lp.id }}?from={{ platform }}">#{{ lp.id }}</a>
+        · <strong>{{ lp.title or lp.pack_name }}</strong>
+        {% if lp.seller_sku %} · SKU <code>{{ lp.seller_sku }}</code>{% endif %}
+        · 卡包 {{ lp.pack_name }}
+      </p>
+    </div>
+    <a class="button ghost" href="/v2/{{ platform }}/local-products">← 返回 {{ platform_label }} 本地产品</a>
+  </section>
+
+  <div class="pl-grid">
+    <div>
+      <section class="panel pl-panel">
+        <h3>Listing 状态</h3>
+        {% if mapping and listing_id %}
+        <div style="margin-bottom:12px;">
+          {% set ss = mapping.sync_status or 'synced' %}
+          <span class="v2-status-pill {{ 'ok' if mapping.status == 'active' else 'pending' }}">{{ mapping.status or 'draft' }}</span>
+          <span class="v2-status-pill {{ {'synced':'ok','failed':'error','syncing':'running'}.get(ss,'pending') }}" style="margin-left:4px;">{{ ss }}</span>
+        </div>
+        <div class="pl-kv">
+          <div class="row"><span class="k">{{ 'Listing ID' if platform == 'etsy' else 'Product ID' }}</span>
+            <span class="v pl-id-mono">{% if listing_url %}<a href="{{ listing_url }}" target="_blank" rel="noopener">{{ listing_id }} ↗</a>{% else %}{{ listing_id }}{% endif %}</span></div>
+          {% if handle %}<div class="row"><span class="k">Handle</span><span class="v pl-id-mono">/{{ handle }}</span></div>{% endif %}
+          <div class="row"><span class="k">价格</span><span class="v">{% if price %}${{ '%.2f'|format(price) }}{% else %}未设价{% endif %}</span></div>
+          {% if mapping.synced_human %}<div class="row"><span class="k">上次同步</span><span class="v">{{ mapping.synced_human }}</span></div>{% endif %}
+          {% if mapping.seller_sku %}<div class="row"><span class="k">SKU</span><span class="v pl-id-mono">{{ mapping.seller_sku }}</span></div>{% endif %}
+        </div>
+        {% if mapping.sync_status == 'failed' and mapping.last_error %}
+        <div style="margin-top:10px;padding:9px 12px;border-radius:var(--radius-md);background:var(--danger-bg);color:var(--danger);font-size:12px;">⚠ {{ mapping.last_error[:160] }}</div>
+        {% endif %}
+        {% else %}
+        <div class="pl-empty">还没上架到 {{ platform_label }} — 点下方「上架」建草稿 listing。</div>
+        {% endif %}
+
+        <div class="pl-actions">
+          <button type="button" class="pl-btn primary"
+                  onclick="plAction(this,'/v2/local-products/{{ lp.id }}/{{ platform }}-resync','{% if listing_id %}重新同步 {{ platform_label }}?(把 master 最新内容推到平台{% if platform == 'shopify' %}, 会删旧重建换 id{% endif %}){% else %}上架到 {{ platform_label }}(建草稿)?{% endif %}')">🔄 {% if listing_id %}重新同步{% else %}上架{% endif %}</button>
+          {% if listing_id %}
+          <button type="button" class="pl-btn" onclick="plPrice(this,'/v2/local-products/{{ lp.id }}/{{ platform }}-set-price',{{ price or 0 }})">💲 改价</button>
+          <button type="button" class="pl-btn"
+                  onclick="plAction(this,'/v2/local-products/{{ lp.id }}/{{ platform }}-delist','下架 {{ platform_label }}?(转 {{ 'inactive' if platform == 'etsy' else 'draft' }}, 不删除 listing)')">下架</button>
+          {% endif %}
+          {% if listing_url %}<a class="pl-btn" href="{{ listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
+          {% if platform == 'shopify' %}
+          <button type="button" class="pl-btn"
+                  onclick="spGenImages(this, '/v2/local-products/{{ lp.id }}/shopify-generate-images', '/v2/local-products/{{ lp.id }}/shopify-images-status')">🎨 生成图集</button>
+          <a class="pl-btn" href="/v2/local-products/{{ lp.id }}/shopify-preview">🖼 本地预览</a>
+          {% endif %}
+        </div>
+        <p class="muted" style="margin:12px 0 0;font-size:11px;">
+          要改标题/描述/图集 → <a href="/v2/local-products/{{ lp.id }}?from={{ platform }}">✏️ 编辑主版本</a>，改完点「重新同步」推到平台。
+        </p>
+      </section>
+    </div>
+
+    <div>
+      <section class="panel pl-panel">
+        <h3>已同步的 {{ platform_label }} 文案</h3>
+        {% if platform == 'etsy' %}
+          {% if copy and copy.title %}
+          <div class="pl-kv" style="margin-bottom:12px;">
+            <div><span class="k" style="font-size:11px;">标题</span>
+              <div style="font-weight:600;line-height:1.5;margin-top:3px;">{{ copy.title }}</div></div>
+          </div>
+          {% if copy.tags %}
+          <div style="margin-bottom:10px;"><span class="k" style="font-size:11px;color:var(--text-muted);">Tags ({{ copy.tags|length }})</span>
+            <div class="pl-chips" style="margin-top:5px;">{% for t in copy.tags %}<span class="pl-chip">{{ t }}</span>{% endfor %}</div></div>
+          {% endif %}
+          {% if copy.materials %}
+          <div style="margin-bottom:10px;"><span class="k" style="font-size:11px;color:var(--text-muted);">Materials</span>
+            <div class="pl-chips" style="margin-top:5px;">{% for m in copy.materials %}<span class="pl-chip gray">{{ m }}</span>{% endfor %}</div></div>
+          {% endif %}
+          {% if copy.description %}
+          <span class="k" style="font-size:11px;color:var(--text-muted);">描述</span>
+          <div class="pl-desc">{{ copy.description }}</div>
+          {% endif %}
+          {% else %}
+          <div class="pl-empty">还没有缓存的 Etsy 文案 — 同步一次后，这里会显示实际推送到 Etsy 的标题 / tags / materials / 描述。</div>
+          {% endif %}
+        {% else %}
+          {% if copy and (copy.seo_title or copy.hero_tagline) %}
+          <div class="pl-kv" style="margin-bottom:12px;">
+            {% if copy.seo_title %}<div><span class="k" style="font-size:11px;">SEO 标题</span>
+              <div style="font-weight:600;line-height:1.5;margin-top:3px;">{{ copy.seo_title }}</div></div>{% endif %}
+            {% if copy.hero_tagline %}<div style="margin-top:6px;"><span class="k" style="font-size:11px;">Tagline</span>
+              <div style="margin-top:3px;color:var(--text-secondary);">{{ copy.hero_tagline }}</div></div>{% endif %}
+            {% if copy.seo_description %}<div style="margin-top:6px;"><span class="k" style="font-size:11px;">SEO 描述</span>
+              <div style="margin-top:3px;font-size:12.5px;color:var(--text-secondary);line-height:1.6;">{{ copy.seo_description }}</div></div>{% endif %}
+          </div>
+          {% if copy.bullets %}
+          <span class="k" style="font-size:11px;color:var(--text-muted);">卖点 Bullets</span>
+          <ul style="margin:6px 0 10px;padding-left:20px;font-size:12.5px;line-height:1.8;color:var(--text-secondary);">
+            {% for b in copy.bullets %}<li>{{ b }}</li>{% endfor %}
+          </ul>
+          {% endif %}
+          {% if copy.whats_included %}
+          <span class="k" style="font-size:11px;color:var(--text-muted);">What's included</span>
+          <div class="pl-desc" style="max-height:150px;">{{ copy.whats_included }}</div>
+          {% endif %}
+          <p class="muted" style="margin:10px 0 0;font-size:11px;">页面 body_html 会在每次同步时按此内容重新拼装(品牌模板)。</p>
+          {% else %}
+          <div class="pl-empty">还没有缓存的 Shopify 文案 — 同步/预览一次后，这里会显示 SEO 标题、卖点等实际推送内容。</div>
+          {% endif %}
+        {% endif %}
+      </section>
+
+      <section class="panel pl-panel">
+        <h3>图集预览
+          <span class="muted" style="font-size:11.5px;font-weight:400;margin-left:8px;">
+            {% if platform == 'etsy' %}主版本图集 {{ images|length }} 张 — Etsy 同步用这套
+            {% elif images_source == 'shopify' %}Shopify 专属样式图 {{ images|length }} 张
+            {% else %}主版本图兜底 {{ images|length }} 张（还没生成 Shopify 专属图集）{% endif %}
+          </span>
+        </h3>
+        {% if images %}
+        <div class="pl-img-grid">
+          {% for img in images %}<img src="{{ img.url }}" alt="" loading="lazy">{% endfor %}
+        </div>
+        {% else %}
+        <div class="pl-empty">还没有图片 — 去 <a href="/v2/local-products/{{ lp.id }}?from={{ platform }}">主版本</a> 生成图集后再同步。</div>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+// 行内操作: POST(JSON 返回) → 成功刷新, 失败 alert。与详情页同款。
+async function plAction(btn, url, confirmMsg){
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '处理中…';
+  try {
+    var r = await fetch(url, {method:'POST'});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (r.ok && j.ok !== false) { btn.textContent = '✓ 完成'; setTimeout(function(){ location.reload(); }, 900); }
+    else { btn.disabled = false; btn.textContent = orig; alert('操作失败: ' + (j.error || ('HTTP ' + r.status))); }
+  } catch(e) { btn.disabled = false; btn.textContent = orig; alert('请求出错: ' + e); }
+}
+async function plPrice(btn, url, current){
+  var v = prompt('输入新价格(数字, 直接改平台价):', current || '');
+  if (v === null) return;
+  v = parseFloat(v);
+  if (!(v > 0)) { alert('价格必须是大于 0 的数字'); return; }
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '改价中…';
+  try {
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({price: v})});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (r.ok && j.ok !== false) { btn.textContent = '✓ 已改价'; setTimeout(function(){ location.reload(); }, 900); }
+    else { btn.disabled = false; btn.textContent = orig; alert('改价失败: ' + (j.error || ('HTTP ' + r.status))); }
+  } catch(e) { btn.disabled = false; btn.textContent = orig; alert('请求出错: ' + e); }
+}
+async function spGenImages(btn, genUrl, statusUrl){
+  if (!confirm('用 AI 生成 Shopify 专属 5 张样式图(白底总览/笔电/水杯/手持/平铺)?\n后台运行, 约几分钟。')) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ 生成中…';
+  try {
+    var r = await fetch(genUrl, {method:'POST'});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (!r.ok || j.ok === false) { btn.disabled = false; btn.textContent = orig; alert('启动失败: ' + (j.error || ('HTTP ' + r.status))); return; }
+    var poll = setInterval(async function(){
+      try {
+        var s = await (await fetch(statusUrl)).json();
+        var n = (s.images || []).length;
+        if (s.running) { btn.textContent = '⏳ 生成中 ' + n + '/5…'; }
+        else { clearInterval(poll); btn.textContent = '✓ 完成(' + n + ' 张)'; setTimeout(function(){ location.reload(); }, 900); }
+      } catch(_) {}
+    }, 5000);
+  } catch(e) { btn.disabled = false; btn.textContent = orig; alert('请求出错: ' + e); }
+}
+</script>
+
+{% endblock %}

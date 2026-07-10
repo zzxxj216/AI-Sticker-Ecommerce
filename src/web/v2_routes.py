@@ -4325,6 +4325,104 @@ def v2_shopify_local_products(request: Request, q: str = "", listed: str = "all"
     return _render_platform_local_products(request, platform="shopify", listed=listed, q=q, limit=limit)
 
 
+def _render_platform_listing_page(request: Request, *, platform: str, local_product_id: int):
+    """Etsy / Shopify listing 专属管理页 —— 纯平台维度: 已同步的实际文案、价格、
+    状态、图集预览 + 重新同步/改价/下架, 不掺 master/TikTok 编辑。"""
+    if not _can_see(request, platform):
+        return RedirectResponse("/v2", status_code=302)
+    svc = get_tkshop_service()
+    master = svc.get_local_product(local_product_id)
+    if not master:
+        return templates.TemplateResponse(
+            "v2_not_found.html",
+            {
+                "request": request,
+                "page_title": "本地产品不存在",
+                "what": f"本地产品 #{local_product_id}",
+                "back_url": f"/v2/{platform}/local-products",
+                "back_label": "← 返回本地产品",
+                "hint": "可能已被删除，或链接里的 id 写错了。",
+            },
+            status_code=404,
+        )
+    mapping = svc.get_platform_listing(local_product_id, platform)
+    meta = {
+        "etsy":    {"label": "Etsy",    "emoji": "🟠"},
+        "shopify": {"label": "Shopify", "emoji": "🛍️"},
+    }[platform]
+
+    listing_id = ""
+    listing_url = ""
+    handle = ""
+    price = None
+    copy: dict = {}
+    if mapping:
+        if platform == "etsy":
+            listing_id = str(mapping.get("etsy_listing_id") or "").strip()
+            listing_url = f"https://www.etsy.com/listing/{listing_id}" if listing_id else ""
+            price = mapping.get("price")
+            try:
+                copy = _json.loads(mapping.get("copy_json") or "{}")
+            except Exception:  # noqa: BLE001
+                copy = {}
+        else:
+            listing_id = str(mapping.get("shopify_product_id") or "").strip()
+            handle = mapping.get("handle") or ""
+            price = master.get("default_price")
+        mapping["synced_human"] = _fmt_ts(mapping.get("synced_at")) if mapping.get("synced_at") else ""
+
+    if platform == "shopify":
+        try:
+            copy = _json.loads(master.get("shopify_content_json") or "{}")
+        except Exception:  # noqa: BLE001
+            copy = {}
+
+    # 图集: Etsy 用主版本图; Shopify 优先专属样式图, 无则兜底主版本图。
+    images_source = "master"
+    imgs = list(master.get("images") or [])
+    if platform == "shopify":
+        try:
+            from src.services.shopify.images import list_shopify_images
+            sp_imgs = list_shopify_images(local_product_id)
+            if sp_imgs:
+                imgs, images_source = sp_imgs, "shopify"
+        except Exception:  # noqa: BLE001
+            pass
+    images = [{**i, "url": _versioned_local_product_image_url(i)} for i in imgs]
+
+    return templates.TemplateResponse(
+        "v2_platform_listing_detail.html",
+        {
+            "request": request,
+            "page_title": f"{meta['label']} Listing 管理 · #{local_product_id}",
+            "platform": platform,
+            "platform_label": meta["label"],
+            "platform_emoji": meta["emoji"],
+            "lp": master,
+            "mapping": mapping,
+            "listing_id": listing_id,
+            "listing_url": listing_url,
+            "handle": handle,
+            "price": price,
+            "copy": copy,
+            "images": images,
+            "images_source": images_source,
+        },
+    )
+
+
+@router.get("/etsy/listings/{local_product_id:int}", response_class=HTMLResponse)
+def v2_etsy_listing_detail(request: Request, local_product_id: int):
+    """Etsy listing 专属管理页(纯 Etsy 维度)。"""
+    return _render_platform_listing_page(request, platform="etsy", local_product_id=local_product_id)
+
+
+@router.get("/shopify/listings/{local_product_id:int}", response_class=HTMLResponse)
+def v2_shopify_listing_detail(request: Request, local_product_id: int):
+    """Shopify listing 专属管理页(纯 Shopify 维度)。"""
+    return _render_platform_listing_page(request, platform="shopify", local_product_id=local_product_id)
+
+
 @router.get("/local-products/{local_product_id:int}", response_class=HTMLResponse)
 def v2_local_product_detail(request: Request, local_product_id: int):
     """Master editor: title/description/keywords/SKU/category + image set +

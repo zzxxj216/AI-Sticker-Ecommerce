@@ -99,11 +99,11 @@
             <td style="text-align:right;white-space:nowrap;">
               {% if p.is_listed %}
                 {% if p.listing_url %}<a class="button ghost pp-btn-sm" href="{{ p.listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
-                <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">管理 →</a>
+                <a class="button ghost pp-btn-sm" href="/v2/{{ platform }}/listings/{{ p.local_product_id }}">管理 →</a>
               {% else %}
                 <button type="button" class="button pp-btn-sm"
                         onclick="ppSync(this, '/v2/local-products/{{ p.local_product_id }}/{{ platform }}-resync', '{{ platform_label }}')">🚀 上架到 {{ platform_label }}</button>
-                <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">管理 →</a>
+                <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">编辑 →</a>
               {% endif %}
             </td>
           </tr>

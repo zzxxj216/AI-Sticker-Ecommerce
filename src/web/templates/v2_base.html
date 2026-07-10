@@ -459,7 +459,7 @@
             </div>
             <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/local-products') or _lp_from_etsy %}active{% endif %}" href="/v2/etsy/local-products">📦 本地产品</a>
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/products') %}active{% endif %}" href="/v2/etsy/products">🟠 已上架产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/products') or request.url.path.startswith('/v2/etsy/listings') %}active{% endif %}" href="/v2/etsy/products">🟠 已上架产品</a>
             </div>
           </div>
           {% endif %}
@@ -478,7 +478,7 @@
             </div>
             <div class="nav-group-content">
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/local-products') or _lp_from_shopify %}active{% endif %}" href="/v2/shopify/local-products">📦 本地产品</a>
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/products') %}active{% endif %}" href="/v2/shopify/products">🛍️ 已上架产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/products') or request.url.path.startswith('/v2/shopify/listings') %}active{% endif %}" href="/v2/shopify/products">🛍️ 已上架产品</a>
             </div>
           </div>
           {% endif %}

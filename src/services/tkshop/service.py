@@ -6536,6 +6536,20 @@ class TKShopService:
             out = [dict(r) for r in rows]
         return out, total
 
+    def get_platform_listing(self, local_product_id: int, platform: str) -> Optional[dict]:
+        """单个 master 在指定平台的完整映射行(含 copy_json 等全部列), 无则 None。
+        Etsy/Shopify listing 专属管理页用。"""
+        tbl = {"etsy": "etsy_products", "shopify": "shopify_products"}.get(
+            (platform or "").strip().lower())
+        if not tbl:
+            raise ValueError(f"unsupported platform: {platform!r}")
+        with _open_db(self.db_path) as conn:
+            row = conn.execute(
+                f"SELECT * FROM {tbl} WHERE local_product_id = ?",
+                (local_product_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_platform_listings(self, local_product_id: int) -> dict:
         """详情页用: 该 master 的 Etsy / Shopify 映射行(不存在为 None)。
         供本地产品详情页的「多平台上架」卡片渲染状态 + 操作。"""
