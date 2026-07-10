@@ -16,6 +16,10 @@
 - `[实证]` 标题装不下的关键词 → 放 **Item Highlight**(字段名 `title_differentiation`,后台叫 headline/Item Highlight;**LABEL 和 STICKER_DECAL 都支持**;**≤125 字符**,标题被截断时才显示,写利益短语非整句)。
 - `[实证]` **创建 listing 时就要带上 `title_differentiation`**(父体+子体都要)——它不是必填项、漏了校验照样 VALID,事后只能逐 SKU 补 PATCH(2026-07 建 3 个族 12 SKU 时漏配,补了 12 次)。**建 payload 时对照模板逐字段过,别只补必填。**
 - `[实证]` `bullet_point` 在后台显示名是 **"Key Product Features"**(≠Item Highlight,别混)。
+- `[用户]` **查 Amazon 字段别只按属性键名搜 schema**——界面名和 API 键名经常对不上
+  (界面 "Item Highlight" ↔ 键名 `title_differentiation`;按 "highlight" 搜键名会错误得出
+  "字段不存在")。正确姿势:**全文搜 schema JSON 的 title/description**(展示名都在 title 里)。
+  2026-07 万圣节 listing 排查实证:曾因此弯路误判字段不存在。
 
 ## 图片
 - `[实证]` 传 COS 一律用**内容哈希 key**(`<sha1>.png`)——固定 key 改图后 Amazon 按 URL 缓存旧图、不重抓。
