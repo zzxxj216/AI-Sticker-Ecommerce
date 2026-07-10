@@ -10,6 +10,17 @@
   <script src="/static/common.js" defer></script>
   <style>
     /* V2-specific tweaks layered on the existing app.css. */
+    /* 侧边栏分区小标题 —— 把导航按用途分组(内容生产/多平台上架/客服 & 运营/系统)。 */
+    .nav-section-label {
+      padding: 0 16px;
+      margin: 18px 0 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      user-select: none;
+    }
     .v2-section-tag {
       display: inline-block;
       padding: 2px 8px;
@@ -360,6 +371,8 @@
             工作台（首页）
           </a>
 
+          <div class="nav-section-label">内容生产</div>
+
           <!-- 卡包链路 -->
           <div class="nav-group {% if not request.url.path.startswith('/v2/hot-topics') and not request.url.path.startswith('/v2/topic-plans') and not request.url.path.startswith('/v2/packs') and not request.url.path.startswith('/v2/feedback') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
@@ -393,10 +406,15 @@
             </div>
           </div>
 
+          {% if can_see(request,'tiktok') or can_see(request,'etsy') or can_see(request,'shopify') %}
+          <div class="nav-section-label">多平台上架</div>
+          {% endif %}
+
           <!-- TKShop — 4 sub-links: local pool, each TK shop, real-time platform.
                The page's own top-tab strip is gone; these links are the shop
                switcher now. Active-state matching is precise (?tab= match)
                so opening one shop doesn't mark all three as active. -->
+          {% if can_see(request, 'tiktok') %}
           {% set _tab_now = request.query_params.get('tab') or '' %}
           {% set _is_local_products = request.url.path.startswith('/v2/local-products') %}
           {% set _is_products = request.url.path.startswith('/v2/products') %}
@@ -421,7 +439,9 @@
                  href="/v2/products/platform">🛒 平台产品</a>
             </div>
           </div>
+          {% endif %}
 
+          {% if can_see(request, 'etsy') %}
           <!-- 🟠 Etsy 上架 -->
           {% set _is_etsy = request.url.path.startswith('/v2/etsy') %}
           <div class="nav-group {% if not _is_etsy %}collapsed{% endif %}">
@@ -436,7 +456,9 @@
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">🧷 贴纸包同步</a>
             </div>
           </div>
+          {% endif %}
 
+          {% if can_see(request, 'shopify') %}
           <!-- 🛍️ Shopify 上架 -->
           <div class="nav-group {% if not request.url.path.startswith('/v2/packs') %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
@@ -450,6 +472,9 @@
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">🧷 贴纸包同步</a>
             </div>
           </div>
+          {% endif %}
+
+          <div class="nav-section-label">客服 &amp; 运营</div>
 
           <!-- 💬 客服系统 (预留) -->
           <div class="nav-group collapsed">
@@ -519,6 +544,8 @@
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/lab/product-catalog') %}active{% endif %}" href="/v2/lab/product-catalog">产品目录 · 合并</a>
             </div>
           </div>
+
+          <div class="nav-section-label">系统</div>
 
           <!-- 系统 -->
           <div class="nav-group {% if not request.url.path.startswith('/v2/system') %}collapsed{% endif %}">

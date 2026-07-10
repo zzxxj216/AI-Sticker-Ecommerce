@@ -102,6 +102,11 @@ templates.env.globals["tkshop_default_shop"] = TKSHOP_DEFAULT_SHOP
 templates.env.globals["shop_label"] = get_shop_label
 templates.env.globals["tkshop_shop_labels"] = get_shop_labels_map()
 
+# 按角色的功能开关(各平台上架入口显隐)。模板用 {% if can_see(request, 'etsy') %}。
+# 角色映射见 permissions.py + .env 的 FEISHU_ROLES_JSON; 默认 admin 看全部。
+from src.web.permissions import can_see as _can_see  # noqa: E402
+templates.env.globals["can_see"] = _can_see
+
 router = APIRouter(prefix="/v2", tags=["v2"])
 
 _CN_TZ = timezone(timedelta(hours=8))
