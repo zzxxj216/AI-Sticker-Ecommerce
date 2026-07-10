@@ -453,8 +453,8 @@
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/products') %}active{% endif %}" href="/v2/etsy/products">📦 已上架产品</a>
-              <a class="nav-link sub-link" href="/v2/packs">🧷 贴纸包同步</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/local-products') %}active{% endif %}" href="/v2/etsy/local-products">📦 本地产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/products') %}active{% endif %}" href="/v2/etsy/products">🟠 已上架产品</a>
             </div>
           </div>
           {% endif %}
@@ -471,8 +471,8 @@
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/products') %}active{% endif %}" href="/v2/shopify/products">📦 已上架产品</a>
-              <a class="nav-link sub-link" href="/v2/packs">🧷 贴纸包同步</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/local-products') %}active{% endif %}" href="/v2/shopify/local-products">📦 本地产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/products') %}active{% endif %}" href="/v2/shopify/products">🛍️ 已上架产品</a>
             </div>
           </div>
           {% endif %}

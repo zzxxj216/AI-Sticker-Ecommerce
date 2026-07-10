@@ -6473,6 +6473,69 @@ class TKShopService:
             out = [dict(r) for r in rows]
         return out, total
 
+    def list_local_products_for_platform(
+        self,
+        *,
+        platform: str,
+        listed: str = "all",
+        q: Optional[str] = None,
+        limit: int = 200,
+    ) -> tuple[list[dict], int]:
+        """本地产品(master)列表 + 指定平台的上架状态视角 —— Etsy/Shopify 组的
+        「本地产品」页。一行一个 master, 从 local_products 出发 LEFT JOIN 平台映射表,
+        标注它在该平台是否已上架(mapping_id 为空 = 未上架)。
+        listed ∈ {'all','listed','unlisted'}; platform ∈ {'etsy','shopify'}。
+        """
+        platform = (platform or "").strip().lower()
+        if platform == "etsy":
+            tbl, id_col, price_expr = "etsy_products", "etsy_listing_id", "mp.price"
+        elif platform == "shopify":
+            tbl, id_col, price_expr = "shopify_products", "shopify_product_id", "lp.default_price"
+        else:
+            raise ValueError(f"unsupported platform: {platform!r}")
+
+        clauses, params = [], []
+        if q:
+            kw = f"%{q.strip()}%"
+            clauses.append("(lp.title LIKE ? OR p.display_name LIKE ? OR lp.seller_sku LIKE ?)")
+            params.extend([kw, kw, kw])
+        if listed == "listed":
+            clauses.append("mp.id IS NOT NULL")
+        elif listed == "unlisted":
+            clauses.append("mp.id IS NULL")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        with _open_db(self.db_path) as conn:
+            total = conn.execute(
+                f"""SELECT COUNT(*) FROM local_products lp
+                    LEFT JOIN packs p ON p.id = lp.pack_id
+                    LEFT JOIN {tbl} mp ON mp.local_product_id = lp.id
+                    {where}""",
+                tuple(params),
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"""
+                SELECT lp.id AS local_product_id, lp.pack_id, lp.title, lp.seller_sku,
+                       lp.default_price, lp.created_at, lp.updated_at,
+                       p.display_name AS pack_name, p.cover_image_path AS pack_cover,
+                       mp.id AS mapping_id,
+                       mp.{id_col} AS platform_id,
+                       mp.status AS platform_status,
+                       mp.sync_status AS sync_status,
+                       mp.synced_at,
+                       {price_expr} AS price
+                  FROM local_products lp
+             LEFT JOIN packs p ON p.id = lp.pack_id
+             LEFT JOIN {tbl} mp ON mp.local_product_id = lp.id
+                  {where}
+                 ORDER BY lp.updated_at DESC, lp.id DESC
+                 LIMIT ?
+                """,
+                tuple(params) + (limit,),
+            ).fetchall()
+            out = [dict(r) for r in rows]
+        return out, total
+
     def update_local_product_detail(
         self,
         local_product_id: int,
