@@ -187,7 +187,7 @@
           <div class="actions">
             <button type="button" class="row-btn" title="生成 Shopify 专属 5 张样式图(白底总览/笔电/水杯/手持/平铺), 独立一套不影响 TikTok/Etsy"
                     onclick="spGenImages(this, '/v2/local-products/{{ lp.id }}/shopify-generate-images', '/v2/local-products/{{ lp.id }}/shopify-images-status')">🎨 图集</button>
-            <a class="row-btn" href="/v2/local-products/{{ lp.id }}/shopify-preview" title="本地预览 Shopify 商品效果(文案+图集), 不推送">🖼 预览</a>
+            <a class="row-btn" href="/v2/local-products/{{ lp.id }}/shopify-preview?back={{ ('/v2/local-products/' ~ lp.id ~ '?from=shopify')|urlencode }}" title="本地预览 Shopify 商品效果(文案+图集), 不推送">🖼 预览</a>
             <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/shopify-resync','{% if shopify_listing and shopify_listing.shopify_product_id %}重新同步 Shopify?(会删旧重建, 换 product id){% else %}上架到 Shopify(建草稿)?{% endif %}')">🔄 {% if shopify_listing and shopify_listing.shopify_product_id %}重新同步{% else %}上架{% endif %}</button>
             {% if shopify_listing and shopify_listing.shopify_product_id %}
             <button type="button" class="row-btn" onclick="plPrice(this,'/v2/local-products/{{ lp.id }}/shopify-set-price',{{ lp.default_price or 0 }})">改价</button>

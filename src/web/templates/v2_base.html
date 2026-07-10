@@ -413,6 +413,8 @@
              而不是 TKShop 组(本地产品是三平台共享的, 从哪个平台进来就算哪个平台的语境)。 #}
           {% set _from_platform = request.query_params.get('from') or '' %}
           {% set _lp_page = request.url.path.startswith('/v2/local-products') %}
+          {# Shopify 本地预览页是纯 Shopify 页面, 无论有没有 ?from 都算 Shopify 语境。 #}
+          {% set _sp_preview = _lp_page and request.url.path.endswith('/shopify-preview') %}
 
           <!-- TKShop — 4 sub-links: local pool, each TK shop, real-time platform.
                The page's own top-tab strip is gone; these links are the shop
@@ -420,7 +422,7 @@
                so opening one shop doesn't mark all three as active. -->
           {% if can_see(request, 'tiktok') %}
           {% set _tab_now = request.query_params.get('tab') or '' %}
-          {% set _is_local_products = _lp_page and _from_platform not in ('etsy', 'shopify') %}
+          {% set _is_local_products = _lp_page and not _sp_preview and _from_platform not in ('etsy', 'shopify') %}
           {% set _is_products = request.url.path.startswith('/v2/products') %}
           {% set _is_platform = request.url.path.startswith('/v2/products/platform') %}
           {% set _in_tkshop = _is_local_products or _is_products %}
@@ -466,7 +468,7 @@
 
           {% if can_see(request, 'shopify') %}
           <!-- 🛍️ Shopify 上架 -->
-          {% set _lp_from_shopify = _lp_page and _from_platform == 'shopify' %}
+          {% set _lp_from_shopify = _lp_page and (_from_platform == 'shopify' or _sp_preview) %}
           {% set _is_shopify = request.url.path.startswith('/v2/shopify') or _lp_from_shopify %}
           <div class="nav-group {% if not _is_shopify %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">

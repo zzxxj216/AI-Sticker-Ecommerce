@@ -4866,23 +4866,27 @@ def v2_local_product_shopify_images_status(local_product_id: int):
 
 
 @router.get("/local-products/{local_product_id:int}/shopify-preview", response_class=HTMLResponse)
-def v2_local_product_shopify_preview(request: Request, local_product_id: int):
+def v2_local_product_shopify_preview(request: Request, local_product_id: int, back: str = ""):
     """Local style preview of how this master will look as a Shopify product.
 
     No network call — assembles the branded HTML + image gallery + fields via
     ShopifyProductSync.build_preview so the operator can review before pushing.
+    ``?back=`` 控制返回落点(如 Shopify listing 管理页), 缺省回 master 详情。
     """
     pv = get_shopify_sync().build_preview(local_product_id)
     # Attach browsable image URLs (the service returns local_paths only).
     for img in pv.get("images", []) or []:
         img["url"] = _versioned_local_product_image_url(img)
+    back_url = _safe_v2_redirect(
+        (back or "").strip(), f"/v2/local-products/{local_product_id}?from=shopify",
+    )
     return templates.TemplateResponse(
         "v2_shopify_preview.html",
         {
             "request": request,
             "page_title": f"Shopify 预览 · 本地 #{local_product_id}",
             "pv": pv,
-            "back_url": f"/v2/local-products/{local_product_id}",
+            "back_url": back_url,
         },
     )
 

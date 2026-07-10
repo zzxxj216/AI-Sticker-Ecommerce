@@ -90,7 +90,7 @@
           {% if platform == 'shopify' %}
           <button type="button" class="pl-btn"
                   onclick="spGenImages(this, '/v2/local-products/{{ lp.id }}/shopify-generate-images', '/v2/local-products/{{ lp.id }}/shopify-images-status')">🎨 生成图集</button>
-          <a class="pl-btn" href="/v2/local-products/{{ lp.id }}/shopify-preview">🖼 本地预览</a>
+          <a class="pl-btn" href="/v2/local-products/{{ lp.id }}/shopify-preview?back={{ ('/v2/shopify/listings/' ~ lp.id)|urlencode }}">🖼 本地预览</a>
           {% endif %}
         </div>
         <p class="muted" style="margin:12px 0 0;font-size:11px;">

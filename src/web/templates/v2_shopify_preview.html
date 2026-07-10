@@ -134,7 +134,7 @@
       <p class="eyebrow">Shopify · 上架预览</p>
       <h1>{{ page_title or 'Shopify 预览' }}</h1>
       <p class="page-subtitle">
-        <a href="{{ back_url }}" style="color:var(--text-muted);text-decoration:none;">← 返回本地产品</a>
+        <a href="{{ back_url }}" style="color:var(--text-muted);text-decoration:none;">← {% if '/shopify/listings/' in back_url %}返回 Shopify Listing 管理{% else %}返回本地产品{% endif %}</a>
         {% if pv.sync %}
           {% if pv.sync.sync_status == 'synced' %}
             <span class="v2-status-pill ok" style="margin-left:10px;">已同步</span>
@@ -150,7 +150,7 @@
       {% if pv.ok %}
       <button type="button" id="sp-gen-images" class="sp-regen-btn"
               data-lpid="{{ pv.local_product_id }}"
-              title="用 AI 生成全套商品图（封面/总览/生活场景等），写入主版本图集，Shopify 同步会用这些图。后台运行,每张约 30s。">🎨 生成全套图片</button>
+              title="生成 Shopify 专属 5 张样式图（白底总览/笔电/水杯/手持/平铺），存 Shopify 独立图集，不影响 TikTok/Etsy。后台运行,每张约 30s。">🎨 生成全套图片</button>
       <span id="sp-gen-status" class="sp-sync-hint" style="color:var(--text-muted);"></span>
       <form class="sp-sync-form" method="post"
             action="/v2/local-products/{{ pv.local_product_id }}/shopify-regenerate"
