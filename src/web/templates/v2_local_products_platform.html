@@ -32,6 +32,17 @@
   .pp-tab:hover { border-color:var(--accent-glow); }
   .pp-tab.active { color:var(--accent-dark); background:var(--accent-bg); border-color:var(--accent-glow); }
   .pp-pill-unlisted { display:inline-block; padding:2px 9px; border-radius:var(--radius-pill); font-size:11px; font-weight:600; color:var(--text-muted); background:var(--bg-subtle); border:1px solid var(--line); }
+  /* 多选批量操作条 —— 勾选行后滑出(仿 TK 本地产品页的 bulk bar)。 */
+  .pp-bulk-bar {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:10px 14px; margin-bottom:12px;
+    border-radius:var(--radius-md);
+    background:var(--accent-bg); border:1px solid var(--accent-glow);
+    color:var(--accent-dark); font-size:13px; font-weight:600;
+  }
+  .pp-bulk-bar[hidden] { display:none; }
+  .pp-bulk-bar .spacer { flex:1; }
+  .pp-check, #ppCheckAll { width:15px; height:15px; cursor:pointer; accent-color:var(--accent); }
 </style>
 
 <div class="pp-page">
@@ -60,10 +71,18 @@
 
   <section class="panel pp-panel">
     {% if products %}
+    <div id="ppBulkBar" class="pp-bulk-bar" hidden>
+      <span id="ppBulkCount">已选 0 个</span>
+      <span class="spacer"></span>
+      <button type="button" class="button pp-btn-sm" id="ppBulkSyncBtn" onclick="ppBulkSync(this)">🚀 批量上架到 {{ platform_label }}（仅未上架）</button>
+      <button type="button" class="button ghost pp-btn-sm" onclick="ppBulkPrice(this)">💲 批量设价</button>
+      <button type="button" class="button ghost pp-btn-sm" onclick="ppClearSel()">取消</button>
+    </div>
     <div style="overflow-x:auto;">
       <table class="pp-table">
         <thead>
           <tr>
+            <th style="width:34px;"><input type="checkbox" id="ppCheckAll" title="全选 / 全不选"></th>
             <th>本地产品</th>
             <th>{{ platform_label }} 状态</th>
             <th>价格</th>
@@ -74,6 +93,7 @@
         <tbody>
           {% for p in products %}
           <tr>
+            <td><input type="checkbox" class="pp-check" value="{{ p.local_product_id }}" data-listed="{{ '1' if p.is_listed else '0' }}"></td>
             <td>
               <div style="display:flex;align-items:center;gap:11px;">
                 {% if p.pack_cover_url %}<img class="pp-cover" src="{{ p.pack_cover_url }}" alt="">{% else %}<div class="pp-cover"></div>{% endif %}
@@ -124,6 +144,83 @@
 </div>
 
 <script>
+// ---- 多选批量(仿 TK 本地产品页) ----
+function ppSelected(){ return Array.from(document.querySelectorAll('.pp-check:checked')); }
+function ppUpdateBar(){
+  var sel = ppSelected();
+  var bar = document.getElementById('ppBulkBar');
+  if (!bar) return;
+  var unlisted = sel.filter(function(b){ return b.dataset.listed === '0'; }).length;
+  document.getElementById('ppBulkCount').textContent = '已选 ' + sel.length + ' 个（未上架 ' + unlisted + ' 个）';
+  bar.hidden = sel.length === 0;
+}
+function ppClearSel(){
+  document.querySelectorAll('.pp-check:checked').forEach(function(b){ b.checked = false; });
+  var all = document.getElementById('ppCheckAll'); if (all) all.checked = false;
+  ppUpdateBar();
+}
+document.addEventListener('change', function(e){
+  if (e.target && e.target.id === 'ppCheckAll') {
+    document.querySelectorAll('.pp-check').forEach(function(b){ b.checked = e.target.checked; });
+    ppUpdateBar();
+  } else if (e.target && e.target.classList.contains('pp-check')) {
+    ppUpdateBar();
+  }
+});
+
+// 批量上架: 只处理未上架的, 逐个串行调 resync(避免并发打爆 AI/平台限频)。
+async function ppBulkSync(btn){
+  var boxes = ppSelected().filter(function(b){ return b.dataset.listed === '0'; });
+  var skipped = ppSelected().length - boxes.length;
+  if (!boxes.length) { alert('所选里没有未上架的产品（已上架的用「管理」里的重新同步）'); return; }
+  if (!confirm('批量上架 ' + boxes.length + ' 个产品到 {{ platform_label }}（建草稿）?' +
+      (skipped ? '\n(已上架的 ' + skipped + ' 个会跳过)' : '') +
+      '\n逐个同步, 每个约 30-60 秒, 期间请勿关闭页面。')) return;
+  var bar = document.getElementById('ppBulkBar');
+  bar.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+  var orig = btn.textContent, okN = 0, fails = [];
+  for (var i = 0; i < boxes.length; i++) {
+    btn.textContent = '⏳ ' + (i + 1) + '/' + boxes.length + ' 上架中…';
+    try {
+      var r = await fetch('/v2/local-products/' + boxes[i].value + '/{{ platform }}-resync', {method:'POST'});
+      var j = {};
+      try { j = await r.json(); } catch(_) {}
+      if (r.ok && j.ok !== false) okN++;
+      else fails.push('#' + boxes[i].value + ': ' + (j.error || ('HTTP ' + r.status)));
+    } catch(e) { fails.push('#' + boxes[i].value + ': ' + e); }
+  }
+  btn.textContent = orig;
+  alert('批量上架完成: 成功 ' + okN + ' / ' + boxes.length +
+        (fails.length ? '\n失败:\n' + fails.slice(0, 5).join('\n') : ''));
+  location.reload();
+}
+
+// 批量设价: 复用现有 /local-products/batch-set-price(改本地原价);
+// 已上架的要「重新同步」或行内「改价」才会推到平台。
+async function ppBulkPrice(btn){
+  var boxes = ppSelected();
+  if (!boxes.length) return;
+  {% if platform == 'etsy' %}
+  var tip = '给已选 ' + boxes.length + ' 个产品统一设本地原价\n(Etsy 提交价 = 原价 × 倍率; 已上架的需重新同步才生效):';
+  {% else %}
+  var tip = '给已选 ' + boxes.length + ' 个产品统一设本地价(Shopify 变体价)\n(已上架的需重新同步或行内改价才生效):';
+  {% endif %}
+  var v = prompt(tip, '');
+  if (v === null) return;
+  v = parseFloat(v);
+  if (!(v > 0)) { alert('价格必须是大于 0 的数字'); return; }
+  var fd = new URLSearchParams();
+  boxes.forEach(function(b){ fd.append('local_product_ids', b.value); });
+  fd.append('price', v);
+  fd.append('back', location.pathname + location.search);
+  btn.disabled = true;
+  try {
+    var r = await fetch('/v2/local-products/batch-set-price', {method:'POST', body: fd});
+    if (r.ok) { location.reload(); }
+    else { btn.disabled = false; alert('设价失败: HTTP ' + r.status); }
+  } catch(e) { btn.disabled = false; alert('请求出错: ' + e); }
+}
+
 // 列表页直接上架: POST {platform}-resync(生成文案+传图, 同步阻塞约 30-60 秒) → 成功刷新。
 async function ppSync(btn, url, label){
   if (!confirm('把该产品上架到 ' + label + '(建草稿)?\n会生成文案 + 上传图片, 约 30-60 秒, 期间请勿关闭页面。')) return;

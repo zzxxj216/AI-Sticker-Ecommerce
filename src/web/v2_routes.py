@@ -4291,7 +4291,8 @@ def _render_platform_local_products(request: Request, *, platform: str, listed: 
             )
             pid = str(p.get("platform_id") or "").strip()
             p["listing_url"] = f"https://www.etsy.com/listing/{pid}" if (platform == "etsy" and pid) else ""
-            p["is_listed"] = bool(p.get("mapping_id"))
+            # 已上架 = 平台 id 非空(平台侧被删后清掉 id 的行回到未上架)。
+            p["is_listed"] = bool(pid)
     finally:
         fb_conn.close()
     listed_count = sum(1 for p in products if p["is_listed"])

@@ -6435,12 +6435,13 @@ class TKShopService:
         else:
             raise ValueError(f"unsupported platform: {platform!r}")
 
-        clauses, params = [], []
+        # 只算真正在平台上的行: 平台 id 为空的(如平台侧被删后清掉的)不算已上架。
+        clauses, params = [f"{platform_id_col} != ''"], []
         if q:
             kw = f"%{q.strip()}%"
             clauses.append("(lp.title LIKE ? OR p.display_name LIKE ? OR lp.seller_sku LIKE ?)")
             params.extend([kw, kw, kw])
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        where = "WHERE " + " AND ".join(clauses)
 
         with _open_db(self.db_path) as conn:
             total = conn.execute(
@@ -6499,10 +6500,11 @@ class TKShopService:
             kw = f"%{q.strip()}%"
             clauses.append("(lp.title LIKE ? OR p.display_name LIKE ? OR lp.seller_sku LIKE ?)")
             params.extend([kw, kw, kw])
+        # 已上架 = 映射行存在且平台 id 非空(平台侧被删后清掉 id 的行算未上架)。
         if listed == "listed":
-            clauses.append("mp.id IS NOT NULL")
+            clauses.append(f"(mp.id IS NOT NULL AND mp.{id_col} != '')")
         elif listed == "unlisted":
-            clauses.append("mp.id IS NULL")
+            clauses.append(f"(mp.id IS NULL OR mp.{id_col} = '')")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
         with _open_db(self.db_path) as conn:
