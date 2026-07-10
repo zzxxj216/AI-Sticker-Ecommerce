@@ -409,6 +409,10 @@
           {% if can_see(request,'tiktok') or can_see(request,'etsy') or can_see(request,'shopify') %}
           <div class="nav-section-label">多平台上架</div>
           {% endif %}
+          {# 详情页语境: /v2/local-products/* 带 ?from=etsy|shopify 时, 高亮来源平台组
+             而不是 TKShop 组(本地产品是三平台共享的, 从哪个平台进来就算哪个平台的语境)。 #}
+          {% set _from_platform = request.query_params.get('from') or '' %}
+          {% set _lp_page = request.url.path.startswith('/v2/local-products') %}
 
           <!-- TKShop — 4 sub-links: local pool, each TK shop, real-time platform.
                The page's own top-tab strip is gone; these links are the shop
@@ -416,7 +420,7 @@
                so opening one shop doesn't mark all three as active. -->
           {% if can_see(request, 'tiktok') %}
           {% set _tab_now = request.query_params.get('tab') or '' %}
-          {% set _is_local_products = request.url.path.startswith('/v2/local-products') %}
+          {% set _is_local_products = _lp_page and _from_platform not in ('etsy', 'shopify') %}
           {% set _is_products = request.url.path.startswith('/v2/products') %}
           {% set _is_platform = request.url.path.startswith('/v2/products/platform') %}
           {% set _in_tkshop = _is_local_products or _is_products %}
@@ -443,7 +447,8 @@
 
           {% if can_see(request, 'etsy') %}
           <!-- 🟠 Etsy 上架 -->
-          {% set _is_etsy = request.url.path.startswith('/v2/etsy') %}
+          {% set _lp_from_etsy = _lp_page and _from_platform == 'etsy' %}
+          {% set _is_etsy = request.url.path.startswith('/v2/etsy') or _lp_from_etsy %}
           <div class="nav-group {% if not _is_etsy %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
@@ -453,7 +458,7 @@
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/local-products') %}active{% endif %}" href="/v2/etsy/local-products">📦 本地产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/local-products') or _lp_from_etsy %}active{% endif %}" href="/v2/etsy/local-products">📦 本地产品</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/products') %}active{% endif %}" href="/v2/etsy/products">🟠 已上架产品</a>
             </div>
           </div>
@@ -461,7 +466,8 @@
 
           {% if can_see(request, 'shopify') %}
           <!-- 🛍️ Shopify 上架 -->
-          {% set _is_shopify = request.url.path.startswith('/v2/shopify') %}
+          {% set _lp_from_shopify = _lp_page and _from_platform == 'shopify' %}
+          {% set _is_shopify = request.url.path.startswith('/v2/shopify') or _lp_from_shopify %}
           <div class="nav-group {% if not _is_shopify %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
@@ -471,7 +477,7 @@
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/local-products') %}active{% endif %}" href="/v2/shopify/local-products">📦 本地产品</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/local-products') or _lp_from_shopify %}active{% endif %}" href="/v2/shopify/local-products">📦 本地产品</a>
               <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/products') %}active{% endif %}" href="/v2/shopify/products">🛍️ 已上架产品</a>
             </div>
           </div>

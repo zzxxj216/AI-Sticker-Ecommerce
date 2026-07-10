@@ -99,7 +99,7 @@
             <td style="text-align:right;white-space:nowrap;">
               {% if p.is_listed %}
                 {% if p.listing_url %}<a class="button ghost pp-btn-sm" href="{{ p.listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
-                <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}">管理 →</a>
+                <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">管理 →</a>
               {% else %}
                 <a class="button pp-btn-sm" href="/v2/packs/{{ p.pack_id }}">上架到 {{ platform_label }} →</a>
               {% endif %}

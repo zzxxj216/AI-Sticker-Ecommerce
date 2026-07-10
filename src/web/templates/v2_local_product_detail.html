@@ -44,6 +44,10 @@
   @keyframes spin { to { transform:rotate(360deg) } }
 </style>
 
+{# 来源平台语境: 从 Etsy/Shopify 列表页「管理」进来时带 ?from=, 返回按钮
+   与卡片排序保持该平台语境(侧边栏高亮由 v2_base.html 同一参数处理)。 #}
+{% set _from = request.query_params.get('from') or '' %}
+{% set _plat_ctx = _from in ('etsy', 'shopify') %}
 <div class="lp-page">
   <section class="page-header" style="margin-bottom:12px;">
     <div>
@@ -54,7 +58,13 @@
         · 创建 {{ lp.created_human }} · 上次修改 {{ lp.updated_human }}
       </p>
     </div>
+    {% if _from == 'etsy' %}
+    <a class="button ghost" href="/v2/etsy/local-products">← 返回 Etsy 本地产品</a>
+    {% elif _from == 'shopify' %}
+    <a class="button ghost" href="/v2/shopify/local-products">← 返回 Shopify 本地产品</a>
+    {% else %}
     <a class="button ghost" href="/v2/local-products/">← 返回本地产品</a>
+    {% endif %}
   </section>
 
   {% if lp.needs_push %}
@@ -65,8 +75,9 @@
   {% endif %}
 
   <div class="lp-grid">
-    <div>
-      <section class="panel lp-panel">
+    {# 平台语境下左列用 flex + order: 来源平台的卡片排到 TikTok 卡上面。 #}
+    <div {% if _plat_ctx %}style="display:flex;flex-direction:column;"{% endif %}>
+      <section class="panel lp-panel" {% if _plat_ctx %}style="order:1;"{% endif %}>
         {% if lp.pack_cover_url %}
         <img src="{{ lp.pack_cover_url }}" class="lp-cover" alt="封面">
         {% else %}
@@ -74,8 +85,8 @@
         {% endif %}
       </section>
 
-      <section class="panel lp-panel">
-        <h3>店铺上架状态</h3>
+      <section class="panel lp-panel" {% if _plat_ctx %}style="order:3;"{% endif %}>
+        <h3>店铺上架状态{% if _plat_ctx %}（TikTok）{% endif %}</h3>
         {% for ls in lp.listings %}
         <div class="listing-row {% if ls.tiktok_product_id %}is-live{% endif %}{% if ls.needs_push %} needs-push{% endif %}">
           <div>
@@ -123,7 +134,7 @@
       </section>
 
       {% if can_etsy or can_shopify %}
-      <section class="panel lp-panel">
+      <section class="panel lp-panel" {% if _plat_ctx %}style="order:2;"{% endif %}>
         <h3>Etsy / Shopify 上架</h3>
         {% if can_etsy %}
         <div class="listing-row {% if etsy_listing and etsy_listing.etsy_listing_id %}is-live{% endif %}">
