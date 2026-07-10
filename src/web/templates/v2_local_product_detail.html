@@ -121,6 +121,66 @@
         </div>
         {% endif %}
       </section>
+
+      {% if can_etsy or can_shopify %}
+      <section class="panel lp-panel">
+        <h3>Etsy / Shopify 上架</h3>
+        {% if can_etsy %}
+        <div class="listing-row {% if etsy_listing and etsy_listing.etsy_listing_id %}is-live{% endif %}">
+          <div>
+            <div class="name">🟠 Etsy
+              {% if etsy_listing and etsy_listing.etsy_listing_id %}
+                {% set ess = etsy_listing.sync_status or 'synced' %}
+                <span class="v2-status-pill {{ {'synced':'ok','failed':'error','syncing':'running'}.get(ess,'pending') }}" style="font-size:10px;margin-left:6px;">{{ etsy_listing.status or 'draft' }} · {{ ess }}</span>
+              {% else %}
+                <span class="v2-status-pill" style="font-size:10px;margin-left:6px;opacity:.55;">未上架</span>
+              {% endif %}
+            </div>
+            <div class="meta">
+              {% if etsy_listing and etsy_listing.etsy_listing_id %}
+                listing <code>{{ etsy_listing.etsy_listing_id }}</code>{% if etsy_listing.price %} · ${{ '%.2f'|format(etsy_listing.price) }}{% endif %}{% if etsy_listing.synced_human %} · 同步 {{ etsy_listing.synced_human }}{% endif %}
+                {% if etsy_listing.sync_status == 'failed' and etsy_listing.last_error %}<br><span style="color:var(--danger);">⚠ {{ etsy_listing.last_error[:60] }}</span>{% endif %}
+              {% else %}还没同步到 Etsy — 点右侧「上架」建草稿 listing{% endif %}
+            </div>
+          </div>
+          <div class="actions">
+            {% if etsy_listing and etsy_listing.listing_url %}<a class="row-btn" href="{{ etsy_listing.listing_url }}" target="_blank" rel="noopener">看 ↗</a>{% endif %}
+            <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/etsy-resync','{% if etsy_listing and etsy_listing.etsy_listing_id %}重新同步 Etsy(刷新已有 listing)?{% else %}上架到 Etsy(建草稿)?{% endif %}')">🔄 {% if etsy_listing and etsy_listing.etsy_listing_id %}重新同步{% else %}上架{% endif %}</button>
+            {% if etsy_listing and etsy_listing.etsy_listing_id %}
+            <button type="button" class="row-btn" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/etsy-delist','下架 Etsy?(转 inactive, 不删除 listing)')">下架</button>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+        {% if can_shopify %}
+        <div class="listing-row {% if shopify_listing and shopify_listing.shopify_product_id %}is-live{% endif %}">
+          <div>
+            <div class="name">🛍️ Shopify
+              {% if shopify_listing and shopify_listing.shopify_product_id %}
+                {% set sss = shopify_listing.sync_status or 'synced' %}
+                <span class="v2-status-pill {{ {'synced':'ok','failed':'error','syncing':'running'}.get(sss,'pending') }}" style="font-size:10px;margin-left:6px;">{{ shopify_listing.status or 'draft' }} · {{ sss }}</span>
+              {% else %}
+                <span class="v2-status-pill" style="font-size:10px;margin-left:6px;opacity:.55;">未上架</span>
+              {% endif %}
+            </div>
+            <div class="meta">
+              {% if shopify_listing and shopify_listing.shopify_product_id %}
+                product <code>{{ shopify_listing.shopify_product_id }}</code>{% if shopify_listing.handle %} · /{{ shopify_listing.handle }}{% endif %}{% if shopify_listing.synced_human %} · 同步 {{ shopify_listing.synced_human }}{% endif %}
+                {% if shopify_listing.sync_status == 'failed' and shopify_listing.last_error %}<br><span style="color:var(--danger);">⚠ {{ shopify_listing.last_error[:60] }}</span>{% endif %}
+              {% else %}还没同步到 Shopify — 点右侧「上架」建草稿商品{% endif %}
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/shopify-resync','{% if shopify_listing and shopify_listing.shopify_product_id %}重新同步 Shopify?(会删旧重建, 换 product id){% else %}上架到 Shopify(建草稿)?{% endif %}')">🔄 {% if shopify_listing and shopify_listing.shopify_product_id %}重新同步{% else %}上架{% endif %}</button>
+            {% if shopify_listing and shopify_listing.shopify_product_id %}
+            <button type="button" class="row-btn" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/shopify-delist','下架 Shopify?(转 draft, 不删除商品)')">下架</button>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+        <p class="muted" style="margin:10px 0 0;font-size:11px;">下架 = 转 inactive/draft，不删 listing（符合不删除规则）。改价功能稍后加。</p>
+      </section>
+      {% endif %}
     </div>
 
     <div>
@@ -422,6 +482,28 @@
   }
   restoreIfRunning();
 })();
+
+// 「Etsy / Shopify 上架」卡片行内操作: fetch 调后端(返回 JSON) → 成功刷新, 失败 alert。
+async function plAction(btn, url, confirmMsg){
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '处理中…';
+  try {
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:''});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (r.ok && j.ok !== false) {
+      btn.textContent = '✓ 完成';
+      setTimeout(function(){ location.reload(); }, 900);
+    } else {
+      btn.disabled = false; btn.textContent = orig;
+      alert('操作失败: ' + (j.error || ('HTTP ' + r.status)));
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = orig;
+    alert('请求出错: ' + e);
+  }
+}
 </script>
 
 {% endblock %}

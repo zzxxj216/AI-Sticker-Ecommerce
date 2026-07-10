@@ -6536,6 +6536,25 @@ class TKShopService:
             out = [dict(r) for r in rows]
         return out, total
 
+    def get_platform_listings(self, local_product_id: int) -> dict:
+        """详情页用: 该 master 的 Etsy / Shopify 映射行(不存在为 None)。
+        供本地产品详情页的「多平台上架」卡片渲染状态 + 操作。"""
+        with _open_db(self.db_path) as conn:
+            etsy = conn.execute(
+                """SELECT etsy_listing_id, price, status, sync_status, last_error, synced_at
+                     FROM etsy_products WHERE local_product_id = ?""",
+                (local_product_id,),
+            ).fetchone()
+            shopify = conn.execute(
+                """SELECT shopify_product_id, handle, status, sync_status, last_error, synced_at
+                     FROM shopify_products WHERE local_product_id = ?""",
+                (local_product_id,),
+            ).fetchone()
+        return {
+            "etsy": dict(etsy) if etsy else None,
+            "shopify": dict(shopify) if shopify else None,
+        }
+
     def update_local_product_detail(
         self,
         local_product_id: int,

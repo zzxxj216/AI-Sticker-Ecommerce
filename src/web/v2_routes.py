@@ -4372,6 +4372,16 @@ def v2_local_product_detail(request: Request, local_product_id: int):
     listed_shops = {ls.get("shop") for ls in lp.get("listings", [])
                     if ls.get("tiktok_product_id")}
     missing_shops = [s for s in TKSHOP_SHOPS if s not in listed_shops]
+    # Etsy / Shopify 上架状态(详情页「多平台上架」卡片)。按角色门控: 无权限的平台不塞数据。
+    pl = svc.get_platform_listings(local_product_id)
+    etsy_row = pl["etsy"] if _can_see(request, "etsy") else None
+    shopify_row = pl["shopify"] if _can_see(request, "shopify") else None
+    if etsy_row:
+        _eid = str(etsy_row.get("etsy_listing_id") or "").strip()
+        etsy_row["listing_url"] = f"https://www.etsy.com/listing/{_eid}" if _eid else ""
+        etsy_row["synced_human"] = _fmt_ts(etsy_row.get("synced_at")) if etsy_row.get("synced_at") else ""
+    if shopify_row:
+        shopify_row["synced_human"] = _fmt_ts(shopify_row.get("synced_at")) if shopify_row.get("synced_at") else ""
     return templates.TemplateResponse(
         "v2_local_product_detail.html",
         {
@@ -4379,6 +4389,10 @@ def v2_local_product_detail(request: Request, local_product_id: int):
             "page_title": f"本地产品 #{local_product_id}",
             "lp": lp,
             "missing_shops": missing_shops,
+            "etsy_listing": etsy_row,
+            "shopify_listing": shopify_row,
+            "can_etsy": _can_see(request, "etsy"),
+            "can_shopify": _can_see(request, "shopify"),
         },
     )
 
@@ -4872,6 +4886,60 @@ async def v2_local_product_sync_shopify(request: Request, local_product_id: int)
     )
     msg = f"已派发：本地 #{local_product_id} → Shopify（草稿）"
     return RedirectResponse(url=f"{back}{sep}batch_summary={msg}", status_code=303)
+
+
+# ---- 详情页「多平台上架」卡片的行内操作(重新同步 / 下架), 均返回 JSON 供 fetch ----
+
+@router.post("/local-products/{local_product_id:int}/etsy-resync")
+def v2_lp_etsy_resync(request: Request, local_product_id: int):
+    """重新同步该 master 到 Etsy —— sync_pack 是 upsert, 刷新已有 listing 不建新草稿。"""
+    if not _can_see(request, "etsy"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.etsy.service import get_etsy_service
+    lp = get_tkshop_service().get_local_product(local_product_id)
+    if not lp or not lp.get("pack_id"):
+        return JSONResponse({"ok": False, "error": "本地产品或卡包不存在"}, status_code=404)
+    return get_etsy_service().sync_pack(lp["pack_id"])
+
+
+@router.post("/local-products/{local_product_id:int}/etsy-delist")
+def v2_lp_etsy_delist(request: Request, local_product_id: int):
+    """下架 Etsy listing —— state=inactive, 不删除(符合 no-delete 规则)。"""
+    if not _can_see(request, "etsy"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.etsy.service import get_etsy_service
+    return get_etsy_service().set_state(local_product_id, "inactive")
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-resync")
+def v2_lp_shopify_resync(request: Request, local_product_id: int):
+    """重新同步该 master 到 Shopify —— sync_one 会删旧重建(换 product_id/handle)。"""
+    if not _can_see(request, "shopify"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.shopify.sync import get_shopify_sync
+    from src.services.tkshop.service import _price_from_default_template
+    tk = get_tkshop_service()
+    sh = get_shopify_sync()
+    master = tk.get_local_product(local_product_id) or {}
+    if not master:
+        return JSONResponse({"ok": False, "error": "本地产品不存在"}, status_code=404)
+    if master.get("default_price") is None:
+        try:
+            sale, _d = _price_from_default_template(master.get("default_template_json") or "{}")
+            base = float(sale) if sale else 13.98
+        except Exception:  # noqa: BLE001
+            base = 13.98
+        sh.batch_set_local_default_price([local_product_id], base)
+    return sh.sync_one(local_product_id)
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-delist")
+def v2_lp_shopify_delist(request: Request, local_product_id: int):
+    """下架 Shopify 商品 —— status=draft, 不删除(符合 no-delete 规则)。"""
+    if not _can_see(request, "shopify"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.shopify.sync import get_shopify_sync
+    return get_shopify_sync().set_status(local_product_id, "draft")
 
 
 @router.post("/products/batch-sync-shopify")

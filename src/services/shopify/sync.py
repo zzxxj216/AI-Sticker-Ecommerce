@@ -425,6 +425,39 @@ class ShopifyProductSync:
             ).fetchone()
         return dict(row) if row else None
 
+    def set_status(self, local_product_id: int, status: str) -> dict:
+        """改 Shopify 商品状态(active/draft/archived) —— 下架用 'draft' 或 'archived'。
+        调中间层 PUT /shopify/products/{id}, 成功回写 shopify_products.status。"""
+        if status not in ("active", "draft", "archived"):
+            return {"ok": False, "error": f"不支持的状态: {status}"}
+        prior = self.get_sync_status(local_product_id)
+        pid = (prior or {}).get("shopify_product_id") or ""
+        if not pid:
+            return {"ok": False, "error": "该产品还没上架到 Shopify(无 product_id)"}
+        endpoint = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/shopify/products/{pid}"
+        try:
+            resp = requests.put(endpoint, json={"status": status}, timeout=TKSHOP_SERVER_TIMEOUT)
+            if 200 <= resp.status_code < 300:
+                now = int(time.time())
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE shopify_products SET status=?, synced_at=? WHERE local_product_id=?",
+                        (status, now, local_product_id),
+                    )
+                    conn.commit()
+                logger.info("shopify set_status ok: lp=%s pid=%s status=%s",
+                            local_product_id, pid, status)
+                return {"ok": True, "shopify_product_id": pid, "status": status}
+            try:
+                rj = resp.json()
+            except Exception:
+                rj = {"_raw_text": resp.text[:300]}
+            data = rj["data"] if isinstance(rj.get("data"), dict) else rj
+            err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            return {"ok": False, "error": str(err)}
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"网络错误: {str(e)[:200]}"}
+
     def _upsert_syncing(self, local_product_id: int, sku: str) -> None:
         """Mark the tracking row as 'syncing' (insert if absent)."""
         now = int(time.time())

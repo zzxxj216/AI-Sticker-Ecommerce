@@ -264,6 +264,40 @@ class EtsyListingService:
             ).fetchone()
             return dict(row) if row else None
 
+    def set_state(self, local_product_id: int, state: str) -> dict[str, Any]:
+        """改 Etsy listing 平台状态(active/inactive/draft) —— 下架用 'inactive'。
+        调中间层 PATCH /etsy/listings/{id}, 成功回写 etsy_products.status。"""
+        if state not in ("active", "inactive", "draft"):
+            return {"ok": False, "error": f"不支持的状态: {state}"}
+        row = self.get_or_create(local_product_id)
+        listing_id = (row.get("etsy_listing_id") or "").strip()
+        if not listing_id:
+            return {"ok": False, "error": "该产品还没上架到 Etsy(无 listing_id)"}
+        endpoint = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/etsy/listings/{listing_id}"
+        try:
+            resp = requests.patch(endpoint, json={"fields": {"state": state}},
+                                  timeout=TKSHOP_SERVER_TIMEOUT)
+            try:
+                rj = resp.json()
+            except Exception:
+                rj = {"_raw_text": resp.text[:500]}
+            data = rj["data"] if isinstance(rj.get("data"), dict) else rj
+            if 200 <= resp.status_code < 300:
+                with self._conn() as conn:
+                    conn.execute(
+                        "UPDATE etsy_products SET status=?, synced_at=? WHERE local_product_id=?",
+                        (state, _now(), local_product_id),
+                    )
+                    conn.commit()
+                logger.info("etsy set_state ok: lp=%s listing=%s state=%s",
+                            local_product_id, listing_id, state)
+                return {"ok": True, "listing_id": listing_id, "state": state}
+            err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            logger.warning("etsy set_state failed: lp=%s %s", local_product_id, str(err)[:200])
+            return {"ok": False, "error": str(err)}
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"网络错误(中间层不可达?): {str(e)[:200]}"}
+
 
 _service: Optional[EtsyListingService] = None
 

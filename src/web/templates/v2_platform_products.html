@@ -86,7 +86,7 @@
             <td>{% if p.synced_human %}<span style="font-size:12px;color:var(--text-secondary);">{{ p.synced_human }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
             <td style="text-align:right;white-space:nowrap;">
               {% if p.listing_url %}<a class="button ghost pp-btn-sm" href="{{ p.listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
-              <a class="button ghost pp-btn-sm" href="/v2/packs/{{ p.pack_id }}">管理 →</a>
+              <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}">管理 →</a>
             </td>
           </tr>
           {% endfor %}
