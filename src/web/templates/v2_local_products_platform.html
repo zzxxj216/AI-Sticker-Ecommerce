@@ -39,7 +39,7 @@
     <div class="panel-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
       <div>
         <h3 style="margin:0;font-size:16px;">{{ platform_emoji }} {{ platform_label }} 本地产品</h3>
-        <p class="muted" style="margin-top:4px;">本地产品(master)是上架到 {{ platform_label }} 的源头，共 <strong>{{ total }}</strong> 个。未上架的点「去上架」进卡包详情发起，已上架的可去「{{ platform_label }} 已上架」页管理。</p>
+        <p class="muted" style="margin-top:4px;">本地产品(master)是上架到 {{ platform_label }} 的源头，共 <strong>{{ total }}</strong> 个。未上架的可直接点「上架到 {{ platform_label }}」建草稿(生成文案+传图，约 30-60 秒)；「管理」进产品详情改文案/价格。</p>
       </div>
       <a class="button ghost" href="/v2/{{ platform }}/products">已上架产品 →</a>
     </div>
@@ -101,7 +101,9 @@
                 {% if p.listing_url %}<a class="button ghost pp-btn-sm" href="{{ p.listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
                 <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">管理 →</a>
               {% else %}
-                <a class="button pp-btn-sm" href="/v2/packs/{{ p.pack_id }}">上架到 {{ platform_label }} →</a>
+                <button type="button" class="button pp-btn-sm"
+                        onclick="ppSync(this, '/v2/local-products/{{ p.local_product_id }}/{{ platform }}-resync', '{{ platform_label }}')">🚀 上架到 {{ platform_label }}</button>
+                <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">管理 →</a>
               {% endif %}
             </td>
           </tr>
@@ -120,5 +122,29 @@
     {% endif %}
   </section>
 </div>
+
+<script>
+// 列表页直接上架: POST {platform}-resync(生成文案+传图, 同步阻塞约 30-60 秒) → 成功刷新。
+async function ppSync(btn, url, label){
+  if (!confirm('把该产品上架到 ' + label + '(建草稿)?\n会生成文案 + 上传图片, 约 30-60 秒, 期间请勿关闭页面。')) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ 同步中…';
+  try {
+    var r = await fetch(url, {method:'POST'});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (r.ok && j.ok !== false) {
+      btn.textContent = '✓ 已上架';
+      setTimeout(function(){ location.reload(); }, 900);
+    } else {
+      btn.disabled = false; btn.textContent = orig;
+      alert('上架失败: ' + (j.error || ('HTTP ' + r.status)));
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = orig;
+    alert('请求出错: ' + e);
+  }
+}
+</script>
 
 {% endblock %}
