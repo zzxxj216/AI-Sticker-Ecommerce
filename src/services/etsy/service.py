@@ -19,6 +19,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 from typing import Any, Optional
 
@@ -36,6 +37,22 @@ ETSY_PRICE_MULTIPLIER = float(os.getenv("ETSY_PRICE_MULTIPLIER", "1.3"))
 ETSY_PRICE_FALLBACK = float(os.getenv("ETSY_PRICE_FALLBACK", "6.99"))
 
 MAX_IMAGES = 10
+
+# 同一产品的同步互斥(进程内): 并发点两次「上架」会各建一条 listing(实测发生过,
+# pack_21 15 秒内建了两条草稿), 用内存锁挡掉后到的那次。
+_SYNCING: set[int] = set()
+_SYNC_LOCK = threading.Lock()
+
+# Etsy 平台侧 listing 已被删除(如后台手动删)的错误特征 —— 命中则本地映射已失效。
+_LISTING_GONE_MARKERS = (
+    "must be active or expired but is removed",
+    "Could not find a Listing",
+)
+
+
+def _listing_gone(err_text: Any) -> bool:
+    t = str(err_text or "")
+    return any(m in t for m in _LISTING_GONE_MARKERS)
 
 
 def _now() -> int:
@@ -96,6 +113,19 @@ class EtsyListingService:
             conn.execute(
                 "UPDATE etsy_products SET sync_status=?, last_error=? WHERE local_product_id=?",
                 (sync_status, err[:500], local_product_id),
+            )
+            conn.commit()
+
+    def _clear_stale_listing(self, local_product_id: int, note: str) -> None:
+        """平台侧 listing 已被删除(后台手动删等): 清掉本地映射,
+        回到「未上架」状态, 之后「上架」会新建 listing。"""
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE etsy_products
+                      SET etsy_listing_id='', status='removed', sync_status='draft',
+                          last_error=?, synced_at=NULL
+                    WHERE local_product_id=?""",
+                (str(note)[:500], local_product_id),
             )
             conn.commit()
 
@@ -181,7 +211,7 @@ class EtsyListingService:
 
     # ---- 主流程 ----
     def sync_pack(self, pack_id: int, *, price_multiplier: Optional[float] = None,
-                  dry_run: bool = False) -> dict[str, Any]:
+                  dry_run: bool = False, _allow_recreate: bool = True) -> dict[str, Any]:
         mult = price_multiplier or ETSY_PRICE_MULTIPLIER
         tk = self._tk()
         lp_id = tk.get_or_create_local_product(pack_id)
@@ -223,7 +253,14 @@ class EtsyListingService:
                     "copy": {"title": copy["title"], "tags": copy["tags"],
                              "description_preview": copy["description"][:200]}}
 
+        # 同一产品互斥: 并发重复点「上架」会各建一条 listing, 后到的直接拒。
+        with _SYNC_LOCK:
+            if lp_id in _SYNCING:
+                return {"ok": False, "error": "该产品正在同步 Etsy 中, 请稍候(防止重复建 listing)"}
+            _SYNCING.add(lp_id)
+
         self._set_status(lp_id, "syncing")
+        recreate = False
         try:
             endpoint = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/etsy/sync-pack"
             resp = requests.post(endpoint, json=payload, timeout=TKSHOP_SERVER_TIMEOUT)
@@ -243,15 +280,29 @@ class EtsyListingService:
                         "images_ok": data.get("images_ok"), "video": data.get("video"),
                         "price": price}
             err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
-            self._set_status(lp_id, "failed", str(err))
-            logger.warning("etsy sync-pack failed: pack=%s %s", pack_id, str(err)[:200])
-            return {"ok": False, "error": str(err), "detail": data}
+            # 更新目标 listing 已在平台被删(如 Etsy 后台手动删) → 清映射后重建。
+            if (_allow_recreate and existing_listing
+                    and _listing_gone(json.dumps(rj, ensure_ascii=False))):
+                recreate = True
+            else:
+                self._set_status(lp_id, "failed", str(err))
+                logger.warning("etsy sync-pack failed: pack=%s %s", pack_id, str(err)[:200])
+                return {"ok": False, "error": str(err), "detail": data}
         except requests.RequestException as e:
             self._set_status(lp_id, "failed", f"NETWORK: {e}")
             return {"ok": False, "error": f"网络错误(中间层不可达?): {str(e)[:200]}"}
         except Exception as e:  # noqa: BLE001
             self._set_status(lp_id, "failed", f"INTERNAL: {e}")
             return {"ok": False, "error": f"内部错误: {str(e)[:200]}"}
+        finally:
+            with _SYNC_LOCK:
+                _SYNCING.discard(lp_id)
+
+        # 只有 recreate 分支会走到这(锁已释放, 重入安全): 清掉失效映射, 新建一条。
+        logger.warning("etsy listing %s 已在平台被删, 清除本地映射并新建 (pack=%s lp=%s)",
+                       existing_listing, pack_id, lp_id)
+        self._clear_stale_listing(lp_id, f"platform removed listing {existing_listing}")
+        return self.sync_pack(pack_id, price_multiplier=price_multiplier, _allow_recreate=False)
 
     def get_for_pack(self, pack_id: int) -> Optional[dict]:
         """pack 详情页展示用: 返回该 pack 的 Etsy 同步行(若有)。"""
@@ -293,6 +344,11 @@ class EtsyListingService:
                             local_product_id, listing_id, state)
                 return {"ok": True, "listing_id": listing_id, "state": state}
             err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            if _listing_gone(json.dumps(rj, ensure_ascii=False)):
+                self._clear_stale_listing(local_product_id, f"platform removed listing {listing_id}")
+                return {"ok": False, "listing_gone": True,
+                        "error": "该 listing 已在 Etsy 平台被删除(可能在 Etsy 后台手动删的)。"
+                                 "本地映射已清除 — 需要时点「上架」会重新建 listing。"}
             logger.warning("etsy set_state failed: lp=%s %s", local_product_id, str(err)[:200])
             return {"ok": False, "error": str(err)}
         except requests.RequestException as e:
@@ -330,6 +386,11 @@ class EtsyListingService:
                             local_product_id, listing_id, new_price)
                 return {"ok": True, "listing_id": listing_id, "price": new_price}
             err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            if _listing_gone(json.dumps(rj, ensure_ascii=False)):
+                self._clear_stale_listing(local_product_id, f"platform removed listing {listing_id}")
+                return {"ok": False, "listing_gone": True,
+                        "error": "该 listing 已在 Etsy 平台被删除(可能在 Etsy 后台手动删的)。"
+                                 "本地映射已清除 — 需要时点「上架」会重新建 listing。"}
             logger.warning("etsy set_price failed: lp=%s %s", local_product_id, str(err)[:200])
             return {"ok": False, "error": str(err)}
         except requests.RequestException as e:

@@ -425,6 +425,27 @@ class ShopifyProductSync:
             ).fetchone()
         return dict(row) if row else None
 
+    @staticmethod
+    def _product_gone(err_text) -> bool:
+        """Shopify 平台侧商品已被删除(后台手动删等)的错误特征。"""
+        t = str(err_text or "")
+        return "Not Found" in t or "404" in t
+
+    def _clear_stale_mapping(self, local_product_id: int, note: str) -> None:
+        """平台侧商品已被删除: 清掉本地映射, 回到「未上架」可重新同步的状态。"""
+        with _open_db(self.db_path) as conn:
+            conn.execute(
+                """UPDATE shopify_products
+                       SET shopify_product_id='', handle='', status='removed',
+                           sync_status='draft', last_error=?, synced_at=NULL
+                     WHERE local_product_id=?""",
+                (str(note)[:500], local_product_id),
+            )
+            conn.commit()
+
+    _GONE_MSG = ("该商品已在 Shopify 平台被删除(可能在后台手动删的)。"
+                 "本地映射已清除 — 需要时点「上架」会重新建。")
+
     def set_status(self, local_product_id: int, status: str) -> dict:
         """改 Shopify 商品状态(active/draft/archived) —— 下架用 'draft' 或 'archived'。
         调中间层 PUT /shopify/products/{id}, 成功回写 shopify_products.status。"""
@@ -454,6 +475,9 @@ class ShopifyProductSync:
                 rj = {"_raw_text": resp.text[:300]}
             data = rj["data"] if isinstance(rj.get("data"), dict) else rj
             err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            if self._product_gone(json.dumps(rj, ensure_ascii=False)):
+                self._clear_stale_mapping(local_product_id, f"platform removed product {pid}")
+                return {"ok": False, "product_gone": True, "error": self._GONE_MSG}
             return {"ok": False, "error": str(err)}
         except requests.RequestException as e:
             return {"ok": False, "error": f"网络错误: {str(e)[:200]}"}
@@ -480,6 +504,9 @@ class ShopifyProductSync:
                 gj = {}
             variants = gj.get("data") if isinstance(gj.get("data"), list) else gj
             if not isinstance(variants, list) or not variants:
+                if g.status_code >= 400 and self._product_gone(json.dumps(gj, ensure_ascii=False)):
+                    self._clear_stale_mapping(local_product_id, f"platform removed product {pid}")
+                    return {"ok": False, "product_gone": True, "error": self._GONE_MSG}
                 return {"ok": False, "error": f"读不到 Shopify 变体(HTTP {g.status_code})"}
             vid = str(variants[0].get("id") or "")
             if not vid:
