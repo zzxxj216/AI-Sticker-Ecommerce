@@ -156,6 +156,8 @@
           </div>
           <div class="actions">
             {% if etsy_listing and etsy_listing.listing_url %}<a class="row-btn" href="{{ etsy_listing.listing_url }}" target="_blank" rel="noopener">看 ↗</a>{% endif %}
+            <button type="button" class="row-btn" title="Etsy 图集直接用「主版本图集」— 打开 AI 生成主图+附图(和 TikTok 共用一套)"
+                    onclick="var m=document.getElementById('ai-modal'); if(m && !m.open) m.showModal();">🎨 图集</button>
             <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/etsy-resync','{% if etsy_listing and etsy_listing.etsy_listing_id %}重新同步 Etsy(刷新已有 listing)?{% else %}上架到 Etsy(建草稿)?{% endif %}')">🔄 {% if etsy_listing and etsy_listing.etsy_listing_id %}重新同步{% else %}上架{% endif %}</button>
             {% if etsy_listing and etsy_listing.etsy_listing_id %}
             <button type="button" class="row-btn" onclick="plPrice(this,'/v2/local-products/{{ lp.id }}/etsy-set-price',{{ etsy_listing.price or 0 }})">改价</button>
@@ -183,6 +185,9 @@
             </div>
           </div>
           <div class="actions">
+            <button type="button" class="row-btn" title="生成 Shopify 专属 5 张样式图(白底总览/笔电/水杯/手持/平铺), 独立一套不影响 TikTok/Etsy"
+                    onclick="spGenImages(this, '/v2/local-products/{{ lp.id }}/shopify-generate-images', '/v2/local-products/{{ lp.id }}/shopify-images-status')">🎨 图集</button>
+            <a class="row-btn" href="/v2/local-products/{{ lp.id }}/shopify-preview" title="本地预览 Shopify 商品效果(文案+图集), 不推送">🖼 预览</a>
             <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/shopify-resync','{% if shopify_listing and shopify_listing.shopify_product_id %}重新同步 Shopify?(会删旧重建, 换 product id){% else %}上架到 Shopify(建草稿)?{% endif %}')">🔄 {% if shopify_listing and shopify_listing.shopify_product_id %}重新同步{% else %}上架{% endif %}</button>
             {% if shopify_listing and shopify_listing.shopify_product_id %}
             <button type="button" class="row-btn" onclick="plPrice(this,'/v2/local-products/{{ lp.id }}/shopify-set-price',{{ lp.default_price or 0 }})">改价</button>
@@ -191,7 +196,7 @@
           </div>
         </div>
         {% endif %}
-        <p class="muted" style="margin:10px 0 0;font-size:11px;">改价 = 直接改平台价(不重建 listing)；下架 = 转 inactive/draft，不删 listing（符合不删除规则）。</p>
+        <p class="muted" style="margin:10px 0 0;font-size:11px;">图集：Etsy 用「主版本图集」（和 TikTok 共用，🎨 打开 AI 生成）；Shopify 优先用专属 5 张样式图（🎨 生成，无则兜底主版本图）。改价 = 直接改平台价(不重建)；下架 = 转 inactive/draft 不删 listing。</p>
       </section>
       {% endif %}
     </div>
@@ -512,6 +517,38 @@ async function plAction(btn, url, confirmMsg){
       btn.disabled = false; btn.textContent = orig;
       alert('操作失败: ' + (j.error || ('HTTP ' + r.status)));
     }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = orig;
+    alert('请求出错: ' + e);
+  }
+}
+
+// Shopify 专属图集: POST 启动后台生成(5 张固定样式) → 轮询 status → 完成刷新。
+async function spGenImages(btn, genUrl, statusUrl){
+  if (!confirm('用 AI 生成 Shopify 专属 5 张样式图(白底总览/笔电/水杯/手持/平铺)?\nShopify 独立一套, 不影响 TikTok/Etsy 图集。后台运行, 约几分钟。')) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ 生成中…';
+  try {
+    var r = await fetch(genUrl, {method:'POST'});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (!r.ok || j.ok === false) {
+      btn.disabled = false; btn.textContent = orig;
+      alert('启动失败: ' + (j.error || ('HTTP ' + r.status)));
+      return;
+    }
+    var poll = setInterval(async function(){
+      try {
+        var s = await (await fetch(statusUrl)).json();
+        var n = (s.images || []).length;
+        if (s.running) { btn.textContent = '⏳ 生成中 ' + n + '/5…'; }
+        else {
+          clearInterval(poll);
+          btn.textContent = '✓ 完成(' + n + ' 张)';
+          setTimeout(function(){ location.reload(); }, 900);
+        }
+      } catch(_) { /* 网络抖动继续轮询 */ }
+    }, 5000);
   } catch(e) {
     btn.disabled = false; btn.textContent = orig;
     alert('请求出错: ' + e);
