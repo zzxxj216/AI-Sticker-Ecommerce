@@ -81,9 +81,13 @@ def run(action: str, path: str):
     ptype = fam["product_type"]
     print(f"=== {action.upper()} 变体族 {fam['parent_sku']} ({len(fam['children'])} 子体) ===")
 
-    if action == "create" and _amz.sku_exists(fam["parent_sku"]):
-        print(f"[ABORT] 父体 {fam['parent_sku']} 已存在,按红线拒绝覆盖(只增不改)。")
-        return
+    if action == "create":
+        # 红线防覆盖:父体和**每个子体**都 GET 确认不存在(SP-API PUT 是 upsert,
+        # 撞名会静默覆盖已有 listing;子体也必须查)。
+        for sku in [fam["parent_sku"]] + [c["sku"] for c in fam["children"]]:
+            if _amz.sku_exists(sku):
+                print(f"[ABORT] {sku} 已存在,按红线拒绝覆盖(只增不改)。")
+                return
     st, errs = submit(action, fam["parent_sku"], ptype, parent_attrs(fam), "父")
     if action == "create" and (errs or st not in ("ACCEPTED", "VALID")):
         print("[STOP] 父体失败,不再建子体。")
