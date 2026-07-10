@@ -422,6 +422,53 @@
             </div>
           </div>
 
+          <!-- 🟠 Etsy 上架 -->
+          {% set _is_etsy = request.url.path.startswith('/v2/etsy') %}
+          <div class="nav-group {% if not _is_etsy %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                Etsy 上架
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">🧷 贴纸包同步</a>
+            </div>
+          </div>
+
+          <!-- 🛍️ Shopify 上架 -->
+          <div class="nav-group {% if not request.url.path.startswith('/v2/packs') %}collapsed{% endif %}">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+                Shopify 上架
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">🧷 贴纸包同步</a>
+            </div>
+          </div>
+
+          <!-- 💬 客服系统 (预留) -->
+          <div class="nav-group collapsed">
+            <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+              <div style="display:flex;align-items:center;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                客服系统
+              </div>
+              <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="nav-group-content">
+              <a class="nav-link sub-link" href="#" onclick="alert('客服系统（售前 proof 确认 + 售后工单）开发中，敬请期待');return false;" style="opacity:.55;">💬 售前/售后工单<span style="font-size:10px;padding:1px 5px;background:rgba(148,163,184,.25);border-radius:6px;margin-left:6px;">待开发</span></a>
+            </div>
+          </div>
+
+          {# ⛔ Amazon 上架入口已下线 (2026-07-10, 用户要求): 侧边栏不再显示 Amazon 菜单。
+             底层全部保留: services/amazon/ + v2_amazon_*.html 模板 + /v2/amazon/* 路由 +
+             amazon_listings / amazon_images 表。恢复: 删掉本组外层的 {% if false %} / {% endif %}。 #}
+          {% if false %}
           <!-- 📦 Amazon 上架 -->
           {% set _is_amazon = request.url.path.startswith('/v2/amazon') %}
           <div class="nav-group {% if not _is_amazon %}collapsed{% endif %}">
@@ -441,6 +488,7 @@
                  href="/v2/amazon/aplus-library">🅰️＋ A+ 共享库</a>
             </div>
           </div>
+          {% endif %}
 
           <!-- 📣 广告投放 -->
           <div class="nav-group {% if not request.url.path.startswith('/v2/ads') %}collapsed{% endif %}">

@@ -59,8 +59,28 @@ _ETSY_EXTRACT_INSTRUCTIONS = (
 _CONTENT_KEYS = ("title", "description", "tags", "materials")
 
 
+# Etsy Creativity Standards 合规: AI 参与设计的商品必须在描述里如实披露
+# (措辞对齐 Etsy 官方建议: "created using AI tools based on my original prompts
+# and creative direction")。三个 production 下拉(who_made=I did / finished
+# product / made to order)已在建 listing 时设对; "An AI generator" 复选框 API
+# 不支持, 需后台手动勾。
+_AI_DISCLOSURE = (
+    "\n\nDesign note: Our sticker designs are created in-house using AI-assisted "
+    "design tools, guided by our own original concepts, prompts, and creative "
+    "direction, then printed by us on premium waterproof vinyl."
+)
+
+
 def _clean(v: Any) -> str:
     return re.sub(r"[ \t]+", " ", str(v or "")).strip()
+
+
+def _disclose(content: dict) -> dict:
+    """在描述末尾追加 AI 披露声明(幂等: 已含则不重复)."""
+    desc = (content.get("description") or "").rstrip()
+    if "AI-assisted design tools" not in desc:
+        content["description"] = desc + _AI_DISCLOSURE
+    return content
 
 
 def _build_main_prompt(master: dict) -> str:
@@ -188,7 +208,7 @@ def generate_etsy_content(local_product: dict, *, router=None) -> dict:
         if not (main_text or "").strip():
             logger.warning("etsy copy: empty creative output for product #%s; fallback",
                            local_product.get("id"))
-            return fallback
+            return _disclose(fallback)
         raw = router.extract_json(
             main_text,
             schema=_ETSY_EXTRACT_SCHEMA,
@@ -201,8 +221,8 @@ def generate_etsy_content(local_product: dict, *, router=None) -> dict:
         if not isinstance(raw, dict) or not raw:
             logger.warning("etsy copy: empty structured output for product #%s; fallback",
                            local_product.get("id"))
-            return fallback
-        return _normalize_content(raw, local_product, fallback)
+            return _disclose(fallback)
+        return _disclose(_normalize_content(raw, local_product, fallback))
     except Exception as e:  # noqa: BLE001 — must never raise.
         logger.warning("etsy copy generation failed for product #%s: %s; fallback",
                        local_product.get("id"), str(e)[:300])

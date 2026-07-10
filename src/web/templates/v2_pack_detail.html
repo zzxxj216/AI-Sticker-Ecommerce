@@ -109,7 +109,27 @@
                 style="border-color:rgba(217,119,6,.55);color:#b45309;font-weight:700;">
           {% if etsy and etsy.etsy_listing_id %}✓ Etsy 已同步 · 重新同步{% else %}同步到 Etsy →{% endif %}
         </button>
+        <button type="button" class="button ghost v2-button-full" onclick="syncShopify(this)"
+                style="border-color:rgba(92,63,212,.55);color:#5c3fd4;font-weight:700;">
+          🛍️ 同步到 Shopify →
+        </button>
       </div>
+
+      <!-- 🚀 一键上架三平台(均建草稿) -->
+      <div style="margin-top:12px;padding:12px;border:1px dashed rgba(99,102,241,.45);border-radius:10px;background:rgba(99,102,241,.06);">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="syncAllTkShop" style="padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;">
+            {% for s in tkshop_shops %}<option value="{{ s }}">TikTok · {{ shop_label(s) }}</option>{% endfor %}
+          </select>
+          <button type="button" onclick="syncAll(this)"
+                  style="flex:1;min-width:200px;padding:9px 16px;background:linear-gradient(90deg,#6366f1,#ec4899);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">
+            🚀 一键上架三平台（Etsy + Shopify + TikTok 草稿）
+          </button>
+        </div>
+        <p class="muted" style="margin:8px 0 0;font-size:11px;">三平台都只建草稿、不上架/不提交审核；完成后各自到平台后台检查后上架（TikTok 到 TKShop 产品页 push）。</p>
+        <div id="syncAllResult" style="margin-top:8px;font-size:12px;line-height:1.7;"></div>
+      </div>
+
       {% if etsy and etsy.etsy_listing_id %}
       <div style="margin-top:8px;font-size:12px;color:#059669;">
         ✓ 已同步 Etsy · <a href="https://www.etsy.com/listing/{{ etsy.etsy_listing_id }}" target="_blank">listing {{ etsy.etsy_listing_id }} →</a>
@@ -117,6 +137,7 @@
       </div>
       {% endif %}
       <div id="etsyResult" style="margin-top:8px;font-size:12px;line-height:1.6;"></div>
+      <div id="shopifyResult" style="margin-top:8px;font-size:12px;line-height:1.6;"></div>
       <script>
       async function syncEtsy(btn){
         var orig=btn.textContent, box=document.getElementById('etsyResult');
@@ -136,6 +157,48 @@
         }catch(e){
           btn.disabled=false; btn.textContent=orig;
           box.innerHTML='<span style="color:#dc2626;">✗ '+e+'</span>';
+        }
+      }
+      async function syncShopify(btn){
+        var orig=btn.textContent, box=document.getElementById('shopifyResult');
+        btn.disabled=true; btn.textContent='⏳ 生成文案 → 建 Shopify 草稿…';
+        box.innerHTML='<span style="color:#5c3fd4;">同步中，约 20-40 秒（生成 Shopify 文案 + 建草稿商品 + 传图），请勿离开…</span>';
+        try{
+          var r=await fetch('/v2/packs/{{ pack.id }}/sync-shopify',{method:'POST'});
+          var d=await r.json();
+          if(d.ok){
+            btn.textContent='✓ Shopify 已同步 · 重新同步';
+            box.innerHTML='<span style="color:#059669;">✓ Shopify 草稿商品已建（product '+(d.shopify_product_id||'?')+'）。请到 Shopify 后台检查后再上架。</span>';
+          }else{
+            btn.disabled=false; btn.textContent=orig;
+            var hint=(d.error&&d.error.indexOf('价格')>=0)?'（可先到本地产品页设价）':'';
+            box.innerHTML='<span style="color:#dc2626;">✗ '+(d.error||'同步失败')+hint+'</span>';
+          }
+        }catch(e){
+          btn.disabled=false; btn.textContent=orig;
+          box.innerHTML='<span style="color:#dc2626;">✗ '+e+'</span>';
+        }
+      }
+      async function syncAll(btn){
+        var orig=btn.textContent, box=document.getElementById('syncAllResult');
+        var shop=document.getElementById('syncAllTkShop').value;
+        btn.disabled=true; btn.textContent='⏳ 三平台建草稿中…';
+        box.innerHTML='<span style="color:#6366f1;">依次同步 Etsy / Shopify / TikTok，约 40-90 秒，请勿离开…</span>';
+        try{
+          var fd=new FormData(); fd.append('tiktok_shop', shop);
+          var r=await fetch('/v2/packs/{{ pack.id }}/sync-all',{method:'POST',body:fd});
+          var d=await r.json();
+          function line(name,res,okhtml){ res=res||{}; return res.ok ? '<div style="color:#059669;">✓ '+name+'：'+okhtml+'</div>' : '<div style="color:#dc2626;">✗ '+name+'：'+(res.error||res.message||'失败')+'</div>'; }
+          var e=d.etsy||{}, s=d.shopify||{}, t=d.tiktok||{};
+          var html='';
+          html+=line('Etsy', e, e.ok?('草稿 <a href="'+e.url+'" target="_blank">listing '+e.listing_id+' →</a>'):'');
+          html+=line('Shopify', s, s.ok?('草稿商品 '+(s.shopify_product_id||'')):'');
+          html+=line('TikTok', t, t.ok?('本地草稿 #'+(t.listing_id||'')+'（到 TKShop 产品页 push 上架）'):'');
+          box.innerHTML=html;
+          btn.disabled=false; btn.textContent='🚀 重新一键上架';
+        }catch(err){
+          btn.disabled=false; btn.textContent=orig;
+          box.innerHTML='<span style="color:#dc2626;">✗ '+err+'</span>';
         }
       }
       </script>

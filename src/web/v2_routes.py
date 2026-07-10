@@ -2576,6 +2576,85 @@ def v2_pack_sync_etsy(pack_id: int):
     return get_etsy_service().sync_pack(pack_id)
 
 
+@router.post("/packs/{pack_id:int}/sync-shopify")
+def v2_pack_sync_shopify(pack_id: int):
+    """一键同步贴纸包到 Shopify(建草稿商品)。
+
+    复用现成的 ShopifyProductSync.sync_one(经中间层调 Shopify Admin API):
+    文案自动生成/缓存、图片优先 Shopify 图兜底 master 图。唯一前置是 default_price
+    (原价), 缺则从 TikTok 模板价补一个(两平台共享此原价, 各自算折扣)。
+    """
+    from src.services.shopify.sync import get_shopify_sync
+    from src.services.tkshop.service import (
+        _price_from_default_template,
+        get_tkshop_service,
+    )
+
+    tk = get_tkshop_service()
+    sh = get_shopify_sync()
+    lp_id = tk.get_or_create_local_product(pack_id)
+    master = tk.get_local_product(lp_id) or {}
+    if master.get("default_price") is None:
+        try:
+            sale, _disc = _price_from_default_template(master.get("default_template_json") or "{}")
+            base = float(sale) if sale else 13.98
+        except Exception:  # noqa: BLE001
+            base = 13.98
+        sh.batch_set_local_default_price([lp_id], base)
+    return sh.sync_one(lp_id)
+
+
+@router.post("/packs/{pack_id:int}/sync-all")
+def v2_pack_sync_all(pack_id: int, tiktok_shop: str = Form("")):
+    """一键上架三平台 —— 全部只建**草稿**(不上架/不提交审核), best-effort:
+    某个平台失败不影响其余。Etsy 草稿 listing + Shopify 草稿商品 + TikTok 本地草稿
+    (人工到 TKShop 产品页 push 提交审核)。返回 {etsy, shopify, tiktok} 三个结果。
+    """
+    from src.services.tkshop.service import (
+        _price_from_default_template,
+        get_tkshop_service,
+    )
+
+    result: dict = {}
+
+    # 1) Etsy 草稿 listing
+    try:
+        from src.services.etsy.service import get_etsy_service
+        result["etsy"] = get_etsy_service().sync_pack(pack_id)
+    except Exception as e:  # noqa: BLE001
+        result["etsy"] = {"ok": False, "error": str(e)[:200]}
+
+    # 2) Shopify 草稿商品
+    try:
+        from src.services.shopify.sync import get_shopify_sync
+        tk = get_tkshop_service()
+        sh = get_shopify_sync()
+        lp_id = tk.get_or_create_local_product(pack_id)
+        master = tk.get_local_product(lp_id) or {}
+        if master.get("default_price") is None:
+            try:
+                sale, _d = _price_from_default_template(master.get("default_template_json") or "{}")
+                base = float(sale) if sale else 13.98
+            except Exception:  # noqa: BLE001
+                base = 13.98
+            sh.batch_set_local_default_price([lp_id], base)
+        result["shopify"] = sh.sync_one(lp_id)
+    except Exception as e:  # noqa: BLE001
+        result["shopify"] = {"ok": False, "error": str(e)[:200]}
+
+    # 3) TikTok 本地草稿 (不 publish — 人工到 TKShop 产品页提交审核)
+    try:
+        tk = get_tkshop_service()
+        listing_id = tk.create_product_from_pack(pack_id, shop=(tiktok_shop or None))
+        result["tiktok"] = {"ok": True, "listing_id": listing_id,
+                            "shop": tiktok_shop or "default",
+                            "note": "本地草稿已建，到 TKShop 产品页 push 上架"}
+    except Exception as e:  # noqa: BLE001
+        result["tiktok"] = {"ok": False, "error": str(e)[:200]}
+
+    return result
+
+
 @router.get("/packs/{pack_id:int}/stickers.zip")
 def v2_pack_download_stickers(pack_id: int, selected_only: int = 1):
     pack = get_pack_service().get_pack(pack_id)
