@@ -1,9 +1,12 @@
 ---
 name: tk2amazon
-description: 把 TikTok Shop 上已有的产品**同步/搬运到 Amazon**(拉 TK 产品 → 人工补足 Amazon 的严格要求 → 建 Amazon listing)。当用户说"把 TK/TikTok 的产品同步到亚马逊""TK 上有这个品,帮我上到 Amazon""从 TikTok 搬品"时使用。不要用于:纯 Amazon 上品(用 amazon-listing)、TK 侧上品/改品(本 skill 对 TK 只读)。
+description: 把 TikTok Shop 上已有的产品**同步/搬运到 Amazon / Shopify / Etsy**(拉 TK 产品 → 人工补足目标平台要求 → 建草稿 listing)。当用户说"把 TK/TikTok 的产品同步到亚马逊/Shopify/Etsy""TK 上有这个品,帮我上到 XX 平台""从 TikTok 搬品"时使用。不要用于:纯 Amazon 上品(用 amazon-listing)、TK 侧上品/改品(本 skill 对 TK 只读)。
 ---
 
-# TK → Amazon 产品同步(人机协作)
+# TK → Amazon / Shopify / Etsy 产品同步(人机协作)
+
+> 名字叫 tk2amazon 是历史原因;现在支持三个目标平台。Amazon 走完整 7 步(要求最严);
+> Shopify/Etsy 轻量得多,见下方「Shopify / Etsy 方向」一节。
 
 > TK 上已经在卖的产品,信息是**不完整的**(Amazon 要求严得多:product_type 必填集、
 > 关键词表、标题≤75、Item Highlight、5 条五点、后端词、白底主图…)。
@@ -92,7 +95,31 @@ python <skill>/scripts/gap_check.py tk_drafts/<id>/draft.json
   gap_check 强制"人工逐张过图 + notes 留痕 images_ok"才放行,装了 Pillow 还会自动初筛
   (尺寸不足/主图四角非白)。不合规的图:让用户提供重做图,或明确同意后用原图承担风险。
 
+## Shopify / Etsy 方向(轻量:平台宽松,两步走)
+两个方向共用第 1-2 步(tk_list 找品 → tk_pull --download 拉草稿),然后**跳过 Amazon 的
+gap_check/关键词表**(平台要求宽松),直接用专属脚本 —— 默认 dry 打印计划,
+**贴给用户确认,点头后加 --go**;两边都**只建草稿**,上架永远人工:
+
+```bash
+# Etsy(走中间层现成端点;tags 必给——TK 没有对应字段,你拟好经人确认)
+python scripts/to_etsy.py tk_drafts/<id>/draft.json --tags "a,b,..."(≤13)        [--title ..] [--price 12.99|--price-mult 1.3] [--qty 1-999] [--taxonomy-id 1317] [--go]
+python scripts/to_etsy.py profiles      # 查运费模板/备货时效/类目(只读)
+python scripts/to_etsy.py list draft    # 列 Etsy 草稿(只读)
+# 建成后:draft 状态,上架=人工 PATCH state=active(开始计上架费);
+# ⚠️ 重复 --go 会建新草稿不覆盖;更新已有 listing 用 --listing-id <id>(只刷文案/tags)
+
+# Shopify(经中间层建品,status=draft 写死;图用已下载本地图 base64,不依赖 TK CDN)
+python scripts/to_shopify.py tk_drafts/<id>/draft.json [--title ..] [--price ..] [--qty ..]        [--tags "a,b"] [--go]
+python scripts/to_shopify.py list       # 列 Shopify 产品(只读)
+# 建成后:draft 状态,上架=人工在 Shopify 后台切 Active
+```
+平台差异速查:Etsy 标题 ≤140、tags ≤13、数量 ≤999、类目/运费模板必须有(端点自动兜底取
+店铺第一个,店里没配会报错,先跑 profiles 看);多变体 Etsy 最多 2 维。Shopify 几乎无硬性
+要求(title 即可),多变体自动展开为 variants(option1=变体名)。图片:Etsy 由端点从 TK CDN
+转传;Shopify 优先本地图 base64(先 tk_pull --download)。**TK 图合规要求两平台都宽松
+(无白底强制),但仍建议人扫一眼有没有 TK 水印/促销角标。**
+
 ## 与其它 skill 的分工
 - **amazon-listing**(平级目录 `../amazon-listing/`):Amazon 侧一切读写(第 4/6/7 步在调它);
 - **ziniao-premium-aplus**:同步完想做高级 A+ 时再用;
-- 本 skill 只负责「TK 事实搬运 + 缺口管理 + 机械转换」这一段。
+- 本 skill 负责「TK 事实搬运 + 缺口管理 + 三平台机械转换」;中间层另有服务端一键同步端点(amazon/etsy 的 sync-from-tiktok),参数都齐时可直调,本 skill 的价值是**人机协作把参数补对**。
