@@ -4200,6 +4200,68 @@ def v2_local_products_list(
     )
 
 
+def _render_platform_products(request: Request, *, platform: str, q: str, limit: int):
+    """Etsy / Shopify「已上架产品」列表 —— 读本地映射表(etsy_products /
+    shopify_products), 复用通用模板 v2_platform_products.html。"""
+    # 功能开关: 无该平台上架权限的角色(如 cs)即使直接输 URL 也挡在门外, 回工作台首页。
+    if not _can_see(request, platform):
+        return RedirectResponse("/v2", status_code=302)
+    svc = get_tkshop_service()
+    products, total = svc.list_platform_products(
+        platform=platform, q=q.strip() or None, limit=limit,
+    )
+    meta = {
+        "etsy":    {"label": "Etsy",    "emoji": "🟠", "id_label": "Listing ID"},
+        "shopify": {"label": "Shopify", "emoji": "🛍️", "id_label": "Product ID"},
+    }[platform]
+    import sqlite3 as _sql
+    fb_conn = _sql.connect("data/ops_workbench.db")
+    fb_conn.row_factory = _sql.Row
+    try:
+        for p in products:
+            p["created_human"] = _fmt_ts(p.get("created_at"))
+            p["synced_human"] = _fmt_ts(p.get("synced_at")) if p.get("synced_at") else ""
+            p["pack_cover_url"] = _resolve_local_product_cover_url(
+                fb_conn,
+                local_product_id=p["local_product_id"],
+                pack_id=p["pack_id"],
+                pack_cover_path=p.get("pack_cover") or "",
+                updated_at=int(p.get("synced_at") or p.get("created_at") or 0),
+            )
+            pid = str(p.get("platform_id") or "").strip()
+            # Etsy listing 有公开 URL(纯 id 可拼); Shopify 前台需 store 域名, 暂不拼。
+            p["listing_url"] = f"https://www.etsy.com/listing/{pid}" if (platform == "etsy" and pid) else ""
+    finally:
+        fb_conn.close()
+    return templates.TemplateResponse(
+        "v2_platform_products.html",
+        {
+            "request": request,
+            "page_title": f"{meta['label']} 已上架产品",
+            "platform": platform,
+            "platform_label": meta["label"],
+            "platform_emoji": meta["emoji"],
+            "id_label": meta["id_label"],
+            "products": products,
+            "total": total,
+            "q": q,
+            "limit": limit,
+        },
+    )
+
+
+@router.get("/etsy/products", response_class=HTMLResponse)
+def v2_etsy_products(request: Request, q: str = "", limit: int = 200):
+    """Etsy 已上架产品列表(读本地 etsy_products 映射表)。"""
+    return _render_platform_products(request, platform="etsy", q=q, limit=limit)
+
+
+@router.get("/shopify/products", response_class=HTMLResponse)
+def v2_shopify_products(request: Request, q: str = "", limit: int = 200):
+    """Shopify 已上架产品列表(读本地 shopify_products 映射表)。"""
+    return _render_platform_products(request, platform="shopify", q=q, limit=limit)
+
+
 @router.get("/local-products/{local_product_id:int}", response_class=HTMLResponse)
 def v2_local_product_detail(request: Request, local_product_id: int):
     """Master editor: title/description/keywords/SKU/category + image set +

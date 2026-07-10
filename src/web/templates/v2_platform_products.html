@@ -1,0 +1,106 @@
+{% extends 'v2_base.html' %}
+{% block content %}
+
+<style>
+  .pp-page { padding-top:14px; }
+  .pp-panel { padding:16px 20px; margin-bottom:16px; }
+  .pp-panel .panel-header { margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid var(--line-soft); }
+  .pp-table { width:100%; border-collapse:collapse; }
+  .pp-table th {
+    text-align:left; font-size:11px; color:var(--text-muted); font-weight:600;
+    padding:10px 12px; border-bottom:1px solid var(--line);
+    text-transform:uppercase; letter-spacing:.4px; white-space:nowrap;
+  }
+  .pp-table td { padding:12px; border-bottom:1px solid var(--line-soft); vertical-align:middle; font-size:13px; }
+  .pp-table tr:last-child td { border-bottom:none; }
+  .pp-table tbody tr:hover { background:var(--bg-subtle); }
+  .pp-cover {
+    width:52px; height:52px; border-radius:var(--radius-sm); object-fit:cover;
+    background:var(--bg-subtle); border:1px solid var(--line); flex:none;
+  }
+  .pp-title { font-weight:600; color:var(--text); line-height:1.35; }
+  .pp-sub { font-size:11px; color:var(--text-muted); margin-top:2px; }
+  .pp-id-mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-secondary); }
+  .pp-empty { padding:56px 20px; text-align:center; }
+  .pp-btn-sm { padding:5px 11px; font-size:12px; }
+  .pp-search { flex:1; min-width:220px; padding:9px 12px; border:1px solid var(--line); border-radius:var(--radius-md); background:var(--surface); color:var(--text); font-size:13px; }
+</style>
+
+<div class="pp-page">
+  <section class="panel pp-panel">
+    <div class="panel-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+      <div>
+        <h3 style="margin:0;font-size:16px;">{{ platform_emoji }} {{ platform_label }} 已上架产品</h3>
+        <p class="muted" style="margin-top:4px;">已同步到 {{ platform_label }} 的产品(本地映射记录)，共 <strong>{{ total }}</strong> 个。点「管理」进卡包详情可重新同步 / 改价。</p>
+      </div>
+      <a class="button ghost" href="/v2/packs">🧷 去贴纸包同步</a>
+    </div>
+    <form method="get" style="display:flex;gap:10px;align-items:center;">
+      <input type="text" name="q" value="{{ q }}" placeholder="搜索标题 / SKU / 卡包名…" class="pp-search">
+      <button type="submit" class="button">搜索</button>
+      {% if q %}<a class="button ghost" href="/v2/{{ platform }}/products">重置</a>{% endif %}
+    </form>
+  </section>
+
+  <section class="panel pp-panel">
+    {% if products %}
+    <div style="overflow-x:auto;">
+      <table class="pp-table">
+        <thead>
+          <tr>
+            <th>产品</th>
+            <th>{{ id_label }}</th>
+            <th>价格</th>
+            <th>平台状态</th>
+            <th>同步状态</th>
+            <th>同步时间</th>
+            <th style="text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr>
+            <td>
+              <div style="display:flex;align-items:center;gap:11px;">
+                {% if p.pack_cover_url %}<img class="pp-cover" src="{{ p.pack_cover_url }}" alt="">{% else %}<div class="pp-cover"></div>{% endif %}
+                <div>
+                  <div class="pp-title">{{ p.title or p.pack_name or ('本地产品 #' ~ p.local_product_id) }}</div>
+                  <div class="pp-sub">SKU {{ p.seller_sku or '—' }}{% if p.pack_name %} · {{ p.pack_name }}{% endif %}</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              {% if p.platform_id %}
+                {% if p.listing_url %}<a class="pp-id-mono" href="{{ p.listing_url }}" target="_blank" rel="noopener">{{ p.platform_id }} ↗</a>
+                {% else %}<span class="pp-id-mono">{{ p.platform_id }}</span>{% endif %}
+                {% if p.handle %}<div class="pp-sub">/{{ p.handle }}</div>{% endif %}
+              {% else %}<span class="muted">— 未回填</span>{% endif %}
+            </td>
+            <td>{% if p.price %}${{ '%.2f'|format(p.price) }}{% else %}<span class="muted">未设价</span>{% endif %}</td>
+            <td><span class="v2-status-pill {{ 'ok' if p.platform_status == 'active' else 'pending' }}">{{ p.platform_status or 'draft' }}</span></td>
+            <td>
+              {% set ss = p.sync_status or 'draft' %}
+              <span class="v2-status-pill {{ {'synced':'ok','failed':'error','syncing':'running'}.get(ss,'pending') }}">{{ ss }}</span>
+              {% if ss == 'failed' and p.last_error %}<div class="pp-sub" title="{{ p.last_error }}">⚠ {{ p.last_error[:44] }}</div>{% endif %}
+            </td>
+            <td>{% if p.synced_human %}<span style="font-size:12px;color:var(--text-secondary);">{{ p.synced_human }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td style="text-align:right;white-space:nowrap;">
+              {% if p.listing_url %}<a class="button ghost pp-btn-sm" href="{{ p.listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
+              <a class="button ghost pp-btn-sm" href="/v2/packs/{{ p.pack_id }}">管理 →</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="pp-empty">
+      <p style="font-size:15px;font-weight:600;margin:0 0 6px;">还没有同步到 {{ platform_label }} 的产品</p>
+      <p class="muted" style="margin:0 0 16px;">去卡包详情页点「同步到 {{ platform_label }}」建草稿后，就会出现在这里。</p>
+      <a class="button" href="/v2/packs">去贴纸包同步 →</a>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+{% endblock %}

@@ -453,14 +453,16 @@
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">🧷 贴纸包同步</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/etsy/products') %}active{% endif %}" href="/v2/etsy/products">📦 已上架产品</a>
+              <a class="nav-link sub-link" href="/v2/packs">🧷 贴纸包同步</a>
             </div>
           </div>
           {% endif %}
 
           {% if can_see(request, 'shopify') %}
           <!-- 🛍️ Shopify 上架 -->
-          <div class="nav-group {% if not request.url.path.startswith('/v2/packs') %}collapsed{% endif %}">
+          {% set _is_shopify = request.url.path.startswith('/v2/shopify') %}
+          <div class="nav-group {% if not _is_shopify %}collapsed{% endif %}">
             <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
               <div style="display:flex;align-items:center;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
@@ -469,7 +471,8 @@
               <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
             <div class="nav-group-content">
-              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/packs') %}active{% endif %}" href="/v2/packs">🧷 贴纸包同步</a>
+              <a class="nav-link sub-link {% if request.url.path.startswith('/v2/shopify/products') %}active{% endif %}" href="/v2/shopify/products">📦 已上架产品</a>
+              <a class="nav-link sub-link" href="/v2/packs">🧷 贴纸包同步</a>
             </div>
           </div>
           {% endif %}
