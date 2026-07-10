@@ -458,6 +458,55 @@ class ShopifyProductSync:
         except requests.RequestException as e:
             return {"ok": False, "error": f"网络错误: {str(e)[:200]}"}
 
+    def set_price(self, local_product_id: int, new_price: float) -> dict:
+        """直接改 Shopify 平台价(不重建) —— GET variants 拿 variant_id → PUT variant。
+        同时更新本地 default_price 保持一致。"""
+        try:
+            new_price = round(float(new_price), 2)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "价格无效"}
+        if new_price <= 0:
+            return {"ok": False, "error": "价格必须大于 0"}
+        prior = self.get_sync_status(local_product_id)
+        pid = (prior or {}).get("shopify_product_id") or ""
+        if not pid:
+            return {"ok": False, "error": "该产品还没上架到 Shopify(无 product_id)"}
+        base = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/shopify"
+        try:
+            g = requests.get(f"{base}/products/{pid}/variants", timeout=TKSHOP_SERVER_TIMEOUT)
+            try:
+                gj = g.json()
+            except Exception:
+                gj = {}
+            variants = gj.get("data") if isinstance(gj.get("data"), list) else gj
+            if not isinstance(variants, list) or not variants:
+                return {"ok": False, "error": f"读不到 Shopify 变体(HTTP {g.status_code})"}
+            vid = str(variants[0].get("id") or "")
+            if not vid:
+                return {"ok": False, "error": "Shopify 变体无 id"}
+            u = requests.put(f"{base}/variants/{vid}", json={"price": str(new_price)},
+                             timeout=TKSHOP_SERVER_TIMEOUT)
+            if 200 <= u.status_code < 300:
+                self.batch_set_local_default_price([local_product_id], new_price)
+                with _open_db(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE shopify_products SET synced_at=? WHERE local_product_id=?",
+                        (int(time.time()), local_product_id),
+                    )
+                    conn.commit()
+                logger.info("shopify set_price ok: lp=%s pid=%s vid=%s price=%s",
+                            local_product_id, pid, vid, new_price)
+                return {"ok": True, "shopify_product_id": pid, "variant_id": vid, "price": new_price}
+            try:
+                uj = u.json()
+            except Exception:
+                uj = {}
+            data = uj["data"] if isinstance(uj.get("data"), dict) else uj
+            err = data.get("message") or data.get("error") or f"HTTP {u.status_code}"
+            return {"ok": False, "error": str(err)}
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"网络错误: {str(e)[:200]}"}
+
     def _upsert_syncing(self, local_product_id: int, sku: str) -> None:
         """Mark the tracking row as 'syncing' (insert if absent)."""
         now = int(time.time())

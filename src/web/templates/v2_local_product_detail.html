@@ -147,6 +147,7 @@
             {% if etsy_listing and etsy_listing.listing_url %}<a class="row-btn" href="{{ etsy_listing.listing_url }}" target="_blank" rel="noopener">看 ↗</a>{% endif %}
             <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/etsy-resync','{% if etsy_listing and etsy_listing.etsy_listing_id %}重新同步 Etsy(刷新已有 listing)?{% else %}上架到 Etsy(建草稿)?{% endif %}')">🔄 {% if etsy_listing and etsy_listing.etsy_listing_id %}重新同步{% else %}上架{% endif %}</button>
             {% if etsy_listing and etsy_listing.etsy_listing_id %}
+            <button type="button" class="row-btn" onclick="plPrice(this,'/v2/local-products/{{ lp.id }}/etsy-set-price',{{ etsy_listing.price or 0 }})">改价</button>
             <button type="button" class="row-btn" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/etsy-delist','下架 Etsy?(转 inactive, 不删除 listing)')">下架</button>
             {% endif %}
           </div>
@@ -173,12 +174,13 @@
           <div class="actions">
             <button type="button" class="row-btn primary" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/shopify-resync','{% if shopify_listing and shopify_listing.shopify_product_id %}重新同步 Shopify?(会删旧重建, 换 product id){% else %}上架到 Shopify(建草稿)?{% endif %}')">🔄 {% if shopify_listing and shopify_listing.shopify_product_id %}重新同步{% else %}上架{% endif %}</button>
             {% if shopify_listing and shopify_listing.shopify_product_id %}
+            <button type="button" class="row-btn" onclick="plPrice(this,'/v2/local-products/{{ lp.id }}/shopify-set-price',{{ lp.default_price or 0 }})">改价</button>
             <button type="button" class="row-btn" onclick="plAction(this,'/v2/local-products/{{ lp.id }}/shopify-delist','下架 Shopify?(转 draft, 不删除商品)')">下架</button>
             {% endif %}
           </div>
         </div>
         {% endif %}
-        <p class="muted" style="margin:10px 0 0;font-size:11px;">下架 = 转 inactive/draft，不删 listing（符合不删除规则）。改价功能稍后加。</p>
+        <p class="muted" style="margin:10px 0 0;font-size:11px;">改价 = 直接改平台价(不重建 listing)；下架 = 转 inactive/draft，不删 listing（符合不删除规则）。</p>
       </section>
       {% endif %}
     </div>
@@ -498,6 +500,31 @@ async function plAction(btn, url, confirmMsg){
     } else {
       btn.disabled = false; btn.textContent = orig;
       alert('操作失败: ' + (j.error || ('HTTP ' + r.status)));
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = orig;
+    alert('请求出错: ' + e);
+  }
+}
+
+// 改价: prompt 输入新价 → POST form(price) → 成功刷新。
+async function plPrice(btn, url, current){
+  var v = prompt('输入新价格(数字, 直接改平台价):', current || '');
+  if (v === null) return;
+  v = parseFloat(v);
+  if (!(v > 0)) { alert('价格必须是大于 0 的数字'); return; }
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '改价中…';
+  try {
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({price: v})});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (r.ok && j.ok !== false) {
+      btn.textContent = '✓ 已改价';
+      setTimeout(function(){ location.reload(); }, 900);
+    } else {
+      btn.disabled = false; btn.textContent = orig;
+      alert('改价失败: ' + (j.error || ('HTTP ' + r.status)));
     }
   } catch(e) {
     btn.disabled = false; btn.textContent = orig;

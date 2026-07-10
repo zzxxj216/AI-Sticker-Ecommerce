@@ -4942,6 +4942,34 @@ def v2_lp_shopify_delist(request: Request, local_product_id: int):
     return get_shopify_sync().set_status(local_product_id, "draft")
 
 
+@router.post("/local-products/{local_product_id:int}/etsy-set-price")
+async def v2_lp_etsy_set_price(request: Request, local_product_id: int):
+    """直接改 Etsy 平台价(不重建 listing)。form: price。"""
+    if not _can_see(request, "etsy"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    form = await request.form()
+    try:
+        price = float((form.get("price") or "").strip())
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "价格无效"}, status_code=400)
+    from src.services.etsy.service import get_etsy_service
+    return get_etsy_service().set_price(local_product_id, price)
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-set-price")
+async def v2_lp_shopify_set_price(request: Request, local_product_id: int):
+    """直接改 Shopify 平台价(不重建, 走 variant)。form: price。"""
+    if not _can_see(request, "shopify"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    form = await request.form()
+    try:
+        price = float((form.get("price") or "").strip())
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "价格无效"}, status_code=400)
+    from src.services.shopify.sync import get_shopify_sync
+    return get_shopify_sync().set_price(local_product_id, price)
+
+
 @router.post("/products/batch-sync-shopify")
 async def v2_products_batch_sync_shopify(request: Request):
     """Multi-select batch sync masters to Shopify (draft). Skips ones with no

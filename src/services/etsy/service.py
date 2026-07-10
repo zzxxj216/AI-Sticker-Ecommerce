@@ -298,6 +298,43 @@ class EtsyListingService:
         except requests.RequestException as e:
             return {"ok": False, "error": f"网络错误(中间层不可达?): {str(e)[:200]}"}
 
+    def set_price(self, local_product_id: int, new_price: float) -> dict[str, Any]:
+        """直接改 Etsy 平台价(不重建 listing) —— 调中间层快捷改价端点(读-改-写 inventory)。
+        成功回写 etsy_products.price。"""
+        try:
+            new_price = round(float(new_price), 2)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "价格无效"}
+        if new_price <= 0:
+            return {"ok": False, "error": "价格必须大于 0"}
+        row = self.get_or_create(local_product_id)
+        listing_id = (row.get("etsy_listing_id") or "").strip()
+        if not listing_id:
+            return {"ok": False, "error": "该产品还没上架到 Etsy(无 listing_id)"}
+        endpoint = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/etsy/listings/{listing_id}/inventory/price"
+        try:
+            resp = requests.post(endpoint, params={"price": new_price}, timeout=TKSHOP_SERVER_TIMEOUT)
+            try:
+                rj = resp.json()
+            except Exception:
+                rj = {"_raw_text": resp.text[:500]}
+            data = rj["data"] if isinstance(rj.get("data"), dict) else rj
+            if 200 <= resp.status_code < 300:
+                with self._conn() as conn:
+                    conn.execute(
+                        "UPDATE etsy_products SET price=?, synced_at=? WHERE local_product_id=?",
+                        (new_price, _now(), local_product_id),
+                    )
+                    conn.commit()
+                logger.info("etsy set_price ok: lp=%s listing=%s price=%s",
+                            local_product_id, listing_id, new_price)
+                return {"ok": True, "listing_id": listing_id, "price": new_price}
+            err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            logger.warning("etsy set_price failed: lp=%s %s", local_product_id, str(err)[:200])
+            return {"ok": False, "error": str(err)}
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"网络错误(中间层不可达?): {str(e)[:200]}"}
+
 
 _service: Optional[EtsyListingService] = None
 
