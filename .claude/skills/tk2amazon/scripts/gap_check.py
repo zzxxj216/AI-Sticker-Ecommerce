@@ -78,11 +78,43 @@ def main(path: str):
     # —— 图片 ——
     imgs = d.get("images") or []
     if len(imgs) < 7:
-        ask.append(f"TK 只有 {len(imgs)} 张图(<7):要补图吗?(1主+6副起步;主图必须白底产品图,人看)")
-    else:
-        ok.append(f"图 {len(imgs)} 张(≥7);记得人工确认主图白底合规")
+        ask.append(f"TK 只有 {len(imgs)} 张图(<7):要补图吗?(1主+6副起步)")
     if not any(im.get("local") for im in imgs):
         todo.append("图片未下载:重跑 tk_pull.py <id> --download(放心,重拉会保留 amazon 块,不丢答案)")
+
+    # ⚠️ TK 图 ≠ Amazon 图:TK 常见营销风(场景图/贴大字/促销角标/拼图),Amazon 会拒或抑制。
+    # 人工逐张过图 + notes 留痕 "images_ok ← 用户已过图" 才放行;Pillow 可用时先自动初筛。
+    auto_warns = []
+    try:
+        from PIL import Image
+        for i, im in enumerate(imgs, 1):
+            loc = im.get("local")
+            if not loc:
+                continue
+            try:
+                with Image.open(loc) as pic:
+                    w, h = pic.size
+                    if max(w, h) < 1000:
+                        auto_warns.append(f"图{i} 仅 {w}x{h}(<1000px,Amazon 无法缩放/可能抑制)")
+                    if i == 1:                       # 主图:四角采样测白底
+                        rgb = pic.convert("RGB")
+                        corners = [rgb.getpixel(p) for p in
+                                   [(3, 3), (w - 4, 3), (3, h - 4), (w - 4, h - 4)]]
+                        if any(min(c) < 235 for c in corners):
+                            auto_warns.append(f"主图四角非纯白(采样 {corners[0]}…)——Amazon 主图必须纯白底(255,255,255)")
+            except Exception:
+                pass
+    except ImportError:
+        pass                                          # 没装 Pillow 就只给人工清单
+    checklist = ("逐张人工过图(TK 图直接搬常不合规):主图=纯白底/无文字水印logo/无场景道具/产品占85%;"
+                 "副图=无水印无网址无促销角标;全部≥1000px(建议1600px)。"
+                 "不合规的图要重做/替换后再建。确认没问题后 notes 留痕:\"images_ok ← 用户已过图\"")
+    if "images_ok" not in notes:
+        ask.append(checklist + ((" 【自动初筛发现:" + ";".join(auto_warns) + "】") if auto_warns else ""))
+    elif auto_warns:
+        ask.append("notes 已标 images_ok,但自动初筛仍有疑点:" + ";".join(auto_warns) + " —— 请再确认")
+    else:
+        ok.append("图片已人工过审(notes: images_ok)")
 
     print(f"=== gap_check: {path} ===")
     print(f"TK 标题: {d.get('title_tk','')[:70]}\n")

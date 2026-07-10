@@ -86,6 +86,11 @@ python <skill>/scripts/gap_check.py tk_drafts/<id>/draft.json
 - `--status` 过滤:中间层曾把参数包错位置导致静默失效(已修:顶层 `status`);
   tk_list 仍带客户端兜底过滤。
 - 单 SKU 产品 `sales_attributes` 为空;多变体时 `name/value_name`,变体图在 `sku_img`。
+- **TK 图 ≠ Amazon 图(高频雷区)**:TK 主副图常是营销风——场景图、贴大字标语、促销角标、
+  九宫格拼图,Amazon 会拒收或抑制 listing。规则:主图**纯白底**(255,255,255)、无文字/水印/
+  logo/道具、产品占比 ~85%;副图无水印无网址;全部 ≥1000px(建议 1600px)。
+  gap_check 强制"人工逐张过图 + notes 留痕 images_ok"才放行,装了 Pillow 还会自动初筛
+  (尺寸不足/主图四角非白)。不合规的图:让用户提供重做图,或明确同意后用原图承担风险。
 
 ## 与其它 skill 的分工
 - **amazon-listing**(平级目录 `../amazon-listing/`):Amazon 侧一切读写(第 4/6/7 步在调它);

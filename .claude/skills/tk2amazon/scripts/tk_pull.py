@@ -140,6 +140,7 @@ def main(pid: str, do_download: bool, force: bool):
     print(f"  图 {len(draft['images'])} 张 | SKU {len(draft['skus'])} 个 | 类目 {' > '.join(draft['category_chain'][:3])}")
     has_var = any(s["sales_attributes"] for s in draft["skus"])
     print(f"  变体: {'有(sales_attributes,需人确认 COLOR 映射)' if has_var else '无(单品)'}")
+    print("  ⚠️ TK 图直接搬 Amazon 常不合规(主图要纯白底、无文字水印;TK 常是营销图)——gap_check 会给过图清单+自动初筛")
     print(f"\n下一步:python gap_check.py \"{path}\"")
 
 
