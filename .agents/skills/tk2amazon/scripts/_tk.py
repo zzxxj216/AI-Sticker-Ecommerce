@@ -19,6 +19,7 @@ try:
 except Exception:
     pass
 
+_BASE_CONFIGURED = bool(os.getenv("AMAZON_MCA_URL") or os.getenv("TKSHOP_SERVER_URL"))
 BASE = os.getenv("AMAZON_MCA_URL", os.getenv("TKSHOP_SERVER_URL", "http://localhost:8000")).rstrip("/")
 SHOP = os.getenv("TIKTOK_SHOP", "")          # 空 = 中间层默认店
 
@@ -49,7 +50,8 @@ def consume_shop(argv: list) -> list:
             raise
         except Exception:
             pass   # 校验接口不可达时放行(只读场景,选错店最坏也就是拉错数据)
-    print(f"[tk shop = {SHOP or '(默认)'}]")
+    cfg = "" if _BASE_CONFIGURED else "(默认值,未配 AMAZON_MCA_URL)"
+    print(f"[tk shop = {SHOP or '(默认)'}]  [中间层 = {BASE}{cfg}]")
     return out
 
 

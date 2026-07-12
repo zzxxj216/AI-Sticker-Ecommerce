@@ -22,6 +22,7 @@ if _ROOT not in sys.path:
 
 MP = "ATVPDKIKX0DER"                                   # 美国站
 STORE = os.getenv("AMAZON_STORE", "main")             # 当前店铺,默认 main(=inkelligent)
+_BASE_CONFIGURED = bool(os.getenv("AMAZON_MCA_URL") or os.getenv("TKSHOP_SERVER_URL"))
 BASE = os.getenv("AMAZON_MCA_URL", os.getenv("TKSHOP_SERVER_URL", "http://localhost:8000")).rstrip("/")
 BRAND = os.getenv("AMAZON_BRAND", "Inkelligent")      # 必须用已备案品牌,否则丢 GTIN 豁免
 
@@ -73,7 +74,8 @@ def consume_store(argv: list) -> list:
                          f"临时放行可设 env AMAZON_ALLOWED_STORES。用法:--store 店名[@站点],如 byane@UK。")
     STORE = store
     flag = "" if store == DEFAULT_STORE else "  ⚠️ 非默认店!"
-    print(f"[store = {store}]{flag}")
+    cfg = "" if _BASE_CONFIGURED else "(默认值,未配 AMAZON_MCA_URL)"
+    print(f"[store = {store}]{flag}  [中间层 = {BASE}{cfg}]")
     return out
 
 
