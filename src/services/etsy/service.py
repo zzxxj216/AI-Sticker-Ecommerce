@@ -354,6 +354,34 @@ class EtsyListingService:
         except requests.RequestException as e:
             return {"ok": False, "error": f"网络错误(中间层不可达?): {str(e)[:200]}"}
 
+    def delete_listing(self, local_product_id: int) -> dict[str, Any]:
+        """删除 Etsy listing —— 只允许草稿/inactive(active 的先下架再删, 守不删正式
+        listing 的规则)。成功(或平台侧本就已删)后清掉本地映射, 回到「未传」状态。"""
+        row = self.get_or_create(local_product_id)
+        listing_id = (row.get("etsy_listing_id") or "").strip()
+        if not listing_id:
+            return {"ok": False, "error": "该产品没有 Etsy listing"}
+        if (row.get("status") or "") == "active":
+            return {"ok": False, "error": "listing 是正式上架(active)状态 — 请先「下架」再删除"}
+        endpoint = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/etsy/listings/{listing_id}"
+        try:
+            resp = requests.delete(endpoint, timeout=TKSHOP_SERVER_TIMEOUT)
+            try:
+                rj = resp.json()
+            except Exception:
+                rj = {"_raw_text": resp.text[:300]}
+            gone_already = _listing_gone(json.dumps(rj, ensure_ascii=False))
+            if 200 <= resp.status_code < 300 or gone_already:
+                self._clear_stale_listing(local_product_id, f"deleted listing {listing_id} via workbench")
+                logger.info("etsy delete ok: lp=%s listing=%s", local_product_id, listing_id)
+                return {"ok": True, "deleted": listing_id}
+            data = rj["data"] if isinstance(rj.get("data"), dict) else rj
+            err = data.get("message") or data.get("error") or f"HTTP {resp.status_code}"
+            logger.warning("etsy delete failed: lp=%s %s", local_product_id, str(err)[:200])
+            return {"ok": False, "error": str(err)}
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"网络错误(中间层不可达?): {str(e)[:200]}"}
+
     def set_price(self, local_product_id: int, new_price: float) -> dict[str, Any]:
         """直接改 Etsy 平台价(不重建 listing) —— 调中间层快捷改价端点(读-改-写 inventory)。
         成功回写 etsy_products.price。"""

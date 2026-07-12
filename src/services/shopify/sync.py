@@ -482,6 +482,31 @@ class ShopifyProductSync:
         except requests.RequestException as e:
             return {"ok": False, "error": f"网络错误: {str(e)[:200]}"}
 
+    def delete_product(self, local_product_id: int) -> dict:
+        """删除 Shopify 商品 —— 只允许草稿/archived(active 的先下架再删)。
+        成功(或平台侧本就已删)后清掉本地映射, 回到「未传」状态。"""
+        prior = self.get_sync_status(local_product_id)
+        pid = str((prior or {}).get("shopify_product_id") or "")
+        if not pid:
+            return {"ok": False, "error": "该产品没有 Shopify 商品"}
+        if (prior.get("status") or "") == "active":
+            return {"ok": False, "error": "商品是正式上架(active)状态 — 请先「下架」再删除"}
+        url = f"{TKSHOP_SERVER_URL.rstrip('/')}/api/v1/shopify/products/{pid}"
+        try:
+            resp = requests.delete(url, timeout=TKSHOP_SERVER_TIMEOUT)
+            body = ""
+            try:
+                body = resp.text[:300]
+            except Exception:
+                pass
+            if 200 <= resp.status_code < 300 or self._product_gone(f"{resp.status_code} {body}"):
+                self._clear_stale_mapping(local_product_id, f"deleted product {pid} via workbench")
+                logger.info("shopify delete ok: lp=%s pid=%s", local_product_id, pid)
+                return {"ok": True, "deleted": pid}
+            return {"ok": False, "error": f"删除失败: HTTP {resp.status_code} {body[:120]}"}
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"网络错误: {str(e)[:200]}"}
+
     def set_price(self, local_product_id: int, new_price: float) -> dict:
         """直接改 Shopify 平台价(不重建) —— GET variants 拿 variant_id → PUT variant。
         同时更新本地 default_price 保持一致。"""

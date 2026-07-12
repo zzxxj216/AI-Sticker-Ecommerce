@@ -50,15 +50,15 @@
     <div class="panel-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
       <div>
         <h3 style="margin:0;font-size:16px;">{{ platform_emoji }} {{ platform_label }} 本地产品</h3>
-        <p class="muted" style="margin-top:4px;">本地产品(master)是上架到 {{ platform_label }} 的源头，共 <strong>{{ total }}</strong> 个。未上架的可直接点「上架到 {{ platform_label }}」建草稿(生成文案+传图，约 30-60 秒)；「管理」进产品详情改文案/价格。</p>
+        <p class="muted" style="margin-top:4px;">本地产品(master)是传到 {{ platform_label }} 的源头，共 <strong>{{ total }}</strong> 个。「传草稿」上传到平台草稿箱(生成文案+传图，约 30-60 秒)；草稿确认没问题后「⬆️ 正式上架」才公开可见{% if platform == 'etsy' %}(Etsy 收 ~$0.20/条){% endif %}。</p>
       </div>
       <a class="button ghost" href="/v2/{{ platform }}/products">已上架产品 →</a>
     </div>
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
       <div class="pp-tabs">
         <a class="pp-tab {% if listed=='all' %}active{% endif %}" href="/v2/{{ platform }}/local-products{% if q %}?q={{ q }}{% endif %}">全部</a>
-        <a class="pp-tab {% if listed=='listed' %}active{% endif %}" href="/v2/{{ platform }}/local-products?listed=listed{% if q %}&q={{ q }}{% endif %}">✓ 已上架</a>
-        <a class="pp-tab {% if listed=='unlisted' %}active{% endif %}" href="/v2/{{ platform }}/local-products?listed=unlisted{% if q %}&q={{ q }}{% endif %}">待上架</a>
+        <a class="pp-tab {% if listed=='listed' %}active{% endif %}" href="/v2/{{ platform }}/local-products?listed=listed{% if q %}&q={{ q }}{% endif %}">✓ 已传平台</a>
+        <a class="pp-tab {% if listed=='unlisted' %}active{% endif %}" href="/v2/{{ platform }}/local-products?listed=unlisted{% if q %}&q={{ q }}{% endif %}">待传</a>
       </div>
       <form method="get" style="display:flex;gap:8px;flex:1;min-width:220px;">
         <input type="hidden" name="listed" value="{{ listed }}">
@@ -74,8 +74,10 @@
     <div id="ppBulkBar" class="pp-bulk-bar" hidden>
       <span id="ppBulkCount">已选 0 个</span>
       <span class="spacer"></span>
-      <button type="button" class="button pp-btn-sm" id="ppBulkSyncBtn" onclick="ppBulkSync(this)">🚀 批量上架到 {{ platform_label }}（仅未上架）</button>
+      <button type="button" class="button pp-btn-sm" id="ppBulkSyncBtn" onclick="ppBulkSync(this)">📤 批量传草稿（仅未传）</button>
+      <button type="button" class="button pp-btn-sm" style="background:var(--success);border-color:var(--success);" onclick="ppBulkPublish(this)">⬆️ 批量正式上架</button>
       <button type="button" class="button ghost pp-btn-sm" onclick="ppBulkPrice(this)">💲 批量设价</button>
+      <button type="button" class="button ghost pp-btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.4);" onclick="ppBulkDelete(this)">🗑 批量删除草稿</button>
       <button type="button" class="button ghost pp-btn-sm" onclick="ppClearSel()">取消</button>
     </div>
     <div style="overflow-x:auto;">
@@ -93,7 +95,7 @@
         <tbody>
           {% for p in products %}
           <tr>
-            <td><input type="checkbox" class="pp-check" value="{{ p.local_product_id }}" data-listed="{{ '1' if p.is_listed else '0' }}"></td>
+            <td><input type="checkbox" class="pp-check" value="{{ p.local_product_id }}" data-listed="{{ '1' if p.is_listed else '0' }}" data-active="{{ '1' if p.platform_status == 'active' else '0' }}"></td>
             <td>
               <div style="display:flex;align-items:center;gap:11px;">
                 {% if p.pack_cover_url %}<img class="pp-cover" src="{{ p.pack_cover_url }}" alt="">{% else %}<div class="pp-cover"></div>{% endif %}
@@ -106,7 +108,11 @@
             <td>
               {% if p.is_listed %}
                 {% set ss = p.sync_status or 'synced' %}
-                <span class="v2-status-pill {{ {'synced':'ok','failed':'error','syncing':'running'}.get(ss,'pending') }}">✓ 已上架 · {{ ss }}</span>
+                {% if p.platform_status == 'active' %}
+                <span class="v2-status-pill ok">✓ 已上架 · active</span>
+                {% else %}
+                <span class="v2-status-pill {{ {'synced':'ok','failed':'error','syncing':'running'}.get(ss,'pending') }}">📝 草稿 · {{ ss }}</span>
+                {% endif %}
                 {% if p.platform_id %}<div class="pp-sub">
                   {% if p.listing_url %}<a class="pp-id-mono" href="{{ p.listing_url }}" target="_blank" rel="noopener">{{ p.platform_id }} ↗</a>{% else %}<span class="pp-id-mono">{{ p.platform_id }}</span>{% endif %}
                 </div>{% endif %}
@@ -118,11 +124,15 @@
             <td>{% if p.updated_human %}<span style="font-size:12px;color:var(--text-secondary);">{{ p.updated_human }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
             <td style="text-align:right;white-space:nowrap;">
               {% if p.is_listed %}
+                {% if p.platform_status != 'active' %}
+                <button type="button" class="button pp-btn-sm" style="background:var(--success);border-color:var(--success);"
+                        onclick="ppPublishOne(this, '/v2/local-products/{{ p.local_product_id }}/{{ platform }}-publish')">⬆️ 上架</button>
+                {% endif %}
                 {% if p.listing_url %}<a class="button ghost pp-btn-sm" href="{{ p.listing_url }}" target="_blank" rel="noopener">看 listing ↗</a>{% endif %}
                 <a class="button ghost pp-btn-sm" href="/v2/{{ platform }}/listings/{{ p.local_product_id }}">管理 →</a>
               {% else %}
                 <button type="button" class="button pp-btn-sm"
-                        onclick="ppSync(this, '/v2/local-products/{{ p.local_product_id }}/{{ platform }}-resync', '{{ platform_label }}')">🚀 上架到 {{ platform_label }}</button>
+                        onclick="ppSync(this, '/v2/local-products/{{ p.local_product_id }}/{{ platform }}-resync', '{{ platform_label }}')">📤 传草稿到 {{ platform_label }}</button>
                 <a class="button ghost pp-btn-sm" href="/v2/local-products/{{ p.local_product_id }}?from={{ platform }}">编辑 →</a>
               {% endif %}
             </td>
@@ -151,7 +161,8 @@ function ppUpdateBar(){
   var bar = document.getElementById('ppBulkBar');
   if (!bar) return;
   var unlisted = sel.filter(function(b){ return b.dataset.listed === '0'; }).length;
-  document.getElementById('ppBulkCount').textContent = '已选 ' + sel.length + ' 个（未上架 ' + unlisted + ' 个）';
+  var drafts = sel.filter(function(b){ return b.dataset.listed === '1' && b.dataset.active === '0'; }).length;
+  document.getElementById('ppBulkCount').textContent = '已选 ' + sel.length + ' 个（待传 ' + unlisted + ' · 草稿 ' + drafts + '）';
   bar.hidden = sel.length === 0;
 }
 function ppClearSel(){
@@ -168,21 +179,17 @@ document.addEventListener('change', function(e){
   }
 });
 
-// 批量上架: 只处理未上架的, 逐个串行调 resync(避免并发打爆 AI/平台限频)。
-async function ppBulkSync(btn){
-  var boxes = ppSelected().filter(function(b){ return b.dataset.listed === '0'; });
-  var skipped = ppSelected().length - boxes.length;
-  if (!boxes.length) { alert('所选里没有未上架的产品（已上架的用「管理」里的重新同步）'); return; }
-  if (!confirm('批量上架 ' + boxes.length + ' 个产品到 {{ platform_label }}（建草稿）?' +
-      (skipped ? '\n(已上架的 ' + skipped + ' 个会跳过)' : '') +
-      '\n逐个同步, 每个约 30-60 秒, 期间请勿关闭页面。')) return;
+// 通用串行批量执行器: 逐个 POST(避免并发打爆 AI/平台限频), 按钮实时进度, 完成弹汇总。
+async function ppBulkRun(btn, boxes, suffix, verb, extraConfirm){
+  if (!boxes.length) { alert('所选里没有可「' + verb + '」的产品'); return; }
+  if (!confirm(verb + ' ' + boxes.length + ' 个产品?' + (extraConfirm || ''))) return;
   var bar = document.getElementById('ppBulkBar');
   bar.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
   var orig = btn.textContent, okN = 0, fails = [];
   for (var i = 0; i < boxes.length; i++) {
-    btn.textContent = '⏳ ' + (i + 1) + '/' + boxes.length + ' 上架中…';
+    btn.textContent = '⏳ ' + (i + 1) + '/' + boxes.length + '…';
     try {
-      var r = await fetch('/v2/local-products/' + boxes[i].value + '/{{ platform }}-resync', {method:'POST'});
+      var r = await fetch('/v2/local-products/' + boxes[i].value + '/' + suffix, {method:'POST'});
       var j = {};
       try { j = await r.json(); } catch(_) {}
       if (r.ok && j.ok !== false) okN++;
@@ -190,9 +197,44 @@ async function ppBulkSync(btn){
     } catch(e) { fails.push('#' + boxes[i].value + ': ' + e); }
   }
   btn.textContent = orig;
-  alert('批量上架完成: 成功 ' + okN + ' / ' + boxes.length +
+  alert(verb + '完成: 成功 ' + okN + ' / ' + boxes.length +
         (fails.length ? '\n失败:\n' + fails.slice(0, 5).join('\n') : ''));
   location.reload();
+}
+
+// 批量传草稿: 只处理未传的(每个 30-60 秒)。
+function ppBulkSync(btn){
+  var boxes = ppSelected().filter(function(b){ return b.dataset.listed === '0'; });
+  ppBulkRun(btn, boxes, '{{ platform }}-resync', '传草稿到 {{ platform_label }}',
+            '\n逐个生成文案+传图, 每个约 30-60 秒, 期间请勿关闭页面。');
+}
+
+// 批量正式上架: 只处理已传且还是草稿的。
+function ppBulkPublish(btn){
+  var boxes = ppSelected().filter(function(b){ return b.dataset.listed === '1' && b.dataset.active === '0'; });
+  ppBulkRun(btn, boxes, '{{ platform }}-publish', '正式上架',
+            '{% if platform == "etsy" %}\n⚠ 转 active 公开可见, Etsy 每条收约 $0.20 listing fee。{% else %}\n转 active 后店面公开可见。{% endif %}');
+}
+
+// 批量删除草稿: 只处理已传且还是草稿的(active 的会被后端拒绝, 先下架)。
+function ppBulkDelete(btn){
+  var boxes = ppSelected().filter(function(b){ return b.dataset.listed === '1' && b.dataset.active === '0'; });
+  ppBulkRun(btn, boxes, '{{ platform }}-delete', '删除草稿',
+            '\n⚠ 平台上的草稿 listing 会被删除; 本地产品保留(回到未传, 可重新传)。');
+}
+
+// 单行正式上架(草稿 → active)。
+async function ppPublishOne(btn, url){
+  if (!confirm('正式上架该产品到 {{ platform_label }}?{% if platform == "etsy" %}\n⚠ 转 active 公开可见, Etsy 收约 $0.20 listing fee。{% else %}\n转 active 后店面公开可见。{% endif %}')) return;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳…';
+  try {
+    var r = await fetch(url, {method:'POST'});
+    var j = {};
+    try { j = await r.json(); } catch(_) {}
+    if (r.ok && j.ok !== false) { btn.textContent = '✓'; setTimeout(function(){ location.reload(); }, 800); }
+    else { btn.disabled = false; btn.textContent = orig; alert('上架失败: ' + (j.error || ('HTTP ' + r.status))); }
+  } catch(e) { btn.disabled = false; btn.textContent = orig; alert('请求出错: ' + e); }
 }
 
 // 批量设价: 复用现有 /local-products/batch-set-price(改本地原价);
@@ -223,7 +265,7 @@ async function ppBulkPrice(btn){
 
 // 列表页直接上架: POST {platform}-resync(生成文案+传图, 同步阻塞约 30-60 秒) → 成功刷新。
 async function ppSync(btn, url, label){
-  if (!confirm('把该产品上架到 ' + label + '(建草稿)?\n会生成文案 + 上传图片, 约 30-60 秒, 期间请勿关闭页面。')) return;
+  if (!confirm('把该产品传草稿到 ' + label + '?\n会生成文案 + 上传图片到平台草稿箱, 约 30-60 秒, 期间请勿关闭页面。')) return;
   var orig = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ 同步中…';
   try {

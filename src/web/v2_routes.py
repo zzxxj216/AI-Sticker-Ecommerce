@@ -5073,6 +5073,42 @@ async def v2_lp_shopify_set_price(request: Request, local_product_id: int):
     return get_shopify_sync().set_price(local_product_id, price)
 
 
+@router.post("/local-products/{local_product_id:int}/etsy-publish")
+def v2_lp_etsy_publish(request: Request, local_product_id: int):
+    """正式上架 Etsy(草稿 → active, 公开可见; Etsy 收 listing fee ~$0.20)。"""
+    if not _can_see(request, "etsy"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.etsy.service import get_etsy_service
+    return get_etsy_service().set_state(local_product_id, "active")
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-publish")
+def v2_lp_shopify_publish(request: Request, local_product_id: int):
+    """正式上架 Shopify(草稿 → active, 店面可见)。"""
+    if not _can_see(request, "shopify"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.shopify.sync import get_shopify_sync
+    return get_shopify_sync().set_status(local_product_id, "active")
+
+
+@router.post("/local-products/{local_product_id:int}/etsy-delete")
+def v2_lp_etsy_delete(request: Request, local_product_id: int):
+    """删除 Etsy 草稿 listing(active 的须先下架; 本地映射清空回「未传」)。"""
+    if not _can_see(request, "etsy"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.etsy.service import get_etsy_service
+    return get_etsy_service().delete_listing(local_product_id)
+
+
+@router.post("/local-products/{local_product_id:int}/shopify-delete")
+def v2_lp_shopify_delete(request: Request, local_product_id: int):
+    """删除 Shopify 草稿商品(active 的须先下架; 本地映射清空回「未传」)。"""
+    if not _can_see(request, "shopify"):
+        return JSONResponse({"ok": False, "error": "无权限"}, status_code=403)
+    from src.services.shopify.sync import get_shopify_sync
+    return get_shopify_sync().delete_product(local_product_id)
+
+
 @router.post("/products/batch-sync-shopify")
 async def v2_products_batch_sync_shopify(request: Request):
     """Multi-select batch sync masters to Shopify (draft). Skips ones with no
