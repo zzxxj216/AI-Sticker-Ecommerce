@@ -5,7 +5,7 @@ pack → local_product(master)→ Etsy listing 草稿。编排:
   2. 收集主副图本地路径(master.images 优先, 兜底 pack previews / cover)
   3. 选一个"合规"视频(tk_videos, ffprobe 选 5-15s; ffprobe 不可用则交中间层兜底)
   4. generate_etsy_content(master) 出 Etsy SEO 文案
-  5. 价格 = TK 价(local_products.default_price / 模板价 / 6.99)× 倍率
+  5. 价格 = ETSY_FIXED_PRICE 一口价(配置了就用它); 否则 TK 价 × 倍率
   6. POST 中间层 /api/v1/etsy/sync-pack(建草稿+传图+传视频)
   7. 回填 etsy_products(etsy_listing_id / price / copy_json / sync_status)
 
@@ -35,6 +35,8 @@ TKSHOP_SERVER_URL = os.getenv("TKSHOP_SERVER_URL", "http://localhost:8000")
 TKSHOP_SERVER_TIMEOUT = int(os.getenv("TKSHOP_SERVER_TIMEOUT", "300"))
 ETSY_PRICE_MULTIPLIER = float(os.getenv("ETSY_PRICE_MULTIPLIER", "1.3"))
 ETSY_PRICE_FALLBACK = float(os.getenv("ETSY_PRICE_FALLBACK", "6.99"))
+# 统一定价: 配置后所有 Etsy listing 一口价(显式传 price_multiplier 时仍可覆盖)。
+ETSY_FIXED_PRICE = float(os.getenv("ETSY_FIXED_PRICE", "0") or 0)
 
 MAX_IMAGES = 10
 
@@ -213,6 +215,7 @@ class EtsyListingService:
     def sync_pack(self, pack_id: int, *, price_multiplier: Optional[float] = None,
                   dry_run: bool = False, _allow_recreate: bool = True) -> dict[str, Any]:
         mult = price_multiplier or ETSY_PRICE_MULTIPLIER
+        fixed = ETSY_FIXED_PRICE if (ETSY_FIXED_PRICE > 0 and not price_multiplier) else None
         tk = self._tk()
         lp_id = tk.get_or_create_local_product(pack_id)
         master = tk.get_local_product(lp_id) or {}
@@ -225,7 +228,7 @@ class EtsyListingService:
                     "message": "该卡包没有可用的主副图, 请先生成/上传图片再同步 Etsy"}
 
         copy = generate_etsy_content(master)
-        price = round(self._base_price(master) * mult, 2)
+        price = fixed if fixed else round(self._base_price(master) * mult, 2)
         seller_sku = (master.get("seller_sku") or "").strip()
         row = self.get_or_create(lp_id, seller_sku)
         existing_listing = (row.get("etsy_listing_id") or "").strip()
