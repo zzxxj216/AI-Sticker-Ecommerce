@@ -240,6 +240,8 @@ class EtsyListingService:
             "materials": copy["materials"],
             "price": price,
             "quantity": 100,
+            "sku": seller_sku or None,     # 与 TK master seller_sku 一致(跨平台对账)
+
             "image_paths": image_paths,
             "video_path": video_path,
             "external_ref": f"pack_{pack_id}",
